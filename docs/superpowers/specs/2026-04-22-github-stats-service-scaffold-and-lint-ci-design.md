@@ -86,6 +86,8 @@ line-length = 88
 target-version = "py312"
 
 [tool.ruff.lint]
+# E=pycodestyle errors, F=pyflakes, I=isort
+# Full rule reference: https://docs.astral.sh/ruff/rules/
 select = ["E", "F", "I"]
 
 [tool.pytest.ini_options]
@@ -183,6 +185,8 @@ jobs:
       - run: uv sync --frozen
         working-directory: ${{ inputs.working-directory }}
       - run: uv run ruff check .
+        working-directory: ${{ inputs.working-directory }}
+      - run: uv run ruff format --check .
         working-directory: ${{ inputs.working-directory }}
       - run: uv run pytest
         working-directory: ${{ inputs.working-directory }}
