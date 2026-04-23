@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      github-stats: ${{ steps.filter.outputs.github-stats }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            github-stats:
+              - 'services/github-stats/**'
+              - 'helm/charts/github-stats/**'
+
+  github-stats-lint-test:
+    needs: changes
+    if: needs.changes.outputs.github-stats == 'true'
+    uses: ./.github/workflows/templates/python/lint-test.yml
+    with:
+      working-directory: services/github-stats
