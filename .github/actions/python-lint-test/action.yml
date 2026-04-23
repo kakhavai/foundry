@@ -1,0 +1,28 @@
+name: Python lint and test
+description: Runs ruff lint, ruff format check, and pytest for a Python service using uv
+
+inputs:
+  working-directory:
+    required: true
+    description: Path to the Python service root relative to repo root (e.g. services/github-stats)
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v5
+    - name: Install dependencies
+      shell: bash
+      run: uv sync --frozen
+      working-directory: ${{ inputs.working-directory }}
+    - name: Lint
+      shell: bash
+      run: uv run ruff check .
+      working-directory: ${{ inputs.working-directory }}
+    - name: Format check
+      shell: bash
+      run: uv run ruff format --check .
+      working-directory: ${{ inputs.working-directory }}
+    - name: Test
+      shell: bash
+      run: uv run pytest
+      working-directory: ${{ inputs.working-directory }}

@@ -24,9 +24,12 @@ jobs:
   github-stats-lint-test:
     needs: changes
     if: needs.changes.outputs.github-stats == 'true'
-    uses: ./.github/workflows/_python-lint-test.yml
-    with:
-      working-directory: services/github-stats
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-lint-test
+        with:
+          working-directory: services/github-stats
 
   github-stats-helm-lint:
     needs: changes
@@ -36,8 +39,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v5
+      - uses: ./.github/actions/helm-lint
         with:
-          helm-version: "v3.17.3"
-      - name: Lint chart
-        run: helm lint helm/charts/github-stats
+          chart-path: helm/charts/github-stats

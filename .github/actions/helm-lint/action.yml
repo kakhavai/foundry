@@ -1,0 +1,17 @@
+name: Helm lint
+description: Runs helm lint on a chart
+
+inputs:
+  chart-path:
+    required: true
+    description: Path to the Helm chart relative to repo root (e.g. helm/charts/github-stats)
+
+runs:
+  using: composite
+  steps:
+    - uses: azure/setup-helm@v5
+      with:
+        helm-version: "v3.17.3"
+    - name: Lint chart
+      shell: bash
+      run: helm lint ${{ inputs.chart-path }}
