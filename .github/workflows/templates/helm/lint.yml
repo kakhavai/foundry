@@ -1,0 +1,22 @@
+name: Helm lint
+
+on:
+  workflow_call:
+    inputs:
+      chart-path:
+        required: true
+        type: string
+        description: "Path to the Helm chart relative to repo root (e.g. helm/charts/github-stats)"
+
+jobs:
+  helm-lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v5
+        with:
+          helm-version: "v3.17.3"
+      - name: Lint chart
+        run: helm lint ${{ inputs.chart-path }}
