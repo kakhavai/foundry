@@ -1,0 +1,47 @@
+helmDefaults:
+  createNamespace: true
+  wait: true
+  kubeContext: kind-foundry
+
+repositories:
+  - name: open-telemetry
+    url: https://open-telemetry.github.io/opentelemetry-helm-charts
+  - name: grafana
+    url: https://grafana.github.io/helm-charts
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+
+releases:
+  - name: otel-collector
+    namespace: monitoring
+    chart: open-telemetry/opentelemetry-collector
+    values:
+      - values/otel-collector.yaml
+
+  - name: loki
+    namespace: monitoring
+    chart: grafana/loki
+    values:
+      - values/loki.yaml
+
+  - name: tempo
+    namespace: monitoring
+    chart: grafana/tempo
+    values:
+      - values/tempo.yaml
+
+  - name: prometheus
+    namespace: monitoring
+    chart: prometheus-community/prometheus
+    values:
+      - values/prometheus.yaml
+
+  - name: grafana
+    namespace: monitoring
+    chart: grafana/grafana
+    needs:
+      - loki
+      - tempo
+      - prometheus
+    values:
+      - values/grafana.yaml

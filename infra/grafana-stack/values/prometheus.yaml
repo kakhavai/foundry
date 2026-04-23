@@ -1,0 +1,24 @@
+alertmanager:
+  enabled: false
+
+prometheus-pushgateway:
+  enabled: false
+
+kube-state-metrics:
+  enabled: false
+
+prometheus-node-exporter:
+  enabled: false
+
+server:
+  retention: 24h
+
+extraScrapeConfigs: |
+  - job_name: otel-collector
+    static_configs:
+      - targets:
+          - otel-collector.monitoring.svc.cluster.local:8889
+  - job_name: github-stats
+    static_configs:
+      - targets:
+          - github-stats.default.svc.cluster.local:8000
