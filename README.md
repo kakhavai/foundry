@@ -77,8 +77,9 @@ foundry/
 | kind | `brew install kind` | `winget install Kubernetes.kind` |
 | kubectl | `brew install kubectl` | `winget install Kubernetes.kubectl` |
 | helm | `brew install helm` | `winget install Helm.Helm` |
+| helmfile | `brew install helmfile` | `scoop install helmfile` |
 
-> After installing with winget on Windows, open a new terminal for PATH changes to take effect.
+> After installing with winget/scoop on Windows, open a new terminal for PATH changes to take effect.
 
 ### github-stats service
 
@@ -120,6 +121,43 @@ kubectl get pods
 kubectl port-forward svc/github-stats-github-stats 8000:8000
 # then: curl http://localhost:8000/health
 ```
+
+### Observability Stack
+
+Deploys OTel Collector, Loki, Tempo, Prometheus, and Grafana into the `monitoring` namespace via Helmfile.
+
+```bash
+# Add chart repos (first time only)
+cd infra/grafana-stack
+helmfile repos
+
+# Deploy the full stack
+helmfile apply
+
+# Verify all pods are running
+kubectl get pods -n monitoring
+
+# Tear down
+helmfile destroy
+```
+
+**Access the UIs:**
+
+```bash
+# Grafana — http://localhost:3000 (login: admin / admin)
+kubectl port-forward -n monitoring svc/grafana 3000:80
+
+# Prometheus — http://localhost:9090
+kubectl port-forward -n monitoring svc/prometheus-server 9090:80
+
+# Loki (raw API) — http://localhost:3100/ready
+kubectl port-forward -n monitoring svc/loki 3100:3100
+
+# Tempo (raw API) — http://localhost:3100/ready
+kubectl port-forward -n monitoring svc/tempo 3100:3100
+```
+
+The `github-stats` dashboard loads automatically in Grafana. Panels show live data once the service is running and instrumented with the OTel SDK.
 
 ---
 
