@@ -68,7 +68,58 @@ foundry/
 
 ## Local Dev + Deploy
 
-> Setup instructions will be added at the end of Phase 1.
+### Prerequisites
+
+| Tool | macOS | Windows |
+|---|---|---|
+| Docker | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | [Docker Desktop](https://www.docker.com/products/docker-desktop/) |
+| uv | `brew install uv` | `winget install astral-sh.uv` |
+| kind | `brew install kind` | `winget install Kubernetes.kind` |
+| kubectl | `brew install kubectl` | `winget install Kubernetes.kubectl` |
+| helm | `brew install helm` | `winget install Helm.Helm` |
+
+> After installing with winget on Windows, open a new terminal for PATH changes to take effect.
+
+### github-stats service
+
+```bash
+cd services/github-stats
+uv sync           # install deps into .venv
+uv run pytest     # run tests
+uv run uvicorn github_stats.main:app --reload  # start with hot reload (http://localhost:8000)
+```
+
+### Local Kubernetes cluster (Kind)
+
+```bash
+# Create the cluster
+kind create cluster --config infra/kind/cluster.yaml
+
+# Verify it's up
+kubectl get nodes
+
+# Delete when done
+kind delete cluster --name foundry
+```
+
+### Deploy github-stats to Kind
+
+```bash
+# Load the local image into the cluster (no registry needed locally)
+docker build -t github-stats:local services/github-stats/
+kind load docker-image github-stats:local --name foundry
+
+# Install via Helm
+helm upgrade --install github-stats helm/charts/github-stats \
+  --set image.repository=github-stats \
+  --set image.tag=local \
+  --set image.pullPolicy=Never
+
+# Check it's running
+kubectl get pods
+kubectl port-forward svc/github-stats-github-stats 8000:8000
+# then: curl http://localhost:8000/health
+```
 
 ---
 
