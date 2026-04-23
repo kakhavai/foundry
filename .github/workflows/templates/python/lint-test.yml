@@ -14,8 +14,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-        with:
-          python-version-file: ${{ inputs.working-directory }}/.python-version
       - name: Install dependencies
         run: uv sync --frozen
         working-directory: ${{ inputs.working-directory }}
