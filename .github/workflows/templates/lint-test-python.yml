@@ -1,0 +1,28 @@
+name: Python lint and test
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        required: true
+        type: string
+        description: "Path to the Python service root relative to repo root (e.g. services/github-stats)"
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --frozen
+        working-directory: ${{ inputs.working-directory }}
+      - name: Lint (ruff check)
+        run: uv run ruff check .
+        working-directory: ${{ inputs.working-directory }}
+      - name: Format check (ruff format)
+        run: uv run ruff format --check .
+        working-directory: ${{ inputs.working-directory }}
+      - name: Test (pytest)
+        run: uv run pytest
+        working-directory: ${{ inputs.working-directory }}
