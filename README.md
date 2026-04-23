@@ -78,8 +78,11 @@ foundry/
 | kubectl | `brew install kubectl` | `winget install Kubernetes.kubectl` |
 | helm | `brew install helm` | `winget install Helm.Helm` |
 | helmfile | `brew install helmfile` | `scoop install helmfile` |
+| helm-diff | `helm plugin install https://github.com/databus23/helm-diff` | `helm plugin install https://github.com/databus23/helm-diff` |
 
 > After installing with winget/scoop on Windows, open a new terminal for PATH changes to take effect.
+>
+> **Windows:** `helm plugin install` requires PowerShell Core. Install it with `winget install Microsoft.PowerShell` and open a new terminal before running the plugin install.
 
 ### github-stats service
 
@@ -153,8 +156,8 @@ kubectl port-forward -n monitoring svc/prometheus-server 9090:80
 # Loki (raw API) — http://localhost:3100/ready
 kubectl port-forward -n monitoring svc/loki 3100:3100
 
-# Tempo (raw API) — http://localhost:3100/ready
-kubectl port-forward -n monitoring svc/tempo 3100:3100
+# Tempo (raw API) — http://localhost:3200/ready
+kubectl port-forward -n monitoring svc/tempo 3200:3200
 ```
 
 The `github-stats` dashboard loads automatically in Grafana. Panels show live data once the service is running and instrumented with the OTel SDK.
