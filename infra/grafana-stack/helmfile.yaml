@@ -1,3 +1,8 @@
+helmDefaults:
+  createNamespace: true
+  wait: true
+  kubeContext: kind-foundry
+
 repositories:
   - name: open-telemetry
     url: https://open-telemetry.github.io/opentelemetry-helm-charts
@@ -9,7 +14,6 @@ repositories:
 releases:
   - name: otel-collector
     namespace: monitoring
-    createNamespace: true
     chart: open-telemetry/opentelemetry-collector
     values:
       - values/otel-collector.yaml
@@ -35,8 +39,9 @@ releases:
   - name: grafana
     namespace: monitoring
     chart: grafana/grafana
+    needs:
+      - loki
+      - tempo
+      - prometheus
     values:
       - values/grafana.yaml
-    set:
-      - name: dashboards.default.github-stats.json
-        file: dashboards/github-stats.json
