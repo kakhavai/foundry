@@ -19,4 +19,4 @@ resources:
     memory: 128Mi
 
 otel:
-  endpoint: "http://otel-collector:4317"
+  endpoint: "http://otel-collector.monitoring.svc.cluster.local:4317"
