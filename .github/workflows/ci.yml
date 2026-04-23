@@ -22,6 +22,6 @@ jobs:
   github-stats-lint-test:
     needs: changes
     if: needs.changes.outputs.github-stats == 'true'
-    uses: ./.github/workflows/templates/python/lint-test.yml
+    uses: ./.github/workflows/python-lint-test.yml
     with:
       working-directory: services/github-stats
