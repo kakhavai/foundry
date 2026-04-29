@@ -7,4 +7,6 @@ metadata:
 data:
   OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.otel.endpoint | quote }}
   OTEL_SERVICE_NAME: {{ .Values.service.name | quote }}
+  {{- if .Values.otel.resourceAttributes }}
   OTEL_RESOURCE_ATTRIBUTES: {{ .Values.otel.resourceAttributes | quote }}
+  {{- end }}

@@ -1,16 +1,16 @@
 replicaCount: 1
 
 service:
-  name: ""
+  name: ""        # required: set to the service name (e.g. github-stats)
   type: ClusterIP
-  port: 8080
+  port: 8080      # port the Kubernetes Service exposes
 
 image:
-  repository: ""
+  repository: ""  # required: set to the container image (e.g. ghcr.io/kakhavai/foundry/github-stats)
   pullPolicy: IfNotPresent
-  tag: ""
+  tag: ""         # defaults to appVersion in Chart.yaml if not set
 
-containerPort: 8080
+containerPort: 8080  # port the container listens on (used in Deployment, Service, and probes)
 
 resources:
   limits:
@@ -22,4 +22,4 @@ resources:
 
 otel:
   endpoint: "http://otel-collector.monitoring.svc.cluster.local:4317"
-  resourceAttributes: ""
+  resourceAttributes: ""  # optional: OTel resource attributes in key=value,key2=value2 format

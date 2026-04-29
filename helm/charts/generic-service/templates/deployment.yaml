@@ -1,3 +1,9 @@
+{{- if not .Values.service.name }}
+  {{- fail "service.name must be set in your values file" }}
+{{- end }}
+{{- if not .Values.image.repository }}
+  {{- fail "image.repository must be set in your values file" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

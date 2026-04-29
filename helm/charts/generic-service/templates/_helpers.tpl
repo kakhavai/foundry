@@ -4,7 +4,7 @@
 
 {{- define "generic-service.labels" -}}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
-{{ include "generic-service.selectorLabels" . }}
+{{- include "generic-service.selectorLabels" . | nindent 0 }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
