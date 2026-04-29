@@ -42,13 +42,8 @@ A second Python service onboarded through the same path as `github-stats`. Candi
 
 The second service exists primarily to prove the pattern works for more than one team/service — not for its own functionality.
 
-### Reusable CI Workflow Templates
-Common CI steps extracted into reusable GitHub Actions workflows under `.github/workflows/shared-*.yml`:
-- `shared-lint-test.yml` — parameterized lint and test job
-- `shared-build-push.yml` — parameterized build and push job
-- `shared-helm-lint.yml` — Helm validation job
-
-Each service's workflow file becomes a thin caller that passes service-specific parameters.
+### CI Caller Pattern
+The reusable CI template (`.github/workflows/_service-template.yml`) and composite actions were established in Phase 1. Onboarding the second service requires one new file: `.github/workflows/<second-service>.yml`, a thin caller that invokes the template with the service name. No CI logic is duplicated.
 
 ### Standardized Config Conventions
 A documented contract for what any Foundry service must provide:
@@ -57,11 +52,8 @@ A documented contract for what any Foundry service must provide:
 - Required Helm values structure
 - Required health endpoint (`GET /health`)
 
-### Standard Telemetry Setup
-A shared Python package or copy-paste module (`foundry_telemetry`) that any service imports to get:
-- OTel SDK initialization (traces + metrics + logs)
-- Standard resource attributes (service name, version, environment)
-- Prometheus metrics endpoint wiring
+### Observability
+OTel configuration is provided by the `generic-service` base chart via env vars (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`) and Prometheus pod annotations — established in Phase 1. Each service instruments itself with the OTel Python SDK. No shared library required; no per-service observability config required.
 
 ### Dashboard Template
 A parameterized Grafana dashboard (JSON template with `${service_name}` variables) that generates a working starter dashboard for any onboarded service.
@@ -80,7 +72,7 @@ A parameterized Grafana dashboard (JSON template with `${service_name}` variable
 ## Deliverables
 
 - `services/<second-service>/` — second working service
-- `.github/workflows/shared-*.yml` — reusable CI templates
+- `.github/workflows/<second-service>.yml` — second service CI caller
 - `docs/onboarding.md` — "How to onboard a new service"
 - `docs/service-contract.md` — required structure and conventions
 - `infra/grafana-stack/dashboards/service-template.json` — parameterized dashboard template
