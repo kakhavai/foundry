@@ -11,7 +11,7 @@
 ```mermaid
 graph TD
     subgraph "Reusable CI"
-        SharedWF["Shared GitHub Actions\nWorkflow Templates\n(.github/workflows/shared-*)"]
+        SharedWF["CI Template + Composite Actions\n(.github/workflows/_service-template.yml)"]
     end
 
     subgraph "Services"
