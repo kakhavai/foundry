@@ -1,0 +1,13 @@
+name: github-stats
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  ci:
+    uses: ./.github/workflows/_service-template.yml
+    with:
+      service-name: github-stats
