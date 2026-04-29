@@ -55,8 +55,7 @@ Multi-stage build. Slim final image based on `python:3.12-slim`. Non-root user.
 ### GitHub Actions CI
 Thin caller workflow at `.github/workflows/github-stats.yml` triggers on changes to `services/github-stats/**`, `helm/values/github-stats/**`, or `helm/charts/generic-service/**`. Delegates to `.github/workflows/_service-template.yml` (reusable workflow) which runs:
 1. `lint-test` — runs `ruff` (lint) and `pytest` via the `python-lint-test` composite action
-2. `build-push` — builds and pushes image to GHCR, tagged with Git SHA
-3. `helm-lint` — runs `helm lint` on `helm/charts/generic-service` with `helm/values/github-stats/values.yaml`
+2. `helm-lint` — runs `helm lint` on `helm/charts/generic-service` with `helm/values/github-stats/values.yaml`
 
 ### Helm Chart
 Base chart at `helm/charts/generic-service/` — one parameterized chart used by every standard HTTP service:

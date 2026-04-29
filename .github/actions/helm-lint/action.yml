@@ -19,7 +19,7 @@ runs:
       shell: bash
       run: |
         if [ -n "${{ inputs.values-file }}" ]; then
-          helm lint ${{ inputs.chart-path }} -f ${{ inputs.values-file }}
+          helm lint "${{ inputs.chart-path }}" -f "${{ inputs.values-file }}"
         else
-          helm lint ${{ inputs.chart-path }}
+          helm lint "${{ inputs.chart-path }}"
         fi

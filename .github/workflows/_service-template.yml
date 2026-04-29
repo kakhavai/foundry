@@ -22,11 +22,14 @@ jobs:
               - 'services/${{ inputs.service-name }}/**'
               - 'helm/values/${{ inputs.service-name }}/**'
               - 'helm/charts/generic-service/**'
+              - '.github/actions/**'
 
   lint-test:
     needs: changes
     if: needs.changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/python-lint-test

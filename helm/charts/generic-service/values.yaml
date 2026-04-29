@@ -1,3 +1,6 @@
+# Base chart — always lint with a per-service values file:
+# helm lint helm/charts/generic-service -f helm/values/<service>/values.yaml
+
 replicaCount: 1
 
 service:
