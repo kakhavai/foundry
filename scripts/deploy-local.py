@@ -3,9 +3,13 @@
 import subprocess
 import sys
 
+SERVICES = {
+    "github-stats": {"port": 8000},
+}
+
 
 def run(cmd: list[str]) -> None:
-    print(f"\n$ {' '.join(cmd)}")
+    print(f"\n$ {' '.join(str(c) for c in cmd)}")
     result = subprocess.run(cmd)
     if result.returncode != 0:
         sys.exit(result.returncode)
@@ -14,10 +18,16 @@ def run(cmd: list[str]) -> None:
 def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: python scripts/deploy-local.py <service-name>")
-        print("Example: python scripts/deploy-local.py github-stats")
+        print(f"Available: {', '.join(SERVICES)}")
         sys.exit(1)
 
     service = sys.argv[1]
+    if service not in SERVICES:
+        print(f"Unknown service: {service}")
+        print(f"Available: {', '.join(SERVICES)}")
+        sys.exit(1)
+
+    port = SERVICES[service]["port"]
 
     run(["docker", "build", "-t", f"{service}:local", f"services/{service}/"])
     run(["kind", "load", "docker-image", f"{service}:local", "--name", "foundry"])
@@ -30,7 +40,11 @@ def main() -> None:
         "--set", "image.pullPolicy=Never",
     ])
 
-    print(f"\nDone. Run: kubectl port-forward svc/{service} 8000:8000")
+    print(f"\n{'=' * 50}")
+    print(f"Deployed {service}. To access it:\n")
+    print(f"  kubectl port-forward svc/{service} {port}:{port}")
+    print(f"  → http://localhost:{port}")
+    print(f"{'=' * 50}")
 
 
 if __name__ == "__main__":
