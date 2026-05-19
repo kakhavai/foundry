@@ -1,0 +1,28 @@
+# Base chart — always lint with a per-service values file:
+# helm lint helm/charts/generic-service -f helm/values/<service>/values.yaml
+
+replicaCount: 1
+
+service:
+  name: ""        # required: set to the service name (e.g. github-stats)
+  type: ClusterIP
+  port: 8080      # port the Kubernetes Service exposes
+
+image:
+  repository: ""  # required: set to the container image (e.g. ghcr.io/kakhavai/foundry/github-stats)
+  pullPolicy: IfNotPresent
+  tag: ""         # defaults to appVersion in Chart.yaml if not set
+
+containerPort: 8080  # port the container listens on (used in Deployment, Service, and probes)
+
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+otel:
+  endpoint: "http://otel-collector.monitoring.svc.cluster.local:4317"
+  resourceAttributes: ""  # optional: OTel resource attributes in key=value,key2=value2 format

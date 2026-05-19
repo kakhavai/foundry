@@ -1,0 +1,39 @@
+name: github-stats
+
+on:
+  pull_request:
+    paths:
+      - 'services/github-stats/**'
+      - 'helm/values/github-stats/**'
+      - 'helm/charts/generic-service/**'
+      - '.github/actions/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'services/github-stats/**'
+      - 'helm/values/github-stats/**'
+      - 'helm/charts/generic-service/**'
+      - '.github/actions/**'
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-lint-test
+        with:
+          working-directory: services/github-stats
+
+  helm-lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/helm-lint
+        with:
+          chart-path: helm/charts/generic-service
+          values-file: helm/values/github-stats/values.yaml
