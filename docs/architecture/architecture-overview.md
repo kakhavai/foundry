@@ -89,10 +89,11 @@ The `infra/gitops/` directory is the source of truth for what runs in the cluste
 Local development and demonstration runs on Kind (Kubernetes in Docker). The same Helm charts and GitOps manifests used locally are designed to be portable to a real cluster.
 
 ### Services
-Services live in `services/<name>/`. Each service:
-- has its own Dockerfile
-- emits structured logs, traces, and metrics via the OpenTelemetry SDK
-- exports telemetry to the OTel Collector via OTLP
+Services live in `services/<name>/`. Each service owns its own Dockerfile, dependency lockfile, and application code — no shared Python libraries across services. What is shared is infrastructure.
+
+**CI:** A thin caller workflow (`.github/workflows/<service-name>.yml`) calls `.github/workflows/_service-template.yml`, delegating to composite actions for lint/test and Helm lint. Adding a service = add one caller file (~10 lines).
+
+**Deployment:** `helm/charts/generic-service/` is a single parameterized base chart used by every standard HTTP service. Adding a service = add `helm/values/<service-name>/values.yaml`. The base chart automatically injects OTel env vars and Prometheus pod annotations — every service gets full observability with zero per-service observability config.
 
 The first service is `github-stats` — a Python HTTP API that pulls and exposes GitHub activity data.
 

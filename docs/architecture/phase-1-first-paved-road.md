@@ -53,17 +53,18 @@ The service is instrumented with the OpenTelemetry Python SDK. Every request pro
 Multi-stage build. Slim final image based on `python:3.12-slim`. Non-root user.
 
 ### GitHub Actions CI
-Three jobs on push to `services/github-stats/**` or `helm/charts/github-stats/**`:
-1. `lint-test` — runs `ruff` (lint) and `pytest`
-2. `build-push` — builds and pushes image to GHCR, tagged with Git SHA
-3. `helm-lint` — runs `helm lint` on the chart
+Thin caller workflow at `.github/workflows/github-stats.yml` triggers on changes to `services/github-stats/**`, `helm/values/github-stats/**`, or `helm/charts/generic-service/**`. Delegates to `.github/workflows/_service-template.yml` (reusable workflow) which runs:
+1. `lint-test` — runs `ruff` (lint) and `pytest` via the `python-lint-test` composite action
+2. `helm-lint` — runs `helm lint` on `helm/charts/generic-service` with `helm/values/github-stats/values.yaml`
 
 ### Helm Chart
-A standard Helm chart under `helm/charts/github-stats/` with:
-- `Deployment` with configurable replicas, image tag, resource limits
+Base chart at `helm/charts/generic-service/` — one parameterized chart used by every standard HTTP service:
+- `Deployment` with configurable replicas, image tag, resource limits, and containerPort
 - `Service` (ClusterIP)
-- `ConfigMap` for OTel endpoint and env config
-- `values.yaml` with sensible defaults
+- `ConfigMap` with OTel env vars injected automatically (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`)
+- Pod annotations for Prometheus auto-discovery (`prometheus.io/scrape`, `prometheus.io/port`)
+
+Per-service config at `helm/values/github-stats/values.yaml` — contains only service-specific values (image, port, resources). No observability config needed per service.
 
 ### Kind Cluster
 Local cluster config under `infra/kind/`. Single-node cluster sufficient for Phase 1.
@@ -98,8 +99,10 @@ One Grafana dashboard covering:
 ## Deliverables
 
 - `services/github-stats/` — working Python service
-- `helm/charts/github-stats/` — working Helm chart
-- `.github/workflows/github-stats.yml` — CI pipeline
+- `helm/charts/generic-service/` — parameterized base Helm chart
+- `helm/values/github-stats/values.yaml` — github-stats service values
+- `.github/workflows/_service-template.yml` — reusable CI template
+- `.github/workflows/github-stats.yml` — github-stats CI caller
 - `infra/kind/cluster.yaml` — Kind cluster config
 - `infra/grafana-stack/` — observability stack manifests
 - `docs/architecture/` — this doc + architecture overview
