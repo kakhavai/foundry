@@ -41,8 +41,11 @@ graph TD
 ```
 foundry/
   services/              # service source code
-  helm/charts/           # Helm charts per service
-  .github/workflows/     # CI pipelines (reusable + per-service)
+  helm/
+    charts/              # generic-service Helm chart (shared by all services)
+    values/              # per-service value overrides
+  scripts/               # local dev/deploy helper scripts
+  .github/workflows/     # CI pipelines (per-service, using generic-service chart)
   infra/
     kind/                # local Kind cluster config
     grafana-stack/       # observability stack manifests
@@ -84,45 +87,70 @@ foundry/
 >
 > **Windows:** `helm plugin install` requires PowerShell Core. Install it with `winget install Microsoft.PowerShell` and open a new terminal before running the plugin install.
 
-### github-stats service
+### Run a service locally (no Kubernetes)
 
 ```bash
 cd services/github-stats
-uv sync           # install deps into .venv
-uv run pytest     # run tests
-uv run uvicorn github_stats.main:app --reload  # start with hot reload (http://localhost:8000)
+uv sync        # install deps into .venv
+uv run dev     # start with hot reload (http://localhost:8000)
+uv run test    # run tests
+uv run lint    # lint with ruff
+uv run format  # format with ruff
 ```
+
+### Spin up the full local stack
+
+One command from the repo root brings up the cluster, observability, all services, and all port-forwards:
+
+```bash
+python scripts/stack-up.py
+```
+
+Or pick specific services:
+
+```bash
+python scripts/stack-up.py github-stats
+```
+
+Once running, access everything at:
+
+| Service | URL |
+|---|---|
+| github-stats | http://localhost:8000 |
+| Grafana | http://localhost:3000 (admin / admin) |
+| Prometheus | http://localhost:9090 |
+| Loki | http://localhost:3100/ready |
+| Tempo | http://localhost:3200/ready |
+
+Ctrl+C stops the port-forwards. The cluster and Helm releases stay running so you can restart forwards without re-deploying. To fully tear down:
+
+```bash
+kind delete cluster --name foundry
+```
+
+### Deploy a single service (without full stack)
+
+```bash
+# From repo root
+python scripts/deploy-local.py github-stats
+```
+
+This runs:
+1. `docker build -t github-stats:local services/github-stats/`
+2. `kind load docker-image github-stats:local --name foundry`
+3. `helm upgrade --install github-stats helm/charts/generic-service -f helm/values/github-stats/values.yaml ...`
 
 ### Local Kubernetes cluster (Kind)
 
 ```bash
-# Create the cluster
+# Create the cluster manually if needed
 kind create cluster --config infra/kind/cluster.yaml
 
 # Verify it's up
 kubectl get nodes
 
-# Delete when done
+# Tear down
 kind delete cluster --name foundry
-```
-
-### Deploy github-stats to Kind
-
-```bash
-# Load the local image into the cluster (no registry needed locally)
-docker build -t github-stats:local services/github-stats/
-kind load docker-image github-stats:local --name foundry
-
-# Install via Helm
-helm upgrade --install github-stats helm/charts/github-stats \
-  --set image.repository=github-stats \
-  --set image.tag=local \
-  --set image.pullPolicy=Never
-
-# Check it's running
-kubectl get pods
-kubectl port-forward svc/github-stats-github-stats 8000:8000
-# then: curl http://localhost:8000/health
 ```
 
 ### Observability Stack

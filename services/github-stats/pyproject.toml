@@ -15,6 +15,9 @@ dev = [
     "httpx",
 ]
 
+[tool.uv]
+package = true
+
 [tool.ruff]
 line-length = 88
 target-version = "py312"
@@ -28,3 +31,9 @@ select = ["E", "F", "I"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[project.scripts]
+dev = "github_stats.cli:dev"
+test = "github_stats.cli:test"
+lint = "github_stats.cli:lint"
+format = "github_stats.cli:fmt"

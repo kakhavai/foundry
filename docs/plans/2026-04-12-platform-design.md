@@ -25,6 +25,8 @@ Foundry is a monorepo-based Kubernetes service delivery platform. It establishes
 | Telemetry backend | Grafana LGTM (Loki + Tempo + Prometheus + Grafana) | Open source; self-hostable; OTel-native; local dev parity |
 | Collector topology | Shared OTel Collector (not sidecars) | Avoids linear resource multiplication; collector is a platform concern |
 | AI layer | Assistive triage CLI (Claude API) | Reduces MTTR; no autonomous action; correct scope for system maturity |
+| Service independence | Each service owns its own deps, lockfile, and Dockerfile — no shared Python libs | Services are heterogeneous; shared libs create coupling without proportional benefit |
+| Shared platform infra | One base Helm chart (`generic-service`), one CI template (`_service-template.yml`), one observability stack | Avoids N-way duplication; adding a service requires two files, not a new chart directory |
 
 ---
 
@@ -35,7 +37,10 @@ foundry/
   services/
     github-stats/        # Python HTTP API — GitHub Activity Stats
   helm/
-    charts/              # Helm charts per service
+    charts/
+      generic-service/   # Parameterized base chart for all standard HTTP services
+    values/
+      github-stats/      # Per-service Helm values
   .github/
     workflows/           # CI pipelines (reusable + per-service)
   infra/
