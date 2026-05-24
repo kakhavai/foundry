@@ -1,5 +1,5 @@
-name: Python lint and test
-description: Runs ruff lint, ruff format check, and pytest for a Python service using uv
+name: Python lint
+description: Runs ruff lint and format check for a Python service using uv
 
 inputs:
   working-directory:
@@ -21,8 +21,4 @@ runs:
     - name: Format check
       shell: bash
       run: uv run ruff format --check .
-      working-directory: ${{ inputs.working-directory }}
-    - name: Test
-      shell: bash
-      run: uv run pytest
       working-directory: ${{ inputs.working-directory }}

@@ -1,0 +1,20 @@
+name: Python test
+description: Runs pytest for a Python service using uv
+
+inputs:
+  working-directory:
+    required: true
+    description: Path to the Python service root relative to repo root (e.g. services/github-stats)
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v5
+    - name: Install dependencies
+      shell: bash
+      run: uv sync --frozen
+      working-directory: ${{ inputs.working-directory }}
+    - name: Test
+      shell: bash
+      run: uv run pytest
+      working-directory: ${{ inputs.working-directory }}
