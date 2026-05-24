@@ -118,7 +118,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
 FROM python:3.12-slim
+# Use numeric UID — Kubernetes runAsNonRoot requires a numeric user to verify non-root
+RUN addgroup --system --gid 65532 app && adduser --system --uid 65532 --ingroup app appuser
+WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
+USER 65532
 ENV PATH="/app/.venv/bin:$PATH"
 # No PYTHONPATH needed — --no-editable installs the package as a proper wheel
 ```

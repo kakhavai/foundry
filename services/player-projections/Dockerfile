@@ -20,13 +20,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM python:3.12-slim
 
-RUN addgroup --system app && adduser --system --ingroup app appuser
+RUN addgroup --system --gid 65532 app && adduser --system --uid 65532 --ingroup app appuser
 
 WORKDIR /app
 
 COPY --from=builder /app/.venv /app/.venv
 
-USER appuser
+USER 65532
 
 ENV PATH="/app/.venv/bin:$PATH"
 
