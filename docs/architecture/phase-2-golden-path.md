@@ -11,7 +11,7 @@
 ```mermaid
 graph TD
     subgraph "Reusable CI"
-        SharedWF["CI Template + Composite Actions\n(.github/workflows/_service-template.yml)"]
+        SharedWF["Composite Actions\n(.github/actions/python-lint-test, .github/actions/helm-lint)"]
     end
 
     subgraph "Services"
@@ -43,7 +43,7 @@ A second Python service onboarded through the same path as `github-stats`. Candi
 The second service exists primarily to prove the pattern works for more than one team/service — not for its own functionality.
 
 ### CI Caller Pattern
-The reusable CI template (`.github/workflows/_service-template.yml`) and composite actions were established in Phase 1. Onboarding the second service requires one new file: `.github/workflows/<second-service>.yml`, a thin caller that invokes the template with the service name. No CI logic is duplicated.
+The composite actions were established in Phase 1. Onboarding the second service requires one new file: `.github/workflows/<second-service>.yml`, a thin caller that directly invokes the shared composite actions. No CI logic is duplicated.
 
 ### Standardized Config Conventions
 A documented contract for what any Foundry service must provide:
@@ -72,7 +72,7 @@ A parameterized Grafana dashboard (JSON template with `${service_name}` variable
 ## Deliverables
 
 - `services/<second-service>/` — second working service
-- `.github/workflows/<second-service>.yml` — second service CI caller
+- `.github/workflows/<second-service>.yml` — second service CI caller (directly invokes composite actions)
 - `docs/onboarding.md` — "How to onboard a new service"
 - `docs/service-contract.md` — required structure and conventions
 - `infra/grafana-stack/dashboards/service-template.json` — parameterized dashboard template

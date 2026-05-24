@@ -53,7 +53,7 @@ The service is instrumented with the OpenTelemetry Python SDK. Every request pro
 Multi-stage build. Slim final image based on `python:3.12-slim`. Non-root user.
 
 ### GitHub Actions CI
-Thin caller workflow at `.github/workflows/github-stats.yml` triggers on changes to `services/github-stats/**`, `helm/values/github-stats/**`, or `helm/charts/generic-service/**`. Delegates to `.github/workflows/_service-template.yml` (reusable workflow) which runs:
+Thin caller workflow at `.github/workflows/github-stats.yml` triggers on changes to `services/github-stats/**`, `helm/values/github-stats/**`, or `helm/charts/generic-service/**`. Directly invokes composite actions which run:
 1. `lint-test` — runs `ruff` (lint) and `pytest` via the `python-lint-test` composite action
 2. `helm-lint` — runs `helm lint` on `helm/charts/generic-service` with `helm/values/github-stats/values.yaml`
 
@@ -101,8 +101,9 @@ One Grafana dashboard covering:
 - `services/github-stats/` — working Python service
 - `helm/charts/generic-service/` — parameterized base Helm chart
 - `helm/values/github-stats/values.yaml` — github-stats service values
-- `.github/workflows/_service-template.yml` — reusable CI template
-- `.github/workflows/github-stats.yml` — github-stats CI caller
+- `.github/actions/python-lint-test/` — composite action for Python lint + test
+- `.github/actions/helm-lint/` — composite action for Helm lint
+- `.github/workflows/github-stats.yml` — github-stats CI caller (directly invokes composite actions)
 - `infra/kind/cluster.yaml` — Kind cluster config
 - `infra/grafana-stack/` — observability stack manifests
 - `docs/architecture/` — this doc + architecture overview
