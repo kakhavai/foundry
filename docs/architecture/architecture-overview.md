@@ -91,7 +91,7 @@ Local development and demonstration runs on Kind (Kubernetes in Docker). The sam
 ### Services
 Services live in `services/<name>/`. Each service owns its own Dockerfile, dependency lockfile, and application code — no shared Python libraries across services. What is shared is infrastructure.
 
-**CI:** A thin caller workflow (`.github/workflows/<service-name>.yml`) calls `.github/workflows/_service-template.yml`, delegating to composite actions for lint/test and Helm lint. Adding a service = add one caller file (~10 lines).
+**CI:** A thin caller workflow (`.github/workflows/<service-name>.yml`) directly invokes composite actions for lint/test and Helm lint. Adding a service = add one caller file (~40 lines). The caller sets path filters and calls `.github/actions/python-lint-test` and `.github/actions/helm-lint`.
 
 **Deployment:** `helm/charts/generic-service/` is a single parameterized base chart used by every standard HTTP service. Adding a service = add `helm/values/<service-name>/values.yaml`. The base chart automatically injects OTel env vars and Prometheus pod annotations — every service gets full observability with zero per-service observability config.
 

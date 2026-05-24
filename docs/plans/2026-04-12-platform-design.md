@@ -26,7 +26,7 @@ Foundry is a monorepo-based Kubernetes service delivery platform. It establishes
 | Collector topology | Shared OTel Collector (not sidecars) | Avoids linear resource multiplication; collector is a platform concern |
 | AI layer | Assistive triage CLI (Claude API) | Reduces MTTR; no autonomous action; correct scope for system maturity |
 | Service independence | Each service owns its own deps, lockfile, and Dockerfile — no shared Python libs | Services are heterogeneous; shared libs create coupling without proportional benefit |
-| Shared platform infra | One base Helm chart (`generic-service`), one CI template (`_service-template.yml`), one observability stack | Avoids N-way duplication; adding a service requires two files, not a new chart directory |
+| Shared platform infra | One base Helm chart (`generic-service`), shared composite actions (`.github/actions/`), one observability stack | Avoids N-way duplication; adding a service requires one CI caller file + one Helm values file |
 
 ---
 
