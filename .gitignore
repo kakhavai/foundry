@@ -24,3 +24,6 @@ Thumbs.db
 
 # Git worktrees
 .worktrees/
+
+# Claude Code
+.claude/
