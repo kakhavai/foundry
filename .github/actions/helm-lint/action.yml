@@ -7,7 +7,7 @@ inputs:
     description: Path to the Helm chart relative to repo root (e.g. helm/charts/generic-service)
   values-file:
     required: false
-    description: Path to a values file for lint (e.g. helm/values/github-stats/values.yaml)
+    description: Path to a values file for lint (e.g. helm/values/weather/values.yaml)
 
 runs:
   using: composite

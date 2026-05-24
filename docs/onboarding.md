@@ -19,7 +19,7 @@ mkdir -p services/<service-name>/src/<service_name>
 mkdir services/<service-name>/tests
 ```
 
-Your service needs these files (see `services/platform-health/` as the reference):
+Your service needs these files (see `services/player-projections/` as the reference):
 
 ```
 services/<service-name>/
@@ -76,7 +76,7 @@ helm lint helm/charts/generic-service -f helm/values/<service-name>/values.yaml
 
 ## Step 3: Add CI workflow
 
-Copy `.github/workflows/platform-health.yml` to `.github/workflows/<service-name>.yml` and replace all occurrences of `platform-health` with your service name.
+Copy `.github/workflows/player-projections.yml` to `.github/workflows/<service-name>.yml` and replace all occurrences of `player-projections` with your service name.
 
 No CI logic lives in this file — it calls the shared composite actions.
 

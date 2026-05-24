@@ -1,5 +1,5 @@
 [project]
-name = "github-stats"
+name = "weather"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
@@ -32,8 +32,6 @@ line-length = 88
 target-version = "py312"
 
 [tool.ruff.lint]
-# E=pycodestyle errors, F=pyflakes, I=isort
-# Full rule reference: https://docs.astral.sh/ruff/rules/
 select = ["E", "F", "I"]
 
 [tool.pytest.ini_options]
@@ -42,7 +40,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [project.scripts]
-dev = "github_stats.cli:dev"
-test = "github_stats.cli:test"
-lint = "github_stats.cli:lint"
-format = "github_stats.cli:fmt"
+dev = "weather.cli:dev"
+test = "weather.cli:test"
+lint = "weather.cli:lint"
+format = "weather.cli:fmt"

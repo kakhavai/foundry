@@ -15,8 +15,8 @@ graph TD
     end
 
     subgraph "Services"
-        SvcA["github-stats\n(Python)"]
-        SvcB["second-service\n(Python)"]
+        SvcA["weather\n(Python)"]
+        SvcB["player-projections\n(Python)"]
     end
 
     subgraph "Shared Platform Conventions"
@@ -36,11 +36,7 @@ graph TD
 ## What Gets Built
 
 ### Second Service
-A second Python service onboarded through the same path as `github-stats`. Candidates:
-- A small internal utility API (e.g., a health aggregator that polls other services)
-- A simple async worker
-
-The second service exists primarily to prove the pattern works for more than one team/service — not for its own functionality.
+The second service onboarded through the same path as `weather`. For Foundry this is `player-projections` — a polling service that will consume the internal `player-data` backend for fantasy football projections. It runs in stub mode (returning empty projections) until `player-data` is built, which lets the CI/CD and observability patterns be validated against a real service before its upstream exists.
 
 ### CI Caller Pattern
 The composite actions were established in Phase 1. Onboarding the second service requires one new file: `.github/workflows/<second-service>.yml`, a thin caller that directly invokes the shared composite actions. No CI logic is duplicated.

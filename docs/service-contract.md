@@ -62,6 +62,6 @@ Services receive OTel configuration as environment variables from the ConfigMap 
 | `OTEL_SERVICE_NAME` | Set to `service.name` from Helm values |
 | `OTEL_RESOURCE_ATTRIBUTES` | Additional resource attributes |
 
-Services are responsible for initializing the OTel SDK and instrumenting their framework. See `services/github-stats/src/github_stats/telemetry.py` for the reference implementation.
+Services are responsible for initializing the OTel SDK and instrumenting their framework. See `services/weather/src/weather/telemetry.py` for the reference implementation.
 
 Guard OTel initialization on `OTEL_EXPORTER_OTLP_ENDPOINT` so the service starts cleanly in local dev without a collector.

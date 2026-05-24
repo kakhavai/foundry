@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from github_stats.main import app
+from weather.main import app
 
 client = TestClient(app)
 

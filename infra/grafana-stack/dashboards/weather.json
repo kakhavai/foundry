@@ -17,7 +17,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(http_server_request_duration_seconds_count{job=\"github-stats\"}[5m])) by (http_route)",
+          "expr": "sum(rate(http_server_request_duration_seconds_count{job=\"weather\"}[5m])) by (http_route)",
           "legendFormat": "{{ http_route }}"
         }
       ],
@@ -36,7 +36,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(http_server_request_duration_seconds_count{job=\"github-stats\",http_response_status_code=~\"4..|5..\"}[5m])) / sum(rate(http_server_request_duration_seconds_count{job=\"github-stats\"}[5m]))",
+          "expr": "sum(rate(http_server_request_duration_seconds_count{job=\"weather\",http_response_status_code=~\"4..|5..\"}[5m])) / sum(rate(http_server_request_duration_seconds_count{job=\"weather\"}[5m]))",
           "legendFormat": "error rate"
         }
       ],
@@ -55,17 +55,17 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.50, sum(rate(http_server_request_duration_seconds_bucket{job=\"github-stats\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(http_server_request_duration_seconds_bucket{job=\"weather\"}[5m])) by (le))",
           "legendFormat": "P50"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, sum(rate(http_server_request_duration_seconds_bucket{job=\"github-stats\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_request_duration_seconds_bucket{job=\"weather\"}[5m])) by (le))",
           "legendFormat": "P95"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.99, sum(rate(http_server_request_duration_seconds_bucket{job=\"github-stats\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(http_server_request_duration_seconds_bucket{job=\"weather\"}[5m])) by (le))",
           "legendFormat": "P99"
         }
       ],
@@ -86,7 +86,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "loki" },
-          "expr": "{service_name=\"github-stats\"}",
+          "expr": "{service_name=\"weather\"}",
           "legendFormat": ""
         }
       ],
@@ -107,7 +107,7 @@
               "operator": "=",
               "scope": "resource",
               "tag": "service.name",
-              "value": "github-stats",
+              "value": "weather",
               "valueType": "string"
             }
           ],
@@ -120,12 +120,12 @@
   ],
   "refresh": "30s",
   "schemaVersion": 38,
-  "tags": ["github-stats", "observability"],
+  "tags": ["weather", "observability"],
   "templating": { "list": [] },
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
-  "title": "github-stats",
-  "uid": "github-stats-overview",
+  "title": "weather",
+  "uid": "weather-overview",
   "version": 1
 }

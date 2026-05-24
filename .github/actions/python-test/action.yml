@@ -4,7 +4,7 @@ description: Runs pytest for a Python service using uv
 inputs:
   working-directory:
     required: true
-    description: Path to the Python service root relative to repo root (e.g. services/github-stats)
+    description: Path to the Python service root relative to repo root (e.g. services/weather)
 
 runs:
   using: composite

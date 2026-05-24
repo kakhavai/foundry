@@ -31,7 +31,8 @@ graph TD
 
     subgraph "Kubernetes — Kind (local)"
         subgraph "Services"
-            GHStats["github-stats\n(Python HTTP API)"]
+            Weather["weather\n(Python HTTP API)"]
+            PlayerProjections["player-projections\n(Python HTTP API)"]
         end
         subgraph "Observability Stack"
             OTelCol["OpenTelemetry Collector"]
@@ -50,9 +51,11 @@ graph TD
     SvcRepo --> Lint --> Build --> GHCR
     SvcRepo --> HelmPkg
     Build -->|"update image tag"| GitOpsRepo
-    GitOpsRepo --> Argo --> GHStats
+    GitOpsRepo --> Argo --> Weather
+    GitOpsRepo --> Argo --> PlayerProjections
 
-    GHStats -->|"OTLP"| OTelCol
+    Weather -->|"OTLP"| OTelCol
+    PlayerProjections -->|"OTLP"| OTelCol
     OTelCol --> Loki
     OTelCol --> Tempo
     OTelCol --> Prom
@@ -95,7 +98,7 @@ Services live in `services/<name>/`. Each service owns its own Dockerfile, depen
 
 **Deployment:** `helm/charts/generic-service/` is a single parameterized base chart used by every standard HTTP service. Adding a service = add `helm/values/<service-name>/values.yaml`. The base chart automatically injects OTel env vars and Prometheus pod annotations — every service gets full observability with zero per-service observability config.
 
-The first service is `github-stats` — a Python HTTP API that pulls and exposes GitHub activity data.
+Current services are `weather` (current conditions by location, with an NFL stadium endpoint planned for game-day forecasts) and `player-projections` (polls an internal player-data backend; stubs gracefully until that upstream is built).
 
 ### Observability Stack
 All telemetry flows through a single OpenTelemetry Collector, which fans out to:

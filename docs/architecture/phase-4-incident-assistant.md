@@ -34,7 +34,7 @@ graph TD
 ### Incident Assistant CLI
 A Python CLI (`foundry triage`) that accepts:
 ```
-foundry triage --service github-stats --incident "elevated error rate on /activity endpoint"
+foundry triage --service weather --incident "elevated error rate on /activity endpoint"
 ```
 
 Steps:
@@ -47,7 +47,7 @@ Steps:
 
 ### Output Format
 ```
-=== Foundry Triage: github-stats ===
+=== Foundry Triage: weather ===
 
 INCIDENT: elevated error rate on /activity endpoint
 
@@ -69,7 +69,7 @@ SUGGESTED NEXT CHECKS:
   - Check GitHub API status page
   - Compare /activity trace waterfall between v0.4.0 and v0.4.1
   - If upstream, rollback is low-value — consider adding retry logic
-  - If code regression, rollback with: foundry rollback --service github-stats
+  - If code regression, rollback with: foundry rollback --service weather
 ```
 
 ### Design Boundaries

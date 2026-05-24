@@ -3,7 +3,7 @@ Bring up the full local stack: cluster, observability, services, port-forwards.
 
 Usage:
   python scripts/stack-up.py                  # all services
-  python scripts/stack-up.py github-stats     # specific services only
+  python scripts/stack-up.py weather           # specific services only
 
 Ctrl+C stops all port-forwards. The cluster and Helm releases are left running.
 Use `kind delete cluster --name foundry` to tear everything down.
@@ -17,13 +17,13 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 
 SERVICES = {
-    "github-stats": {
-        "svc": "github-stats",
+    "weather": {
+        "svc": "weather",
         "namespace": "default",
         "local_port": 8000,
         "remote_port": 8000,
         "url": "http://localhost:8000",
-        "pod_label": "app.kubernetes.io/name=github-stats",
+        "pod_label": "app.kubernetes.io/name=weather",
     },
     "player-projections": {
         "svc": "player-projections",

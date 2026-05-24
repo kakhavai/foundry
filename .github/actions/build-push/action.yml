@@ -4,7 +4,7 @@ description: Builds a Docker image from a service directory and pushes it to GHC
 inputs:
   service:
     required: true
-    description: Service name, used as the build context path (e.g. github-stats)
+    description: Service name, used as the build context path (e.g. weather)
   image-name:
     required: true
     description: Full image name including registry (e.g. ghcr.io/owner/repo/service)

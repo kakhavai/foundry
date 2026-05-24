@@ -1,9 +1,9 @@
 service:
-  name: github-stats
+  name: weather
   port: 8000
 
 image:
-  repository: ghcr.io/kakhavai/foundry/github-stats
+  repository: ghcr.io/kakhavai/foundry/weather
 
 containerPort: 8000
 
@@ -16,4 +16,4 @@ resources:
     memory: 128Mi
 
 otel:
-  resourceAttributes: "service.name=github-stats,service.namespace=foundry"
+  resourceAttributes: "service.name=weather,service.namespace=foundry"

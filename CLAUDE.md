@@ -2,7 +2,9 @@
 
 ## What This Repo Is
 
-Foundry is a Kubernetes platform monorepo. It is the long-term home for a **fantasy football prediction platform** — a frontend, backend, and a fully managed fleet of services all deployed and managed through a single, consistent infrastructure foundation.
+Foundry is a **production-grade Kubernetes platform monorepo**. The primary purpose is to demonstrate how a platform team would deliver a scalable, observable, GitOps-driven service delivery system — covering CI/CD, Helm-based deployment, ArgoCD GitOps, and integrated observability via OpenTelemetry and the Grafana LGTM stack.
+
+The application running on this platform is a **fantasy football prediction product** — a frontend, internal backend, and a managed fleet of data and projection services. The platform exists independently of the app; the app proves the platform under real-world conditions.
 
 The platform is built incrementally. Each phase proves a pattern, then the next phase adds a new service that reuses it.
 
@@ -37,7 +39,7 @@ The data collection services (injury, weather, news, betting lines, field type, 
 
 | Service | Port | Status | Purpose |
 |---|---|---|---|
-| `github-stats` | 8000 | Live | GitHub activity API — proves the platform pattern |
+| `weather` | 8000 | Live | Current conditions by location (Open-Meteo, no auth); `/weather/stadiums` stub reserved for per-stadium NFL game-day forecasts |
 | `player-projections` | 8001 | Stub mode | Polls `player-data` for weekly projections; returns empty until `player-data` is built |
 
 ### player-projections — How It Works Now
@@ -170,6 +172,12 @@ python scripts/deploy-local.py <name>         # Redeploy a single service
 ```
 
 Requires: `kind`, `kubectl`, `helm`, `helmfile`, `docker`.
+
+---
+
+## PR Workflow
+
+**Before opening any final PR** (not just a review request — the PR that goes to main), you MUST run the `superpowers:pr-uat` skill. This walks through unit tests, service startup, HTTP endpoints, Docker build, container runtime, Helm render, Helm lint, and CI action reference resolution. Do not skip it.
 
 ---
 

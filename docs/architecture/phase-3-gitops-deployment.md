@@ -43,7 +43,7 @@ Directory structure under `infra/gitops/`:
 ```
 infra/gitops/
   apps/
-    github-stats/
+    weather/
       values.yaml        # contains image.tag
     second-service/
       values.yaml
@@ -57,7 +57,7 @@ Values are separated by environment. Even with a single local cluster, the struc
 infra/gitops/
   envs/
     local/
-      github-stats/values.yaml
+      weather/values.yaml
     staging/               # placeholder
     prod/                  # placeholder
 ```

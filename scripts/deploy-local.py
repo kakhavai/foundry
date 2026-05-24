@@ -4,7 +4,7 @@ import subprocess
 import sys
 
 SERVICES = {
-    "github-stats": {"port": 8000},
+    "weather": {"port": 8000},
     "player-projections": {"port": 8001},
 }
 

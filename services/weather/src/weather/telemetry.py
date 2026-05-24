@@ -13,10 +13,9 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 def setup_telemetry(app) -> None:
     resource = Resource.create(
-        {"service.name": os.getenv("OTEL_SERVICE_NAME", "github-stats")}
+        {"service.name": os.getenv("OTEL_SERVICE_NAME", "weather")}
     )
 
-    # Traces → OTLP gRPC → OTel Collector → Tempo
     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
     tracer_provider = TracerProvider(resource=resource)
     tracer_provider.add_span_processor(
@@ -24,11 +23,6 @@ def setup_telemetry(app) -> None:
     )
     trace.set_tracer_provider(tracer_provider)
 
-    # Metrics → Prometheus format → /metrics endpoint
-    # PrometheusMetricReader registers with prometheus_client's default registry.
-    # FastAPIInstrumentor generates http.server.request.duration, which becomes
-    # http_server_request_duration_seconds in Prometheus format — matching the
-    # dashboard.
     reader = PrometheusMetricReader()
     meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
     metrics.set_meter_provider(meter_provider)

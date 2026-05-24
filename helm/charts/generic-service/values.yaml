@@ -4,12 +4,12 @@
 replicaCount: 1
 
 service:
-  name: ""        # required: set to the service name (e.g. github-stats)
+  name: ""        # required: set to the service name (e.g. weather)
   type: ClusterIP
   port: 8080      # port the Kubernetes Service exposes
 
 image:
-  repository: ""  # required: set to the container image (e.g. ghcr.io/kakhavai/foundry/github-stats)
+  repository: ""  # required: set to the container image (e.g. ghcr.io/kakhavai/foundry/weather)
   pullPolicy: IfNotPresent
   tag: ""         # defaults to appVersion in Chart.yaml if not set
 
