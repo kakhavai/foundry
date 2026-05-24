@@ -1,15 +1,26 @@
 FROM python:3.12-slim AS builder
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 WORKDIR /app
-RUN pip install uv
+
 COPY pyproject.toml uv.lock* ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --no-install-project
 
 FROM python:3.12-slim
+
+RUN addgroup --system app && adduser --system --ingroup app appuser
+
 WORKDIR /app
-RUN useradd --system --no-create-home appuser
+
 COPY --from=builder /app/.venv /app/.venv
 COPY src/ ./src/
-ENV PATH="/app/.venv/bin:$PATH"
+
 USER appuser
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src"
+
 EXPOSE 8001
+
 CMD ["uvicorn", "platform_health.main:app", "--host", "0.0.0.0", "--port", "8001"]
