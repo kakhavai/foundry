@@ -1,0 +1,54 @@
+name: platform-health
+
+on:
+  pull_request:
+    paths:
+      - 'services/platform-health/**'
+      - 'helm/values/platform-health/**'
+      - 'helm/charts/generic-service/**'
+      - '.github/actions/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'services/platform-health/**'
+      - 'helm/values/platform-health/**'
+      - 'helm/charts/generic-service/**'
+      - '.github/actions/**'
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-lint-test
+        with:
+          working-directory: services/platform-health
+
+  helm-lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/helm-lint
+        with:
+          chart-path: helm/charts/generic-service
+          values-file: helm/values/platform-health/values.yaml
+
+  build-push:
+    runs-on: ubuntu-latest
+    needs: [lint-test, helm-lint]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-push
+        with:
+          service: platform-health
+          image-name: ghcr.io/kakhavai/foundry/platform-health
+          tag: ${{ github.sha }}
