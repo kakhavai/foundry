@@ -1,7 +1,5 @@
 # Phase 4 — Incident Assistant
 
-**Dates:** June 1 – June 14, 2026
-
 **Goal:** Add a realistic AI-powered triage layer. Assistive, not autonomous — helps an engineer understand what is happening faster, not take actions on their behalf.
 
 ---
@@ -81,10 +79,8 @@ SUGGESTED NEXT CHECKS:
 
 ## Milestones
 
-| Date | Checkpoint |
-|---|---|
-| June 7 | CLI scaffolded, context gathering working for at least 2 signals |
-| June 14 | Full triage flow working, example incident flows documented, limitations doc written |
+- [ ] CLI scaffolded, context gathering working for at least 2 signals
+- [ ] Full triage flow working, example incident flows documented, limitations doc written
 
 ---
 

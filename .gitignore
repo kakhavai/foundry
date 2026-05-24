@@ -25,5 +25,7 @@ Thumbs.db
 # Git worktrees
 .worktrees/
 
-# Claude Code
-.claude/
+# Claude Code — ignore session/memory/settings, track shared commands
+.claude/settings.local.json
+.claude/todos/
+.claude/*.json

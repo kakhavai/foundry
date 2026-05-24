@@ -1,7 +1,5 @@
 # Phase 3 — GitOps + Safe Deployment
 
-**Dates:** May 11 – May 31, 2026
-
 **Goal:** Make the platform safe and operationally mature. Introduce GitOps as the deployment source of truth. Add rollout visibility, rollback flow, and deployment health checks. Connect release metadata to observability.
 
 ---
@@ -85,11 +83,9 @@ This makes it trivial to correlate a spike in errors with a recent deploy on any
 
 ## Milestones
 
-| Date | Checkpoint |
-|---|---|
-| May 17 | Argo CD in place, GitOps repo flow working, environment separation defined |
-| May 24 | Rollback flow, deployment health checks, release-to-observability connection |
-| May 31 | Phase complete, GitHub cleaned up, tradeoff writeup done |
+- [ ] Argo CD in place, GitOps repo flow working, environment separation defined
+- [ ] Rollback flow, deployment health checks, release-to-observability connection
+- [ ] Phase complete, GitHub cleaned up, tradeoff writeup done
 
 ---
 

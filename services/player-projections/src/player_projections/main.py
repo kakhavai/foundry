@@ -18,7 +18,6 @@ _state: dict = {
 
 async def _poll_loop() -> None:
     url = os.getenv("PLAYER_DATA_URL", "")
-    api_key = os.getenv("PLAYER_DATA_API_KEY", "")
     interval = int(os.getenv("POLL_INTERVAL_SECONDS", "900"))
 
     if not url:
@@ -26,7 +25,7 @@ async def _poll_loop() -> None:
 
     while True:
         try:
-            players = await fetch_projections(url, api_key)
+            players = await fetch_projections(url)
             _state["projections"] = {p["id"]: p for p in players}
             _state["last_updated"] = _now_iso()
             _state["upstream_healthy"] = True

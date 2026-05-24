@@ -33,12 +33,12 @@ def test_projections_empty_with_no_upstream_data():
 
 def test_projections_returns_cached_players():
     _state["projections"] = {
-        "mahomes-patrick": {
-            "id": "mahomes-patrick",
-            "name": "Patrick Mahomes",
-            "team": "KC",
+        "allen-josh": {
+            "id": "allen-josh",
+            "name": "Josh Allen",
+            "team": "BUF",
             "position": "QB",
-            "projected_points": 28.5,
+            "projected_points": 32.1,
         }
     }
     _state["upstream_healthy"] = True
@@ -47,25 +47,25 @@ def test_projections_returns_cached_players():
     assert r.status_code == 200
     body = r.json()
     assert body["count"] == 1
-    assert body["projections"][0]["name"] == "Patrick Mahomes"
+    assert body["projections"][0]["name"] == "Josh Allen"
     assert body["upstream_healthy"] is True
 
 
 def test_get_projection_returns_player():
     _state["projections"] = {
-        "hill-tyreek": {
-            "id": "hill-tyreek",
-            "name": "Tyreek Hill",
-            "team": "MIA",
+        "jefferson-justin": {
+            "id": "jefferson-justin",
+            "name": "Justin Jefferson",
+            "team": "MIN",
             "position": "WR",
-            "projected_points": 22.1,
+            "projected_points": 26.4,
         }
     }
 
-    r = client.get("/projections/hill-tyreek")
+    r = client.get("/projections/jefferson-justin")
     assert r.status_code == 200
-    assert r.json()["name"] == "Tyreek Hill"
-    assert r.json()["projected_points"] == 22.1
+    assert r.json()["name"] == "Justin Jefferson"
+    assert r.json()["projected_points"] == 26.4
 
 
 def test_get_projection_404_for_unknown_player():

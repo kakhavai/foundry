@@ -1,7 +1,5 @@
 # Phase 1 — First Paved Road
 
-**Dates:** April 13 – April 26, 2026
-
 **Goal:** Stand up the first complete paved road for a single service — from source to deployed, observable service running in Kubernetes.
 
 ---
@@ -89,10 +87,8 @@ One Grafana dashboard covering:
 
 ## Milestones
 
-| Date | Checkpoint |
-|---|---|
-| April 19 | Repo structure, service created, Docker build working, Kind cluster running |
-| April 26 | CI working, Helm deploy working, observability visible, architecture docs done |
+- [x] Repo structure, service created, Docker build working, Kind cluster running
+- [x] CI working, Helm deploy working, observability visible, architecture docs done
 
 ---
 

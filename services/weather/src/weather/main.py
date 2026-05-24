@@ -6,7 +6,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from .client import fetch_current_weather
+from .client import fetch_weather_for_coords
+from .stadiums import STADIUMS
 
 
 @asynccontextmanager
@@ -32,25 +33,32 @@ async def prometheus_metrics():
 
 
 @app.get("/weather/stadiums")
-async def stadiums():
-    return {
-        "status": "coming_soon",
-        "detail": (
-            "Stadium weather will return conditions for all NFL game sites"
-            " for the current week."
-        ),
-    }
+async def all_stadiums_weather():
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        results = []
+        for stadium in STADIUMS.values():
+            try:
+                weather = await fetch_weather_for_coords(
+                    stadium["latitude"], stadium["longitude"], client
+                )
+            except (httpx.HTTPStatusError, httpx.RequestError):
+                weather = None
+            results.append({**stadium, "weather": weather})
+    return {"stadiums": results, "count": len(results)}
 
 
-@app.get("/weather/{location}")
-async def weather(location: str):
+@app.get("/weather/stadiums/{stadium_id}")
+async def stadium_weather(stadium_id: str):
+    stadium = STADIUMS.get(stadium_id)
+    if stadium is None:
+        raise HTTPException(status_code=404, detail=f"Stadium not found: {stadium_id}")
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
-            data = await fetch_current_weather(location, client)
-        except ValueError as e:
-            raise HTTPException(status_code=404, detail=str(e))
+            weather = await fetch_weather_for_coords(
+                stadium["latitude"], stadium["longitude"], client
+            )
         except httpx.HTTPStatusError:
             raise HTTPException(status_code=502, detail="Weather API error")
         except httpx.RequestError:
             raise HTTPException(status_code=502, detail="Weather API unreachable")
-    return data
+    return {**stadium, "weather": weather}

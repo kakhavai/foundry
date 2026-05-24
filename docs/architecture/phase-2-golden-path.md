@@ -1,7 +1,5 @@
 # Phase 2 — Golden Path
 
-**Dates:** April 27 – May 10, 2026
-
 **Goal:** Prove this is a reusable platform path, not a one-service demo. Onboard a second service using the same conventions. Extract and standardize shared patterns.
 
 ---
@@ -58,10 +56,8 @@ A parameterized Grafana dashboard (JSON template with `${service_name}` variable
 
 ## Milestones
 
-| Date | Checkpoint |
-|---|---|
-| May 3 | Second service started, shared CI workflow partly extracted |
-| May 10 | Two services onboarded, onboarding documentation complete, golden path clearly reusable |
+- [x] Second service onboarded through the same path as the first
+- [x] Two services running, onboarding documentation complete, golden path clearly reusable
 
 ---
 

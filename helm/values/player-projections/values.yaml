@@ -18,14 +18,7 @@ resources:
 otel:
   resourceAttributes: "service.name=player-projections,service.namespace=foundry"
 
-# PLAYER_DATA_URL and POLL_INTERVAL_SECONDS go in a ConfigMap (non-secret config).
-# PLAYER_DATA_API_KEY comes from the player-data-credentials Secret (created separately).
-# When player-data service is not yet deployed, leave PLAYER_DATA_URL empty —
-# the service runs in stub mode and returns empty projections.
-extraEnv:
-  - name: PLAYER_DATA_API_KEY
-    valueFrom:
-      secretKeyRef:
-        name: player-data-credentials
-        key: api-key
-        optional: true
+# PLAYER_DATA_URL is the S3 URL of the projections file written by the player-data backend.
+# Set this in the ConfigMap when player-data begins publishing.
+# POLL_INTERVAL_SECONDS controls how often the file is re-fetched (default 900 = 15 min).
+# No secret needed — S3 auth is handled at the infrastructure level (IAM role or presigned URL).

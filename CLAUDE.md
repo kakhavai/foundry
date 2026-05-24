@@ -31,7 +31,7 @@ fantasy-frontend (future)
   └── user-facing web UI consuming the projections API
 ```
 
-The data collection services (injury, weather, news, betting lines, field type, and others) are all internal inputs to `player-data` — they are not separate user-facing services. `player-data` is the single gatekeeper for that data.
+The data collection services (injury, weather, news, betting lines, field type, and others) are all internal inputs to `player-data` — they are not separate user-facing services. `player-data` is the single gatekeeper for that data. It writes a curated projections JSON file to S3; `player-projections` polls that file.
 
 ---
 
@@ -42,15 +42,19 @@ The data collection services (injury, weather, news, betting lines, field type, 
 | `weather` | 8000 | Live | Current conditions by location (Open-Meteo, no auth); `/weather/stadiums` stub reserved for per-stadium NFL game-day forecasts |
 | `player-projections` | 8001 | Stub mode | Polls `player-data` for weekly projections; returns empty until `player-data` is built |
 
-### player-projections — How It Works Now
+### player-projections — How It Works
 
-Runs in **stub mode** when `PLAYER_DATA_URL` is empty (no upstream yet). Returns `{"projections":[], "count":0, "upstream_healthy":false}`. Once `player-data` is deployed:
+Runs in **stub mode** when `PLAYER_DATA_URL` is empty (no upstream yet). Returns `{"projections":[], "count":0, "upstream_healthy":false}`.
 
-1. Set `PLAYER_DATA_URL` in the ConfigMap
-2. Create a Kubernetes Secret `player-data-credentials` with key `api-key`
-3. Service begins polling every 15 minutes (configurable via `POLL_INTERVAL_SECONDS`)
+**Upstream architecture:** `player-data` (the private backend) aggregates data from internal sources — weather, injury reports, betting lines, news, field type, etc. — and writes a curated projections JSON file to S3. `player-projections` polls that S3 file on an interval and caches the result in memory.
 
-The response shape from `player-data` is to be defined when that service is built. The client in `services/player-projections/src/player_projections/client.py` expects `{"players": [...]}` at minimum — each player object needs at least an `id` field for the cache key.
+Once `player-data` begins publishing:
+1. Set `PLAYER_DATA_URL` in the ConfigMap to the S3 file URL
+2. Service begins polling every 15 minutes (configurable via `POLL_INTERVAL_SECONDS`)
+
+No API key or Kubernetes Secret needed — S3 auth is handled at the infrastructure level (IAM role on the pod, or a presigned URL baked into `PLAYER_DATA_URL`).
+
+The S3 file shape: `{"players": [...]}` — each player object needs at least an `id` field for the cache key.
 
 ---
 
@@ -89,7 +93,7 @@ See `docs/onboarding.md`. Short version:
 3. Copy `.github/workflows/player-projections.yml` → `.github/workflows/<name>.yml`
 4. Register in `scripts/deploy-local.py` and `scripts/stack-up.py`
 
-If the service needs secrets: add `extraEnv` to the values file (see `helm/values/player-projections/values.yaml` for the pattern).
+If the service needs secrets: add `extraEnv` to the values file with a `secretKeyRef` (see the Helm Chart — Secret Support section below for the pattern).
 
 ---
 
