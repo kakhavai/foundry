@@ -4,7 +4,15 @@ import sys
 
 def dev() -> None:
     subprocess.run(
-        ["uvicorn", "player_projections.main:app", "--reload", "--host", "0.0.0.0", "--port", "8001"]
+        [
+            "uvicorn",
+            "player_projections.main:app",
+            "--reload",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8001",
+        ]
     )
 
 

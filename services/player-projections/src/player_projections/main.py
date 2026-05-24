@@ -10,7 +10,7 @@ from .client import fetch_projections
 
 # In-memory projection cache — refreshed by the background polling loop.
 _state: dict = {
-    "projections": {},   # player_id → player dict
+    "projections": {},  # player_id → player dict
     "last_updated": None,
     "upstream_healthy": False,
 }
@@ -37,6 +37,7 @@ async def _poll_loop() -> None:
 
 def _now_iso() -> str:
     from datetime import datetime, timezone
+
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -44,6 +45,7 @@ def _now_iso() -> str:
 async def lifespan(app: FastAPI):
     if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
         from .telemetry import setup_telemetry
+
         setup_telemetry(app)
 
     task = asyncio.create_task(_poll_loop())

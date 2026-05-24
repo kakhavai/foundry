@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from player_projections.main import app, _state
+from player_projections.main import _state, app
 
 client = TestClient(app)
 

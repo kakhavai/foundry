@@ -7,8 +7,20 @@ from player_projections.client import fetch_projections
 S3_URL = "https://foundry-player-data.s3.amazonaws.com/projections/latest.json"
 
 MOCK_PLAYERS = [
-    {"id": "allen-josh", "name": "Josh Allen", "team": "BUF", "position": "QB", "projected_points": 32.1},
-    {"id": "jefferson-justin", "name": "Justin Jefferson", "team": "MIN", "position": "WR", "projected_points": 26.4},
+    {
+        "id": "allen-josh",
+        "name": "Josh Allen",
+        "team": "BUF",
+        "position": "QB",
+        "projected_points": 32.1,
+    },
+    {
+        "id": "jefferson-justin",
+        "name": "Justin Jefferson",
+        "team": "MIN",
+        "position": "WR",
+        "projected_points": 26.4,
+    },
 ]
 
 

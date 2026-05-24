@@ -36,7 +36,9 @@ async def fetch_current_weather(location: str, client: httpx.AsyncClient) -> dic
     if not results:
         raise ValueError(f"Location not found: {location}")
     place = results[0]
-    weather = await fetch_weather_for_coords(place["latitude"], place["longitude"], client)
+    weather = await fetch_weather_for_coords(
+        place["latitude"], place["longitude"], client
+    )
     return {
         "location": place["name"],
         "latitude": place["latitude"],
