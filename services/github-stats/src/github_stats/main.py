@@ -42,6 +42,8 @@ async def activity(username: str):
             if e.response.status_code == 404:
                 raise HTTPException(status_code=404, detail="User not found")
             raise HTTPException(status_code=502, detail="GitHub API error")
+        except httpx.RequestError:
+            raise HTTPException(status_code=502, detail="GitHub API error")
     return {"username": username, "events": events}
 
 
@@ -53,5 +55,7 @@ async def stats(username: str):
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 raise HTTPException(status_code=404, detail="User not found")
+            raise HTTPException(status_code=502, detail="GitHub API error")
+        except httpx.RequestError:
             raise HTTPException(status_code=502, detail="GitHub API error")
     return data

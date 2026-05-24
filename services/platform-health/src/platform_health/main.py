@@ -9,32 +9,9 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
-        from opentelemetry import metrics, trace
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-            OTLPSpanExporter,
-        )
-        from opentelemetry.exporter.prometheus import PrometheusMetricReader
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-        from opentelemetry.sdk.metrics import MeterProvider
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from .telemetry import setup_telemetry
 
-        resource = Resource.create(
-            {"service.name": os.getenv("OTEL_SERVICE_NAME", "platform-health")}
-        )
-        tracer_provider = TracerProvider(resource=resource)
-        tracer_provider.add_span_processor(
-            BatchSpanProcessor(
-                OTLPSpanExporter(endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
-            )
-        )
-        trace.set_tracer_provider(tracer_provider)
-        reader = PrometheusMetricReader()
-        metrics.set_meter_provider(
-            MeterProvider(resource=resource, metric_readers=[reader])
-        )
-        FastAPIInstrumentor.instrument_app(app)
+        setup_telemetry(app)
     yield
 
 
