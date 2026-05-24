@@ -11,7 +11,7 @@
 ```mermaid
 graph TD
     subgraph "Reusable CI"
-        SharedWF["Composite Actions\n(.github/actions/python-lint-test, .github/actions/helm-lint)"]
+        SharedWF["Composite Actions\n(.github/actions/python-lint, python-test, helm-lint)"]
     end
 
     subgraph "Services"

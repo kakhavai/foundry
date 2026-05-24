@@ -25,6 +25,14 @@ SERVICES = {
         "url": "http://localhost:8000",
         "pod_label": "app.kubernetes.io/name=github-stats",
     },
+    "platform-health": {
+        "svc": "platform-health",
+        "namespace": "default",
+        "local_port": 8001,
+        "remote_port": 8001,
+        "url": "http://localhost:8001",
+        "pod_label": "app.kubernetes.io/name=platform-health",
+    },
 }
 
 OBS_FORWARDS = [

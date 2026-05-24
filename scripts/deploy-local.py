@@ -5,6 +5,7 @@ import sys
 
 SERVICES = {
     "github-stats": {"port": 8000},
+    "platform-health": {"port": 8001},
 }
 
 
