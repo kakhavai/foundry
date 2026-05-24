@@ -1,15 +1,17 @@
 [project]
-name = "platform-health"
+name = "player-projections"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
+    "httpx",
     "opentelemetry-api",
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp-proto-grpc",
     "opentelemetry-exporter-prometheus",
     "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-instrumentation-httpx",
     "prometheus-client",
 ]
 
@@ -19,6 +21,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "httpx",
+    "respx",
 ]
 
 [tool.uv]
@@ -37,7 +40,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [project.scripts]
-dev = "platform_health.cli:dev"
-test = "platform_health.cli:test"
-lint = "platform_health.cli:lint"
-format = "platform_health.cli:fmt"
+dev = "player_projections.cli:dev"
+test = "player_projections.cli:test"
+lint = "player_projections.cli:lint"
+format = "player_projections.cli:fmt"

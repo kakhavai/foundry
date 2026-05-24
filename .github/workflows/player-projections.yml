@@ -1,18 +1,18 @@
-name: platform-health
+name: player-projections
 
 on:
   pull_request:
     paths:
-      - 'services/platform-health/**'
-      - 'helm/values/platform-health/**'
+      - 'services/player-projections/**'
+      - 'helm/values/player-projections/**'
       - 'helm/charts/generic-service/**'
       - '.github/actions/**'
   push:
     branches:
       - main
     paths:
-      - 'services/platform-health/**'
-      - 'helm/values/platform-health/**'
+      - 'services/player-projections/**'
+      - 'helm/values/player-projections/**'
       - 'helm/charts/generic-service/**'
       - '.github/actions/**'
 
@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/python-lint
         with:
-          working-directory: services/platform-health
+          working-directory: services/player-projections
 
   test:
     runs-on: ubuntu-latest
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/python-test
         with:
-          working-directory: services/platform-health
+          working-directory: services/player-projections
 
   helm-lint:
     runs-on: ubuntu-latest
@@ -46,7 +46,7 @@ jobs:
       - uses: ./.github/actions/helm-lint
         with:
           chart-path: helm/charts/generic-service
-          values-file: helm/values/platform-health/values.yaml
+          values-file: helm/values/player-projections/values.yaml
 
   build-push:
     runs-on: ubuntu-latest
@@ -59,6 +59,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/build-push
         with:
-          service: platform-health
-          image-name: ghcr.io/kakhavai/foundry/platform-health
+          service: player-projections
+          image-name: ghcr.io/kakhavai/foundry/player-projections
           tag: ${{ github.sha }}

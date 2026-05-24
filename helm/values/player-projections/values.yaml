@@ -1,0 +1,31 @@
+service:
+  name: player-projections
+  port: 8001
+
+image:
+  repository: ghcr.io/kakhavai/foundry/player-projections
+
+containerPort: 8001
+
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+otel:
+  resourceAttributes: "service.name=player-projections,service.namespace=foundry"
+
+# PLAYER_DATA_URL and POLL_INTERVAL_SECONDS go in a ConfigMap (non-secret config).
+# PLAYER_DATA_API_KEY comes from the player-data-credentials Secret (created separately).
+# When player-data service is not yet deployed, leave PLAYER_DATA_URL empty —
+# the service runs in stub mode and returns empty projections.
+extraEnv:
+  - name: PLAYER_DATA_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: player-data-credentials
+        key: api-key
+        optional: true

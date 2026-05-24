@@ -32,4 +32,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8001
 
-CMD ["uvicorn", "platform_health.main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uvicorn", "player_projections.main:app", "--host", "0.0.0.0", "--port", "8001"]

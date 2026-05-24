@@ -4,6 +4,7 @@ from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -12,7 +13,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 def setup_telemetry(app) -> None:
     resource = Resource.create(
-        {"service.name": os.getenv("OTEL_SERVICE_NAME", "platform-health")}
+        {"service.name": os.getenv("OTEL_SERVICE_NAME", "player-projections")}
     )
 
     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -27,3 +28,4 @@ def setup_telemetry(app) -> None:
     metrics.set_meter_provider(meter_provider)
 
     FastAPIInstrumentor.instrument_app(app)
+    HTTPXClientInstrumentor().instrument()

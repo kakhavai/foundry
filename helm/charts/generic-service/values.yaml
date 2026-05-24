@@ -26,3 +26,12 @@ resources:
 otel:
   endpoint: "http://otel-collector.monitoring.svc.cluster.local:4317"
   resourceAttributes: ""  # optional: OTel resource attributes in key=value,key2=value2 format
+
+extraEnv: []  # extra env vars injected directly (supports secretKeyRef, fieldRef, etc.)
+# extraEnv:
+#   - name: MY_SECRET
+#     valueFrom:
+#       secretKeyRef:
+#         name: my-secret
+#         key: value
+#         optional: true
