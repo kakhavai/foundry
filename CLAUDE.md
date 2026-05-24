@@ -2,7 +2,7 @@
 
 ## What This Repo Is
 
-Foundry is a Kubernetes platform monorepo. It is the long-term home for a **fantasy football prediction platform** — a full fleet of services covering data aggregation, player projections, lineup optimization, and a user-facing frontend — all deployed and managed through a single, consistent infrastructure foundation.
+Foundry is a Kubernetes platform monorepo. It is the long-term home for a **fantasy football prediction platform** — a frontend, backend, and a fully managed fleet of services all deployed and managed through a single, consistent infrastructure foundation.
 
 The platform is built incrementally. Each phase proves a pattern, then the next phase adds a new service that reuses it.
 
@@ -14,30 +14,22 @@ The end-state is a fully managed fantasy football product running on Foundry:
 
 ```
 player-data (internal, auth-gated)
-  └── scrapes/aggregates raw NFL stats from proprietary sources
-  └── NOT exposed publicly — accessed only by internal services via API key
+  └── hidden backend — aggregates data from proprietary sources
+      (injury reports, weather, news, betting lines, field type, etc.)
+  └── never exposed publicly; accessed only by internal services via API key
+  └── the methodology and data pipeline stay private
 
-player-projections (this service — first real service)
-  └── polls player-data, builds weekly projections
-  └── exposes projection API to the frontend and other internal consumers
+player-projections (this service — first real consumer of player-data)
+  └── polls player-data, exposes weekly player projections via API
 
-lineup-optimizer (future)
-  └── takes a user's roster + projections, returns optimal lineup
-
-trade-analyzer (future)
-  └── scores proposed trades against projected player values
-
-injury-tracker (future)
-  └── polls injury reports, flags at-risk players in projections
+injury-tracker (future internal consumer)
+  └── feeds into player-data
 
 fantasy-frontend (future)
-  └── web UI: my team, projections, lineup, trade tool
-
-triage-assistant (Phase 4 in original roadmap)
-  └── Claude API-powered incident triage across all services
+  └── user-facing web UI consuming the projections API
 ```
 
-**Security model:** `player-data` is the only service with access to the proprietary data pipeline. It is never publicly exposed. All other services authenticate to it with an API key (`PLAYER_DATA_API_KEY` from a Kubernetes Secret).
+The data collection services (injury, weather, news, betting lines, field type, and others) are all internal inputs to `player-data` — they are not separate user-facing services. `player-data` is the single gatekeeper for that data.
 
 ---
 
@@ -56,16 +48,7 @@ Runs in **stub mode** when `PLAYER_DATA_URL` is empty (no upstream yet). Returns
 2. Create a Kubernetes Secret `player-data-credentials` with key `api-key`
 3. Service begins polling every 15 minutes (configurable via `POLL_INTERVAL_SECONDS`)
 
-Expected upstream response shape:
-```json
-{
-  "players": [
-    {"id": "mahomes-patrick", "name": "Patrick Mahomes", "team": "KC",
-     "position": "QB", "week": 1, "projected_points": 28.5,
-     "floor": 18.2, "ceiling": 42.1, "updated_at": "..."}
-  ]
-}
-```
+The response shape from `player-data` is to be defined when that service is built. The client in `services/player-projections/src/player_projections/client.py` expects `{"players": [...]}` at minimum — each player object needs at least an `id` field for the cache key.
 
 ---
 
