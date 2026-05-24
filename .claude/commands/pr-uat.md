@@ -69,7 +69,60 @@ for wf in ['.github/workflows/<service>.yml']:
                 print('OK' if os.path.exists(path) else f'MISSING: {path}')
 ```
 
-## Step 7: Report
+## Step 7: Verify Scripts Stay in Scope
+
+`scripts/deploy-local.py` and `scripts/stack-up.py` both maintain a hardcoded `SERVICES` registry. If the PR adds, removes, renames, or reports a service, those scripts must be updated. Run this check:
+
+```python
+import ast, sys, importlib.util
+import yaml
+from pathlib import Path
+
+ROOT = Path(".")
+SCRIPTS = ["scripts/deploy-local.py", "scripts/stack-up.py"]
+
+# 1. Syntax check
+for script in SCRIPTS:
+    try:
+        ast.parse(Path(script).read_text())
+        print(f"OK  syntax: {script}")
+    except SyntaxError as e:
+        print(f"ERR syntax: {script}: {e}")
+        sys.exit(1)
+
+# 2. Load SERVICES from each script and cross-reference disk
+for script in SCRIPTS:
+    spec = importlib.util.spec_from_file_location("_s", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for name in mod.SERVICES:
+        svc_dir = ROOT / "services" / name
+        values_file = ROOT / "helm/values" / name / "values.yaml"
+        print("OK " if svc_dir.exists() else "ERR", f"service dir:   services/{name}/")
+        print("OK " if values_file.exists() else "ERR", f"helm values:   helm/values/{name}/values.yaml")
+
+# 3. Port consistency — script port must match helm values service.port
+spec = importlib.util.spec_from_file_location("_d", "scripts/deploy-local.py")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+for name, cfg in mod.SERVICES.items():
+    values_file = ROOT / "helm/values" / name / "values.yaml"
+    if not values_file.exists():
+        continue
+    values = yaml.safe_load(values_file.read_text())
+    helm_port = values.get("service", {}).get("port")
+    script_port = cfg.get("port")
+    match = helm_port == script_port
+    print("OK " if match else "ERR", f"port match {name}: script={script_port} helm={helm_port}")
+```
+
+What to verify manually:
+- Any service added by this PR appears in **both** `SERVICES` dicts.
+- Any service removed or renamed is cleaned out of both scripts.
+- Ports in `deploy-local.py` and `stack-up.py` match `helm/values/<service>/values.yaml → service.port`.
+- `stack-up.py` pod label `app.kubernetes.io/name=<service>` matches what the Helm chart renders.
+
+## Step 8: Report
 
 For each layer, record pass/fail with actual output — not "looks fine" but the real HTTP status or first line of metrics. Any failure stops the PR.
 
@@ -78,6 +131,7 @@ For each layer, record pass/fail with actual output — not "looks fine" but the
 | Layer | What to check |
 |---|---|
 | Unit tests | `pytest -v` — 0 failures |
+| Lint | `ruff check` and `ruff format --check` — 0 errors |
 | Service startup | Process starts without errors |
 | HTTP endpoints | Correct status codes and response shapes |
 | Docker build | Image builds without error |
@@ -85,3 +139,4 @@ For each layer, record pass/fail with actual output — not "looks fine" but the
 | Helm render | `helm template` produces valid manifests |
 | Helm lint | `helm lint` — 0 failures |
 | CI action refs | All `uses: ./.github/actions/...` resolve to real files |
+| Scripts in scope | `deploy-local.py` and `stack-up.py` SERVICES match disk, ports match Helm |
