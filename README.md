@@ -93,11 +93,21 @@ foundry/
 
 ```bash
 cd services/weather
-uv sync        # install deps into .venv
-uv run dev     # start with hot reload (http://localhost:8000)
-uv run test    # run tests
-uv run lint    # lint with ruff
-uv run format  # format with ruff
+uv sync                                                                    # install deps into .venv
+uv run uvicorn weather.main:app --reload --host 0.0.0.0 --port 8000       # start with hot reload
+uv run pytest                                                              # run tests
+uv run ruff check .                                                        # lint
+uv run ruff format .                                                       # format
+```
+
+```bash
+# Same pattern for other services — adjust the module name and port:
+cd services/player-projections
+uv sync
+uv run uvicorn player_projections.main:app --reload --host 0.0.0.0 --port 8001
+uv run pytest
+uv run ruff check .
+uv run ruff format .
 ```
 
 ### Spin up the full local stack
@@ -119,6 +129,7 @@ Once running, access everything at:
 | Service | URL |
 |---|---|
 | weather | http://localhost:8000 |
+| player-projections | http://localhost:8001 |
 | Grafana | http://localhost:3000 (admin / admin) |
 | Prometheus | http://localhost:9090 |
 | Loki | http://localhost:3100/ready |

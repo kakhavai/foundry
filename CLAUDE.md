@@ -113,7 +113,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project
 # Step 2: install package as wheel (--no-editable bakes it into the venv)
 COPY pyproject.toml uv.lock ./
-COPY src/ ./src/
+COPY <pkg>/ ./<pkg>/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
@@ -125,6 +125,8 @@ COPY --from=builder /app/.venv /app/.venv
 USER 65532
 ENV PATH="/app/.venv/bin:$PATH"
 # No PYTHONPATH needed — --no-editable installs the package as a proper wheel
+EXPOSE <port>
+CMD ["uvicorn", "<pkg>.main:app", "--host", "0.0.0.0", "--port", "<port>"]
 ```
 
 ---
@@ -192,7 +194,7 @@ Requires: `kind`, `kubectl`, `helm`, `helmfile`, `docker`.
 ## Key Decisions
 
 - **Split lint/test CI jobs** — parallel jobs catch failures independently, standard since ~2023.
-- **`--no-editable` Docker** — canonical uv pattern for packages; wheels go into venv, no `src/` copy or PYTHONPATH in runtime.
+- **`--no-editable` Docker** — canonical uv pattern for packages; package dir copied directly into the build stage, wheels go into venv, no PYTHONPATH needed in runtime.
 - **Per-service workflow files** — one file to copy per onboard, no reusable workflow indirection.
 - **OTel guard on env var** — no collector needed for local dev or tests; Kubernetes injects it.
 - **`player-data` internal-only** — proprietary data pipeline never exposed publicly; only `player-projections` (and future internal consumers) can reach it via authenticated polling.

@@ -162,7 +162,7 @@ For each layer, record pass/fail with actual output — not "looks fine" but the
 | Layer | What to check |
 |---|---|
 | Unit tests | `pytest -v` — 0 failures |
-| Lint | `ruff check` and `ruff format --check` — 0 errors |
+| Lint | `uv run ruff check .` and `uv run ruff format --check .` — 0 errors |
 | Service startup | Process starts without errors |
 | HTTP endpoints | Correct status codes and response shapes |
 | Docker build | Image builds without error |

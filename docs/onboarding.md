@@ -15,7 +15,7 @@ This guide walks through adding a new Python HTTP service to Foundry. The result
 ## Step 1: Create the service directory
 
 ```bash
-mkdir -p services/<service-name>/src/<service_name>
+mkdir -p services/<service-name>/<service_name>
 mkdir services/<service-name>/tests
 ```
 
@@ -25,10 +25,9 @@ Your service needs these files (see `services/player-projections/` as the refere
 services/<service-name>/
 ├── pyproject.toml
 ├── Dockerfile
-├── src/<service_name>/
+├── <service_name>/
 │   ├── __init__.py
-│   ├── main.py        # FastAPI app
-│   └── cli.py         # uv script entry points
+│   └── main.py        # FastAPI app
 └── tests/
     └── test_health.py
 ```
@@ -42,7 +41,7 @@ The service must satisfy the [service contract](service-contract.md):
 
 ## Step 2: Add Helm values
 
-Create `helm/values/<service-name>/values.yaml` with the service-specific values. Copy from `helm/values/platform-health/values.yaml` and change the name and port:
+Create `helm/values/<service-name>/values.yaml` with the service-specific values. Copy from `helm/values/weather/values.yaml` and change the name and port:
 
 ```yaml
 service:
