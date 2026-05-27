@@ -31,7 +31,8 @@ graph TD
 
     subgraph "Kubernetes — Kind (local)"
         subgraph "Services"
-            GHStats["github-stats\n(Python HTTP API)"]
+            Weather["weather\n(Python HTTP API)"]
+            PlayerProjections["player-projections\n(Python HTTP API)"]
         end
         subgraph "Observability Stack"
             OTelCol["OpenTelemetry Collector"]
@@ -50,9 +51,11 @@ graph TD
     SvcRepo --> Lint --> Build --> GHCR
     SvcRepo --> HelmPkg
     Build -->|"update image tag"| GitOpsRepo
-    GitOpsRepo --> Argo --> GHStats
+    GitOpsRepo --> Argo --> Weather
+    GitOpsRepo --> Argo --> PlayerProjections
 
-    GHStats -->|"OTLP"| OTelCol
+    Weather -->|"OTLP"| OTelCol
+    PlayerProjections -->|"OTLP"| OTelCol
     OTelCol --> Loki
     OTelCol --> Tempo
     OTelCol --> Prom
@@ -91,11 +94,11 @@ Local development and demonstration runs on Kind (Kubernetes in Docker). The sam
 ### Services
 Services live in `services/<name>/`. Each service owns its own Dockerfile, dependency lockfile, and application code — no shared Python libraries across services. What is shared is infrastructure.
 
-**CI:** A thin caller workflow (`.github/workflows/<service-name>.yml`) calls `.github/workflows/_service-template.yml`, delegating to composite actions for lint/test and Helm lint. Adding a service = add one caller file (~10 lines).
+**CI:** A thin caller workflow (`.github/workflows/<service-name>.yml`) directly invokes composite actions for lint/test and Helm lint. Adding a service = add one caller file (~40 lines). The caller sets path filters and calls `.github/actions/python-lint-test` and `.github/actions/helm-lint`.
 
 **Deployment:** `helm/charts/generic-service/` is a single parameterized base chart used by every standard HTTP service. Adding a service = add `helm/values/<service-name>/values.yaml`. The base chart automatically injects OTel env vars and Prometheus pod annotations — every service gets full observability with zero per-service observability config.
 
-The first service is `github-stats` — a Python HTTP API that pulls and exposes GitHub activity data.
+Current services are `weather` (current conditions by location, with an NFL stadium endpoint planned for game-day forecasts) and `player-projections` (polls an internal player-data backend; stubs gracefully until that upstream is built).
 
 ### Observability Stack
 All telemetry flows through a single OpenTelemetry Collector, which fans out to:

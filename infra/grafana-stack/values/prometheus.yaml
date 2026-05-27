@@ -18,7 +18,11 @@ extraScrapeConfigs: |
     static_configs:
       - targets:
           - otel-collector.monitoring.svc.cluster.local:8889
-  - job_name: github-stats
+  - job_name: weather
     static_configs:
       - targets:
-          - github-stats.default.svc.cluster.local:8000
+          - weather.default.svc.cluster.local:8000
+  - job_name: player-projections
+    static_configs:
+      - targets:
+          - player-projections.default.svc.cluster.local:8001

@@ -35,6 +35,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "generic-service.fullname" . }}-config
+          {{- if .Values.extraEnv }}
+          env:
+            {{- toYaml .Values.extraEnv | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           livenessProbe:

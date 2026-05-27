@@ -1,7 +1,5 @@
 # Phase 1 — First Paved Road
 
-**Dates:** April 13 – April 26, 2026
-
 **Goal:** Stand up the first complete paved road for a single service — from source to deployed, observable service running in Kubernetes.
 
 ---
@@ -20,7 +18,7 @@ graph LR
 
     subgraph "Kind Cluster"
         Helm["Helm Deploy"]
-        GHStats["github-stats\n(Python API)"]
+        GHStats["weather\n(Python API)"]
         OTelCol["OTel Collector"]
         subgraph "Grafana Stack"
             Loki["Loki"]
@@ -40,12 +38,12 @@ graph LR
 
 ## What Gets Built
 
-### Service — github-stats
-A Python HTTP API (FastAPI) that exposes GitHub activity data for a given user. Endpoints:
+### Service — weather
+A Python HTTP API (FastAPI) that returns current weather conditions for a given location using the Open-Meteo API (free, no auth required). Endpoints:
 - `GET /health` — liveness check
 - `GET /metrics` — Prometheus scrape endpoint
-- `GET /activity/{username}` — recent GitHub events
-- `GET /stats/{username}` — summary stats (commit count, PR count, top repos)
+- `GET /weather/{location}` — current conditions (temperature, humidity, wind speed, precipitation)
+- `GET /weather/stadiums` — stub endpoint; reserved for future per-stadium NFL game-day weather
 
 The service is instrumented with the OpenTelemetry Python SDK. Every request produces a trace span. Request count and latency are emitted as metrics. Structured JSON logs are written to stdout.
 
@@ -53,9 +51,9 @@ The service is instrumented with the OpenTelemetry Python SDK. Every request pro
 Multi-stage build. Slim final image based on `python:3.12-slim`. Non-root user.
 
 ### GitHub Actions CI
-Thin caller workflow at `.github/workflows/github-stats.yml` triggers on changes to `services/github-stats/**`, `helm/values/github-stats/**`, or `helm/charts/generic-service/**`. Delegates to `.github/workflows/_service-template.yml` (reusable workflow) which runs:
+Thin caller workflow at `.github/workflows/weather.yml` triggers on changes to `services/weather/**`, `helm/values/weather/**`, or `helm/charts/generic-service/**`. Directly invokes composite actions which run:
 1. `lint-test` — runs `ruff` (lint) and `pytest` via the `python-lint-test` composite action
-2. `helm-lint` — runs `helm lint` on `helm/charts/generic-service` with `helm/values/github-stats/values.yaml`
+2. `helm-lint` — runs `helm lint` on `helm/charts/generic-service` with `helm/values/weather/values.yaml`
 
 ### Helm Chart
 Base chart at `helm/charts/generic-service/` — one parameterized chart used by every standard HTTP service:
@@ -64,7 +62,7 @@ Base chart at `helm/charts/generic-service/` — one parameterized chart used by
 - `ConfigMap` with OTel env vars injected automatically (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`)
 - Pod annotations for Prometheus auto-discovery (`prometheus.io/scrape`, `prometheus.io/port`)
 
-Per-service config at `helm/values/github-stats/values.yaml` — contains only service-specific values (image, port, resources). No observability config needed per service.
+Per-service config at `helm/values/weather/values.yaml` — contains only service-specific values (image, port, resources). No observability config needed per service.
 
 ### Kind Cluster
 Local cluster config under `infra/kind/`. Single-node cluster sufficient for Phase 1.
@@ -89,20 +87,19 @@ One Grafana dashboard covering:
 
 ## Milestones
 
-| Date | Checkpoint |
-|---|---|
-| April 19 | Repo structure, service created, Docker build working, Kind cluster running |
-| April 26 | CI working, Helm deploy working, observability visible, architecture docs done |
+- [x] Repo structure, service created, Docker build working, Kind cluster running
+- [x] CI working, Helm deploy working, observability visible, architecture docs done
 
 ---
 
 ## Deliverables
 
-- `services/github-stats/` — working Python service
+- `services/weather/` — working Python service
 - `helm/charts/generic-service/` — parameterized base Helm chart
-- `helm/values/github-stats/values.yaml` — github-stats service values
-- `.github/workflows/_service-template.yml` — reusable CI template
-- `.github/workflows/github-stats.yml` — github-stats CI caller
+- `helm/values/weather/values.yaml` — weather service values
+- `.github/actions/python-lint-test/` — composite action for Python lint + test
+- `.github/actions/helm-lint/` — composite action for Helm lint
+- `.github/workflows/weather.yml` — weather CI caller (directly invokes composite actions)
 - `infra/kind/cluster.yaml` — Kind cluster config
 - `infra/grafana-stack/` — observability stack manifests
 - `docs/architecture/` — this doc + architecture overview

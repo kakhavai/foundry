@@ -1,0 +1,24 @@
+name: Python lint
+description: Runs ruff lint and format check for a Python service using uv
+
+inputs:
+  working-directory:
+    required: true
+    description: Path to the Python service root relative to repo root (e.g. services/weather)
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v5
+    - name: Install dependencies
+      shell: bash
+      run: uv sync --frozen
+      working-directory: ${{ inputs.working-directory }}
+    - name: Lint
+      shell: bash
+      run: uv run ruff check .
+      working-directory: ${{ inputs.working-directory }}
+    - name: Format check
+      shell: bash
+      run: uv run ruff format --check .
+      working-directory: ${{ inputs.working-directory }}

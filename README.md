@@ -1,6 +1,8 @@
 # Foundry
 
-A standardized Kubernetes service delivery platform — CI/CD, Helm-based deployment, GitOps, and integrated observability via OpenTelemetry and the Grafana LGTM stack.
+A production-grade Kubernetes platform monorepo covering the full service delivery lifecycle: CI/CD, Helm-based deployment, GitOps with Argo CD, and integrated observability via OpenTelemetry and the Grafana LGTM stack (Loki, Grafana, Tempo, Prometheus).
+
+The application running on this platform is a fantasy football prediction product. The platform is application-agnostic; the fantasy app provides a real-world workload that exercises the platform end-to-end.
 
 ```mermaid
 graph TD
@@ -90,12 +92,22 @@ foundry/
 ### Run a service locally (no Kubernetes)
 
 ```bash
-cd services/github-stats
-uv sync        # install deps into .venv
-uv run dev     # start with hot reload (http://localhost:8000)
-uv run test    # run tests
-uv run lint    # lint with ruff
-uv run format  # format with ruff
+cd services/weather
+uv sync                                                                    # install deps into .venv
+uv run uvicorn weather.main:app --reload --host 0.0.0.0 --port 8000       # start with hot reload
+uv run pytest                                                              # run tests
+uv run ruff check .                                                        # lint
+uv run ruff format .                                                       # format
+```
+
+```bash
+# Same pattern for other services — adjust the module name and port:
+cd services/player-projections
+uv sync
+uv run uvicorn player_projections.main:app --reload --host 0.0.0.0 --port 8001
+uv run pytest
+uv run ruff check .
+uv run ruff format .
 ```
 
 ### Spin up the full local stack
@@ -109,14 +121,15 @@ python scripts/stack-up.py
 Or pick specific services:
 
 ```bash
-python scripts/stack-up.py github-stats
+python scripts/stack-up.py weather
 ```
 
 Once running, access everything at:
 
 | Service | URL |
 |---|---|
-| github-stats | http://localhost:8000 |
+| weather | http://localhost:8000 |
+| player-projections | http://localhost:8001 |
 | Grafana | http://localhost:3000 (admin / admin) |
 | Prometheus | http://localhost:9090 |
 | Loki | http://localhost:3100/ready |
@@ -132,13 +145,13 @@ kind delete cluster --name foundry
 
 ```bash
 # From repo root
-python scripts/deploy-local.py github-stats
+python scripts/deploy-local.py weather
 ```
 
 This runs:
-1. `docker build -t github-stats:local services/github-stats/`
-2. `kind load docker-image github-stats:local --name foundry`
-3. `helm upgrade --install github-stats helm/charts/generic-service -f helm/values/github-stats/values.yaml ...`
+1. `docker build -t weather:local services/weather/`
+2. `kind load docker-image weather:local --name foundry`
+3. `helm upgrade --install weather helm/charts/generic-service -f helm/values/weather/values.yaml ...`
 
 ### Local Kubernetes cluster (Kind)
 
@@ -188,7 +201,7 @@ kubectl port-forward -n monitoring svc/loki 3100:3100
 kubectl port-forward -n monitoring svc/tempo 3200:3200
 ```
 
-The `github-stats` dashboard loads automatically in Grafana. Panels show live data once the service is running and instrumented with the OTel SDK.
+The `weather` and `player-projections` dashboards load automatically in Grafana. Panels show live data once services are running and instrumented with the OTel SDK.
 
 ---
 

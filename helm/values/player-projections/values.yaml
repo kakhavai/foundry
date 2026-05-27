@@ -1,0 +1,24 @@
+service:
+  name: player-projections
+  port: 8001
+
+image:
+  repository: ghcr.io/kakhavai/foundry/player-projections
+
+containerPort: 8001
+
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+otel:
+  resourceAttributes: "service.name=player-projections,service.namespace=foundry"
+
+# PLAYER_DATA_URL is the S3 URL of the projections file written by the player-data backend.
+# Set this in the ConfigMap when player-data begins publishing.
+# POLL_INTERVAL_SECONDS controls how often the file is re-fetched (default 900 = 15 min).
+# No secret needed — S3 auth is handled at the infrastructure level (IAM role or presigned URL).

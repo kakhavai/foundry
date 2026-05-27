@@ -1,7 +1,5 @@
 # Phase 2 — Golden Path
 
-**Dates:** April 27 – May 10, 2026
-
 **Goal:** Prove this is a reusable platform path, not a one-service demo. Onboard a second service using the same conventions. Extract and standardize shared patterns.
 
 ---
@@ -11,12 +9,12 @@
 ```mermaid
 graph TD
     subgraph "Reusable CI"
-        SharedWF["CI Template + Composite Actions\n(.github/workflows/_service-template.yml)"]
+        SharedWF["Composite Actions\n(.github/actions/python-lint, python-test, helm-lint)"]
     end
 
     subgraph "Services"
-        SvcA["github-stats\n(Python)"]
-        SvcB["second-service\n(Python)"]
+        SvcA["weather\n(Python)"]
+        SvcB["player-projections\n(Python)"]
     end
 
     subgraph "Shared Platform Conventions"
@@ -36,14 +34,10 @@ graph TD
 ## What Gets Built
 
 ### Second Service
-A second Python service onboarded through the same path as `github-stats`. Candidates:
-- A small internal utility API (e.g., a health aggregator that polls other services)
-- A simple async worker
-
-The second service exists primarily to prove the pattern works for more than one team/service — not for its own functionality.
+The second service onboarded through the same path as `weather`. For Foundry this is `player-projections` — a polling service that will consume the internal `player-data` backend for fantasy football projections. It runs in stub mode (returning empty projections) until `player-data` is built, which lets the CI/CD and observability patterns be validated against a real service before its upstream exists.
 
 ### CI Caller Pattern
-The reusable CI template (`.github/workflows/_service-template.yml`) and composite actions were established in Phase 1. Onboarding the second service requires one new file: `.github/workflows/<second-service>.yml`, a thin caller that invokes the template with the service name. No CI logic is duplicated.
+The composite actions were established in Phase 1. Onboarding the second service requires one new file: `.github/workflows/<second-service>.yml`, a thin caller that directly invokes the shared composite actions. No CI logic is duplicated.
 
 ### Standardized Config Conventions
 A documented contract for what any Foundry service must provide:
@@ -62,17 +56,15 @@ A parameterized Grafana dashboard (JSON template with `${service_name}` variable
 
 ## Milestones
 
-| Date | Checkpoint |
-|---|---|
-| May 3 | Second service started, shared CI workflow partly extracted |
-| May 10 | Two services onboarded, onboarding documentation complete, golden path clearly reusable |
+- [x] Second service onboarded through the same path as the first
+- [x] Two services running, onboarding documentation complete, golden path clearly reusable
 
 ---
 
 ## Deliverables
 
 - `services/<second-service>/` — second working service
-- `.github/workflows/<second-service>.yml` — second service CI caller
+- `.github/workflows/<second-service>.yml` — second service CI caller (directly invokes composite actions)
 - `docs/onboarding.md` — "How to onboard a new service"
 - `docs/service-contract.md` — required structure and conventions
 - `infra/grafana-stack/dashboards/service-template.json` — parameterized dashboard template

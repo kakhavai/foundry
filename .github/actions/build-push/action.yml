@@ -1,0 +1,30 @@
+name: Build and push image
+description: Builds a Docker image from a service directory and pushes it to GHCR
+
+inputs:
+  service:
+    required: true
+    description: Service name, used as the build context path (e.g. weather)
+  image-name:
+    required: true
+    description: Full image name including registry (e.g. ghcr.io/owner/repo/service)
+  tag:
+    required: true
+    description: Image tag (e.g. the Git SHA)
+
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@v3
+    - uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    - uses: docker/build-push-action@v6
+      with:
+        context: services/${{ inputs.service }}
+        push: true
+        tags: ${{ inputs.image-name }}:${{ inputs.tag }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max

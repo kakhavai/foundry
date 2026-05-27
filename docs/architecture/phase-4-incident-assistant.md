@@ -1,7 +1,5 @@
 # Phase 4 — Incident Assistant
 
-**Dates:** June 1 – June 14, 2026
-
 **Goal:** Add a realistic AI-powered triage layer. Assistive, not autonomous — helps an engineer understand what is happening faster, not take actions on their behalf.
 
 ---
@@ -34,7 +32,7 @@ graph TD
 ### Incident Assistant CLI
 A Python CLI (`foundry triage`) that accepts:
 ```
-foundry triage --service github-stats --incident "elevated error rate on /activity endpoint"
+foundry triage --service weather --incident "elevated error rate on /activity endpoint"
 ```
 
 Steps:
@@ -47,7 +45,7 @@ Steps:
 
 ### Output Format
 ```
-=== Foundry Triage: github-stats ===
+=== Foundry Triage: weather ===
 
 INCIDENT: elevated error rate on /activity endpoint
 
@@ -69,7 +67,7 @@ SUGGESTED NEXT CHECKS:
   - Check GitHub API status page
   - Compare /activity trace waterfall between v0.4.0 and v0.4.1
   - If upstream, rollback is low-value — consider adding retry logic
-  - If code regression, rollback with: foundry rollback --service github-stats
+  - If code regression, rollback with: foundry rollback --service weather
 ```
 
 ### Design Boundaries
@@ -81,10 +79,8 @@ SUGGESTED NEXT CHECKS:
 
 ## Milestones
 
-| Date | Checkpoint |
-|---|---|
-| June 7 | CLI scaffolded, context gathering working for at least 2 signals |
-| June 14 | Full triage flow working, example incident flows documented, limitations doc written |
+- [ ] CLI scaffolded, context gathering working for at least 2 signals
+- [ ] Full triage flow working, example incident flows documented, limitations doc written
 
 ---
 

@@ -24,3 +24,11 @@ Thumbs.db
 
 # Git worktrees
 .worktrees/
+
+# AI session artifacts
+docs/superpowers/
+
+# Claude Code — ignore session/memory/settings, track shared commands
+.claude/settings.local.json
+.claude/todos/
+.claude/*.json

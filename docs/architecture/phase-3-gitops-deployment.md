@@ -1,7 +1,5 @@
 # Phase 3 — GitOps + Safe Deployment
 
-**Dates:** May 11 – May 31, 2026
-
 **Goal:** Make the platform safe and operationally mature. Introduce GitOps as the deployment source of truth. Add rollout visibility, rollback flow, and deployment health checks. Connect release metadata to observability.
 
 ---
@@ -43,7 +41,7 @@ Directory structure under `infra/gitops/`:
 ```
 infra/gitops/
   apps/
-    github-stats/
+    weather/
       values.yaml        # contains image.tag
     second-service/
       values.yaml
@@ -57,7 +55,7 @@ Values are separated by environment. Even with a single local cluster, the struc
 infra/gitops/
   envs/
     local/
-      github-stats/values.yaml
+      weather/values.yaml
     staging/               # placeholder
     prod/                  # placeholder
 ```
@@ -85,11 +83,9 @@ This makes it trivial to correlate a spike in errors with a recent deploy on any
 
 ## Milestones
 
-| Date | Checkpoint |
-|---|---|
-| May 17 | Argo CD in place, GitOps repo flow working, environment separation defined |
-| May 24 | Rollback flow, deployment health checks, release-to-observability connection |
-| May 31 | Phase complete, GitHub cleaned up, tradeoff writeup done |
+- [ ] Argo CD in place, GitOps repo flow working, environment separation defined
+- [ ] Rollback flow, deployment health checks, release-to-observability connection
+- [ ] Phase complete, GitHub cleaned up, tradeoff writeup done
 
 ---
 

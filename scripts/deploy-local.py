@@ -4,7 +4,8 @@ import subprocess
 import sys
 
 SERVICES = {
-    "github-stats": {"port": 8000},
+    "weather": {"port": 8000},
+    "player-projections": {"port": 8001},
 }
 
 
@@ -43,7 +44,7 @@ def main() -> None:
     print(f"\n{'=' * 50}")
     print(f"Deployed {service}. To access it:\n")
     print(f"  kubectl port-forward svc/{service} {port}:{port}")
-    print(f"  → http://localhost:{port}")
+    print(f"  -> http://localhost:{port}")
     print(f"{'=' * 50}")
 
 
