@@ -9,6 +9,7 @@ Ctrl+C stops all port-forwards. The cluster and Helm releases are left running.
 Use `kind delete cluster --name foundry` to tear everything down.
 """
 
+import base64
 import subprocess
 import sys
 import time
@@ -77,7 +78,7 @@ ARGO_FORWARD = {
     "namespace": "argocd",
     "local": 8080,
     "remote": 80,
-    "url": "http://localhost:8080  (admin / see below)",
+    "url": "http://localhost:8080",
 }
 
 
@@ -106,9 +107,8 @@ def argo_password() -> str:
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
+    if result.returncode != 0 or not result.stdout.strip():
         return "<not found>"
-    import base64
     return base64.b64decode(result.stdout).decode().strip()
 
 
