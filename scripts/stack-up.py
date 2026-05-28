@@ -71,6 +71,16 @@ OBS_FORWARDS = [
 ]
 
 
+ARGO_FORWARD = {
+    "name": "Argo CD",
+    "svc": "argocd-server",
+    "namespace": "argocd",
+    "local": 8080,
+    "remote": 80,
+    "url": "http://localhost:8080  (admin / see below)",
+}
+
+
 def run(cmd: list, cwd: Path | None = None) -> None:
     print(f"\n$ {' '.join(str(c) for c in cmd)}")
     result = subprocess.run(cmd, cwd=cwd)
@@ -83,6 +93,23 @@ def cluster_running() -> bool:
         ["kind", "get", "clusters"], capture_output=True, text=True
     )
     return "foundry" in result.stdout.splitlines()
+
+
+def argo_password() -> str:
+    """Retrieve the initial Argo CD admin password from the cluster secret."""
+    result = subprocess.run(
+        [
+            "kubectl", "get", "secret", "argocd-initial-admin-secret",
+            "-n", "argocd",
+            "-o", "jsonpath={.data.password}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return "<not found>"
+    import base64
+    return base64.b64decode(result.stdout).decode().strip()
 
 
 def main() -> None:
@@ -104,6 +131,23 @@ def main() -> None:
     grafana_stack = ROOT / "infra/grafana-stack"
     run(["helmfile", "repos"], cwd=grafana_stack)
     run(["helmfile", "apply"], cwd=grafana_stack)
+
+    # 2b. Argo CD
+    argo_dir = ROOT / "infra/argo"
+    run(["helmfile", "repos"], cwd=argo_dir)
+    run(["helmfile", "apply"], cwd=argo_dir)
+
+    # Wait for Argo CD server to be ready before applying app-of-apps
+    print("\nWaiting for Argo CD server to be ready...")
+    run([
+        "kubectl", "wait", "--for=condition=available",
+        "deployment/argocd-server",
+        "-n", "argocd",
+        "--timeout=180s",
+    ])
+
+    # Apply the app-of-apps manifest
+    run(["kubectl", "apply", "-f", ROOT / "infra/gitops/argo/app-of-apps.yaml"])
 
     # 3. Services
     for service in requested:
@@ -135,6 +179,15 @@ def main() -> None:
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         procs.append(proc)
 
+    fwd = ARGO_FORWARD
+    proc = subprocess.Popen([
+        "kubectl", "port-forward",
+        "-n", fwd["namespace"],
+        f"svc/{fwd['svc']}",
+        f"{fwd['local']}:{fwd['remote']}",
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    procs.append(proc)
+
     for service in requested:
         cfg = SERVICES[service]
         proc = subprocess.Popen([
@@ -156,6 +209,9 @@ def main() -> None:
         print(f"  {service:<20} {cfg['url']}")
     for fwd in OBS_FORWARDS:
         print(f"  {fwd['name']:<20} {fwd['url']}")
+    pwd = argo_password()
+    print(f"  {'Argo CD':<20} {ARGO_FORWARD['url']}")
+    print(f"  {'':20} admin password: {pwd}")
     print("\n" + "=" * 50)
     print("Press Ctrl+C to stop port-forwards (cluster stays running).")
     print("To tear everything down: kind delete cluster --name foundry")
