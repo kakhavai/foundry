@@ -1,0 +1,106 @@
+name: integration-test
+
+on:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  integration-test:
+    if: github.event.label.name == 'ready-for-merge'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kind
+        run: |
+          curl -Lo /usr/local/bin/kind \
+            https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+          chmod +x /usr/local/bin/kind
+
+      - name: Install helm + helmfile
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
+            | DESIRED_VERSION=v3.16.0 bash
+          curl -Lo /tmp/helmfile.tar.gz \
+            https://github.com/helmfile/helmfile/releases/download/v0.168.0/helmfile_0.168.0_linux_amd64.tar.gz
+          tar xzf /tmp/helmfile.tar.gz -C /usr/local/bin helmfile
+          chmod +x /usr/local/bin/helmfile
+          helm plugin install https://github.com/databus23/helm-diff
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Create Kind cluster
+        run: kind create cluster --config infra/kind/cluster.yaml --name foundry
+
+      - name: Deploy observability stack
+        run: |
+          cd infra/grafana-stack
+          helmfile repos
+          helmfile apply
+
+      - name: Deploy services
+        run: |
+          python scripts/deploy-local.py weather
+          python scripts/deploy-local.py player-projections
+
+      - name: Wait for pods ready
+        run: |
+          kubectl wait --for=condition=ready pod \
+            --all -n monitoring --timeout=180s
+          kubectl wait --for=condition=ready pod \
+            -l app.kubernetes.io/name=weather --timeout=120s
+          kubectl wait --for=condition=ready pod \
+            -l app.kubernetes.io/name=player-projections --timeout=120s
+
+      - name: Smoke test weather
+        run: |
+          kubectl port-forward svc/weather 8000:8000 &
+          sleep 3
+          curl -sf http://localhost:8000/health | grep '"status":"ok"'
+          curl -sf http://localhost:8000/metrics | grep '# HELP'
+          curl -sf http://localhost:8000/weather/stadiums | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          assert data['count'] == 30, f'expected 30 stadiums, got {data[\"count\"]}'
+          print('stadiums OK')
+          "
+
+      - name: Smoke test player-projections
+        run: |
+          kubectl port-forward svc/player-projections 8001:8001 &
+          sleep 3
+          curl -sf http://localhost:8001/health | grep '"status":"ok"'
+          curl -sf http://localhost:8001/metrics | grep '# HELP'
+          curl -sf http://localhost:8001/projections | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          assert 'projections' in data
+          assert 'count' in data
+          print('projections OK')
+          "
+          # 404 on unknown player
+          STATUS=$(curl -o /dev/null -sw '%{http_code}' http://localhost:8001/projections/unknown-player)
+          [ "$STATUS" = "404" ] && echo "404 OK" || (echo "expected 404, got $STATUS" && exit 1)
+
+      - name: Remove label on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.removeLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              name: 'ready-for-merge'
+            })
+
+      - name: Tear down cluster
+        if: always()
+        run: kind delete cluster --name foundry
