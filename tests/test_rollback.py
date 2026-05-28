@@ -56,3 +56,19 @@ def test_git_commit_and_push_called(tmp_path):
     assert any("add" in c for c in calls)
     assert any("commit" in c for c in calls)
     assert any("push" in c for c in calls)
+    assert any("revert(weather): roll back to abc1234" in c for c in calls)
+
+
+def test_git_commit_and_push_exits_on_failure(tmp_path):
+    """git_commit_and_push exits non-zero when git commit fails."""
+    values_file = tmp_path / "values.yaml"
+    values_file.write_text("image:\n  tag: old\n")
+    with patch("subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            MagicMock(returncode=0),  # git add
+            MagicMock(returncode=1),  # git commit fails
+        ]
+        with pytest.raises(SystemExit) as exc:
+            rollback.git_commit_and_push(values_file, "weather", "abc1234")
+    assert exc.value.code != 0
+    assert mock_run.call_count == 2  # push was never called

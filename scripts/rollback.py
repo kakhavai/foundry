@@ -13,6 +13,7 @@ target tag, commits the change, and pushes. Argo CD picks up the commit
 and reconciles the cluster back to the target image.
 """
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -22,19 +23,32 @@ GITOPS_ROOT = Path(__file__).parent.parent / "infra" / "gitops"
 
 def validate_service(service: str, gitops_root: Path = GITOPS_ROOT) -> Path:
     """Return the values.yaml path for the service, or exit if not found."""
-    svc_dir = gitops_root / "envs" / "local" / service
+    local_dir = gitops_root / "envs" / "local"
+    svc_dir = local_dir / service
     if not svc_dir.exists():
-        available = sorted(
-            d.name for d in (gitops_root / "envs" / "local").iterdir() if d.is_dir()
+        available = (
+            sorted(d.name for d in local_dir.iterdir() if d.is_dir())
+            if local_dir.exists()
+            else []
         )
         print(f"Error: unknown service '{service}'")
-        print(f"Available: {', '.join(available)}")
+        if available:
+            print(f"Available: {', '.join(available)}")
+        else:
+            print(f"GitOps root not found: {local_dir}")
         sys.exit(1)
     return svc_dir / "values.yaml"
 
 
 def write_tag(values_file: Path, tag: str) -> None:
-    """Write a new image tag to the values file."""
+    """Write a new image tag to the values file, preserving other keys."""
+    if values_file.exists():
+        text = values_file.read_text()
+        patched = re.sub(r'(tag:\s*")[^"]*(")', rf'\g<1>{tag}\2', text)
+        if patched != text:
+            values_file.write_text(patched)
+            return
+    # Fallback: file does not exist or has no tag line yet
     values_file.write_text(f'image:\n  tag: "{tag}"\n')
 
 
