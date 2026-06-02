@@ -1,10 +1,10 @@
 FROM ubuntu:22.04
 
-# Pinned tool versions — keep in sync with .github/workflows/integration-test.yml
 ARG KIND_VERSION=0.24.0
 ARG KUBECTL_VERSION=1.31.0
 ARG HELM_VERSION=3.16.0
 ARG HELMFILE_VERSION=0.168.0
+ARG DOCKER_CLI_VERSION=27.3.1
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -43,3 +43,7 @@ RUN helm plugin install https://github.com/databus23/helm-diff
 # uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
+
+# docker CLI only (no daemon) — needed to inspect Kind cluster node IPs when running in a container job
+RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
+    | tar xz -C /usr/local/bin --strip-components=1 docker/docker

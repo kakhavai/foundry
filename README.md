@@ -134,6 +134,7 @@ Once running, access everything at:
 | Prometheus | http://localhost:9090 |
 | Loki | http://localhost:3100/ready |
 | Tempo | http://localhost:3200/ready |
+| Argo CD | http://localhost:8080 (admin / printed on startup) |
 
 Ctrl+C stops the port-forwards. The cluster and Helm releases stay running so you can restart forwards without re-deploying. To fully tear down:
 
@@ -202,6 +203,50 @@ kubectl port-forward -n monitoring svc/tempo 3200:3200
 ```
 
 The `weather` and `player-projections` dashboards load automatically in Grafana. Panels show live data once services are running and instrumented with the OTel SDK.
+
+### Argo CD
+
+`stack-up.py` installs Argo CD automatically — you don't need to run these steps manually unless you're setting up the cluster without the script.
+
+**What `stack-up.py` does with Argo CD:**
+1. Installs Argo CD into the `argocd` namespace via Helmfile (`infra/argo/`)
+2. Waits for the server to be ready
+3. Applies `infra/gitops/argo/app-of-apps.yaml` — this single manifest creates one Argo CD Application per service
+4. Port-forwards the UI to `http://localhost:8080` and prints the admin password
+
+**If you need to set it up manually:**
+
+```bash
+# Install Argo CD
+cd infra/argo
+helmfile repos
+helmfile apply
+
+# Wait for the server
+kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=180s
+
+# Bootstrap the app-of-apps (creates one Application per service)
+kubectl apply -f infra/gitops/argo/app-of-apps.yaml
+
+# Port-forward the UI
+kubectl port-forward -n argocd svc/argocd-server 8080:80
+
+# Get the admin password
+kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath="{.data.password}" | base64 -d
+```
+
+**What Argo CD is doing:**
+
+Argo CD watches `https://github.com/kakhavai/foundry` (the real GitHub repo) every ~3 minutes. When CI merges a change to `main` and commits a new image tag to `infra/gitops/envs/local/<service>/values.yaml`, Argo CD detects it and runs a Helm upgrade on your local cluster automatically. You never run `helm upgrade` for a production deploy — you commit to Git and Argo CD reconciles.
+
+To trigger a deploy manually (e.g. for rollback), edit the tag file and push to `main`:
+
+```bash
+# Or use the rollback script:
+python scripts/rollback.py weather <target-tag>
+```
+
+See [docs/deployment-lifecycle.md](docs/deployment-lifecycle.md) for the full deploy flow.
 
 ---
 
