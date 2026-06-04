@@ -44,4 +44,5 @@ runs:
         git add infra/gitops/envs/local/${{ inputs.service }}/values.yaml
         git diff --cached --quiet && echo "No tag change, skipping commit" && exit 0
         git commit -m "chore(gitops): update ${{ inputs.service }} image tag to ${{ inputs.tag }}"
+        git pull --rebase
         git push
