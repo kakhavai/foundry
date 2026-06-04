@@ -77,4 +77,3 @@ jobs:
         with:
           service: weather
           tag: ${{ github.sha }}
-          token: ${{ secrets.GITOPS_PAT }}
