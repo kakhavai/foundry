@@ -90,8 +90,10 @@ Each service has one workflow file (`.github/workflows/<service>.yml`) that call
 See `docs/onboarding.md`. Short version:
 1. `services/<name>/` — FastAPI app, Dockerfile, pyproject.toml, uv.lock
 2. `helm/values/<name>/values.yaml`
-3. Copy `.github/workflows/player-projections.yml` → `.github/workflows/<name>.yml`
-4. Register in `scripts/deploy-local.py` and `scripts/stack-up.py`
+3. `infra/gitops/envs/local/<name>/values.yaml` — initial image tag (`0.1.0`)
+4. `infra/gitops/argo/<name>.yaml` — Argo CD Application manifest (copy from `infra/gitops/argo/weather.yaml`, update name and value paths)
+5. Copy `.github/workflows/player-projections.yml` → `.github/workflows/<name>.yml`, update service name in update-gitops-tag job
+6. Register in `scripts/deploy-local.py` and `scripts/stack-up.py`
 
 If the service needs secrets: add `extraEnv` to the values file with a `secretKeyRef` (see the Helm Chart — Secret Support section below for the pattern).
 
@@ -171,6 +173,16 @@ uv run pytest -v
 ```
 
 Tests use `respx` to mock `httpx` calls. OTel not initialized in tests. State-based endpoint tests pre-populate the in-memory cache via `_state` directly.
+
+---
+
+## Rollback
+
+```bash
+python scripts/rollback.py <service> <target-tag>
+```
+
+See `docs/runbooks/rollback.md` for the full runbook.
 
 ---
 

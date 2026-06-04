@@ -62,3 +62,18 @@ jobs:
           service: player-projections
           image-name: ghcr.io/kakhavai/foundry/player-projections
           tag: ${{ github.sha }}
+
+  update-gitops-tag:
+    runs-on: ubuntu-latest
+    needs: [build-push]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+      - uses: ./.github/actions/update-gitops-tag
+        with:
+          service: player-projections
+          tag: ${{ github.sha }}
