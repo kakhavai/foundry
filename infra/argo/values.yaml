@@ -1,0 +1,29 @@
+# Disable TLS for local Kind cluster — no cert needed
+configs:
+  params:
+    server.insecure: "true"
+
+# Reduce resource usage for local Kind
+server:
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+repoServer:
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+applicationSet:
+  enabled: false
+
+notifications:
+  enabled: false

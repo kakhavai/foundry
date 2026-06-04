@@ -65,3 +65,33 @@ Autonomous remediation (auto-rollback, auto-scaling) requires a level of system 
 The right boundary for AI in incident response is: surface context faster, reduce cognitive load during high-stress situations, suggest next checks. The engineer retains full agency over what happens next.
 
 **The tradeoff accepted:** Faster time-to-resolution from automation is left on the table. This is a deliberate, correct tradeoff for this system's scope and maturity level.
+
+---
+
+## Why Label-Triggered Integration Tests (Not Per-Push)
+
+Running a full Kind cluster + stack deploy on every PR push would add 5-10 minutes to every iteration cycle. Developers push frequently while working — running the cluster gate that often is wasteful and creates false urgency around fixing flaky infra tests mid-feature.
+
+The label `ready-for-merge` is a deliberate signal: "I'm done, this is ready to ship." The integration test runs once, at that moment, and gates the merge. PRs iterate fast; the gate fires once.
+
+**The tradeoff accepted:** A developer must remember to add the label. Forgetting doesn't block the PR — it means the integration test hasn't run. The required status check ensures it runs before merge, but it requires the label to be added.
+
+---
+
+## Why GITHUB_TOKEN (Not a PAT) for GitOps Commits
+
+The `update-gitops-tag` action commits to `infra/gitops/` using `GITHUB_TOKEN` with `contents: write` permission. A PAT would also work but requires storing a long-lived credential as a repo secret, rotating it manually, and binding it to a specific user account.
+
+`GITHUB_TOKEN` is scoped to the workflow run, expires automatically, and requires no secret management. It's sufficient here because Argo CD watches the repo directly — the gitops commit doesn't need to trigger another GitHub Actions workflow.
+
+**The tradeoff accepted:** A commit from `GITHUB_TOKEN` cannot trigger other workflows (GitHub prevents this to avoid loops). This is fine — the gitops commit is a terminal step, not a trigger for further CI.
+
+---
+
+## Why App-of-Apps (Not Individual kubectl apply)
+
+The app-of-apps pattern means every Argo CD Application is itself managed by Argo CD. Adding a new service = adding a YAML file to `infra/gitops/argo/` and pushing. No manual `kubectl apply`, no Argo CD UI clicking.
+
+The alternative — creating Applications manually — works for one or two services but breaks the GitOps principle: if the Application definition isn't in git, it can drift, get deleted, or be impossible to recreate from scratch.
+
+**The tradeoff accepted:** The app-of-apps adds one layer of indirection. When debugging, you need to understand both the parent app (which manages child Applications) and the child apps (which manage services). This is worth it for any number of services beyond one.
