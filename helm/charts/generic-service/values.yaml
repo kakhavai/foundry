@@ -28,6 +28,12 @@ otel:
   resourceAttributes: ""  # optional: OTel resource attributes in key=value,key2=value2 format
 
 extraEnv: []  # extra env vars injected directly (supports secretKeyRef, fieldRef, etc.)
+
+grafanaAnnotations:
+  enabled: false
+  grafanaUrl: "http://grafana.monitoring.svc.cluster.local"
+  grafanaUser: "admin"
+  grafanaPassword: "admin"
 # extraEnv:
 #   - name: MY_SECRET
 #     valueFrom:

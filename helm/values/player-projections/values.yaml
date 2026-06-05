@@ -18,6 +18,9 @@ resources:
 otel:
   resourceAttributes: "service.name=player-projections,service.namespace=foundry"
 
+grafanaAnnotations:
+  enabled: true
+
 # PLAYER_DATA_URL is the S3 URL of the projections file written by the player-data backend.
 # Set this in the ConfigMap when player-data begins publishing.
 # POLL_INTERVAL_SECONDS controls how often the file is re-fetched (default 900 = 15 min).

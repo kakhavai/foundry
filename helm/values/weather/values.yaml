@@ -17,3 +17,6 @@ resources:
 
 otel:
   resourceAttributes: "service.name=weather,service.namespace=foundry"
+
+grafanaAnnotations:
+  enabled: true
