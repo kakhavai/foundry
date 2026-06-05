@@ -10,12 +10,21 @@ metadata:
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
   ttlSecondsAfterFinished: 300
+  backoffLimit: 0
+  activeDeadlineSeconds: 60
   template:
     spec:
       restartPolicy: Never
       containers:
         - name: annotate
           image: curlimages/curl:8.7.1
+          resources:
+            limits:
+              cpu: 100m
+              memory: 32Mi
+            requests:
+              cpu: 10m
+              memory: 16Mi
           command:
             - sh
             - -c
@@ -24,5 +33,6 @@ spec:
                 {{ .Values.grafanaAnnotations.grafanaUrl }}/api/annotations \
                 -H "Content-Type: application/json" \
                 -u "{{ .Values.grafanaAnnotations.grafanaUser }}:{{ .Values.grafanaAnnotations.grafanaPassword }}" \
-                -d "{\"text\":\"deploy: {{ .Values.service.name }} @ {{ .Values.image.tag }}\",\"tags\":[\"deploy\",\"{{ .Values.service.name }}\"]}"
+                -d "{\"text\":\"deploy: {{ .Values.service.name }} @ {{ .Values.image.tag | default .Chart.AppVersion }}\",\"tags\":[\"deploy\",\"{{ .Values.service.name }}\"]}" \
+                || true
 {{- end }}
