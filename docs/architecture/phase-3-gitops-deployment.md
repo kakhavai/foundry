@@ -126,8 +126,8 @@ This makes it trivial to correlate a spike in errors with a recent deploy on any
 
 ## Milestones
 
-- [ ] Argo CD in place, GitOps repo flow working, environment separation defined, CI runner image published
-- [ ] Integration test job wired with label trigger and required status check
+- [x] Argo CD in place, GitOps repo flow working, environment separation defined, CI runner image published
+- [x] Integration test job wired with label trigger and required status check
 - [ ] Rollback flow (script + runbook), deployment health checks, release-to-observability connection
 - [ ] Phase complete, GitHub cleaned up, tradeoff writeup done
 
