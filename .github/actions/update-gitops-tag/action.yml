@@ -1,7 +1,8 @@
 name: Update GitOps image tag
 description: >
   Writes a new image tag to infra/gitops/envs/local/<service>/values.yaml
-  and commits + pushes to main using the foundry-gitops GitHub App.
+  and commits + pushes to main. Callers must check out with the App token so
+  git's credential helper is configured as foundry-gitops[bot], not GITHUB_TOKEN.
 
 inputs:
   service:
@@ -10,23 +11,10 @@ inputs:
   tag:
     required: true
     description: "Image tag to write (e.g. the Git SHA from github.sha)"
-  app-id:
-    required: true
-    description: "foundry-gitops GitHub App ID"
-  app-private-key:
-    required: true
-    description: "foundry-gitops GitHub App private key (PEM format)"
 
 runs:
   using: composite
   steps:
-    - name: Generate GitHub App token
-      id: app-token
-      uses: actions/create-github-app-token@v1
-      with:
-        app-id: ${{ inputs.app-id }}
-        private-key: ${{ inputs.app-private-key }}
-
     - name: Write new image tag
       shell: bash
       run: |
@@ -40,7 +28,6 @@ runs:
       run: |
         git config user.name "foundry-gitops[bot]"
         git config user.email "foundry-gitops[bot]@users.noreply.github.com"
-        git remote set-url origin https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/${{ github.repository }}
         git add infra/gitops/envs/local/${{ inputs.service }}/values.yaml
         git diff --cached --quiet && echo "No tag change, skipping commit" && exit 0
         git commit -m "chore(gitops): update ${{ inputs.service }} image tag to ${{ inputs.tag }}"
