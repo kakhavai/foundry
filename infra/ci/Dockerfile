@@ -41,9 +41,12 @@ RUN curl -Lo /tmp/helmfile.tar.gz \
 # helm-diff plugin (required by helmfile)
 # Install directly from release tarball — bypasses helm plugin install's git clone
 # which can pull a plugin.yaml with fields the current Helm version doesn't parse.
-RUN mkdir -p /root/.local/share/helm/plugins && \
+# HELM_PLUGINS is set to an absolute path so GitHub Actions' HOME override
+# (/github/home) doesn't hide the plugin from Helm at runtime.
+ENV HELM_PLUGINS=/usr/local/share/helm/plugins
+RUN mkdir -p /usr/local/share/helm/plugins && \
     curl -fsSL "https://github.com/databus23/helm-diff/releases/download/v${HELM_DIFF_VERSION}/helm-diff-linux-amd64.tgz" \
-      | tar xz -C /root/.local/share/helm/plugins/
+      | tar xz -C /usr/local/share/helm/plugins/
 
 # uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
