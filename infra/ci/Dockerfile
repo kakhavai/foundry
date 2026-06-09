@@ -6,6 +6,7 @@ ARG HELM_VERSION=3.16.4
 ARG HELMFILE_VERSION=0.168.0
 ARG HELM_DIFF_VERSION=3.9.9
 ARG DOCKER_CLI_VERSION=27.3.1
+ARG BUILDX_VERSION=0.17.1
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -55,3 +56,10 @@ ENV PATH="/root/.local/bin:$PATH"
 # docker CLI only (no daemon) — needed to inspect Kind cluster node IPs when running in a container job
 RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
     | tar xz -C /usr/local/bin --strip-components=1 docker/docker
+
+# buildx plugin — required by Docker CLI 23+ when DOCKER_BUILDKIT=1 (or by default)
+# and needed to build images using --mount=type=cache in Dockerfiles
+RUN mkdir -p /usr/local/lib/docker/cli-plugins && \
+    curl -fsSL "https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-amd64" \
+      -o /usr/local/lib/docker/cli-plugins/docker-buildx && \
+    chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
