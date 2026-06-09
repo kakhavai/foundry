@@ -1,5 +1,6 @@
 """Local deploy: docker build → kind load → helm upgrade for a given service."""
 
+import os
 import subprocess
 import sys
 
@@ -9,9 +10,12 @@ SERVICES = {
 }
 
 
-def run(cmd: list[str]) -> None:
+_BUILD_ENV = {**os.environ, "DOCKER_BUILDKIT": "1"}
+
+
+def run(cmd: list[str], env: dict | None = None) -> None:
     print(f"\n$ {' '.join(str(c) for c in cmd)}")
-    result = subprocess.run(cmd)
+    result = subprocess.run(cmd, env=env)
     if result.returncode != 0:
         sys.exit(result.returncode)
 
@@ -30,7 +34,7 @@ def main() -> None:
 
     port = SERVICES[service]["port"]
 
-    run(["docker", "build", "-t", f"{service}:local", f"services/{service}/"])
+    run(["docker", "build", "-t", f"{service}:local", f"services/{service}/"], env=_BUILD_ENV)
     run(["kind", "load", "docker-image", f"{service}:local", "--name", "foundry"])
     run([
         "helm", "upgrade", "--install", service,
