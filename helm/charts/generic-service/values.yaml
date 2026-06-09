@@ -24,7 +24,7 @@ resources:
     memory: 128Mi
 
 otel:
-  endpoint: "http://otel-collector.monitoring.svc.cluster.local:4317"
+  endpoint: "http://otel-collector-opentelemetry-collector.monitoring.svc.cluster.local:4317"
   resourceAttributes: ""  # optional: OTel resource attributes in key=value,key2=value2 format
 
 extraEnv: []  # extra env vars injected directly (supports secretKeyRef, fieldRef, etc.)
