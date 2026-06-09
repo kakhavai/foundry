@@ -38,7 +38,9 @@ RUN curl -Lo /tmp/helmfile.tar.gz \
     && chmod +x /usr/local/bin/helmfile
 
 # helm-diff plugin (required by helmfile)
-RUN helm plugin install https://github.com/databus23/helm-diff
+# Pin to v3.9.11 — later versions added platformHooks to plugin.yaml which
+# older Helm cannot parse (json: unknown field error).
+RUN helm plugin install https://github.com/databus23/helm-diff --version v3.9.11
 
 # uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
