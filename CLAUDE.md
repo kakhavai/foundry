@@ -83,6 +83,8 @@ Each service has one workflow file (`.github/workflows/<service>.yml`) that call
 - `helm-lint` → `.github/actions/helm-lint`
 - `build-push` → needs all three; runs only on push to main
 
+There is also a **required** `integration-test` check that gate-keeps merges. It spins up a Kind cluster, deploys the full stack, and runs `scripts/smoke-test.sh`. **It only runs when the `ready-for-merge` label is applied to the PR.** Without that label the check never fires and `gh pr merge` will fail with "Required status check 'integration-test' is expected." Always add the label after the other checks pass.
+
 ---
 
 ## Adding a New Service
@@ -145,6 +147,20 @@ if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
 
 Each service has a `telemetry.py` with traces (OTLP gRPC → OTel Collector → Tempo) and metrics (`PrometheusMetricReader` → `/metrics` → Prometheus).
 
+**Collector service name:** The Helmfile release is named `otel-collector`, but the Helm chart appends `-opentelemetry-collector`, making the in-cluster DNS name `otel-collector-opentelemetry-collector.monitoring.svc.cluster.local`. This is set in `helm/charts/generic-service/values.yaml`. If traces/logs stop flowing while `/metrics` still works, this is the first thing to check — Prometheus scrapes pod annotations directly and is unaffected by a broken OTel endpoint.
+
+**Debugging the pipeline manually:** `kubectl port-forward` to gRPC (4317) is unreliable. Use the HTTP OTLP endpoint (4318) when you need to post test spans/logs:
+```bash
+kubectl exec <pod> -- python3 -c "
+import urllib.request, json
+urllib.request.urlopen(urllib.request.Request(
+  'http://otel-collector-opentelemetry-collector.monitoring.svc.cluster.local:4318/v1/traces',
+  data=json.dumps({'resourceSpans':[...]}).encode(),
+  headers={'Content-Type':'application/json'}
+))
+"
+```
+
 ---
 
 ## Helm Chart — Secret Support
@@ -190,16 +206,31 @@ See `docs/runbooks/rollback.md` for the full runbook.
 
 ```bash
 python scripts/stack-up.py                    # Kind cluster + all services + port-forwards
+python scripts/stack-up.py --forward-only     # Port-forwards only (skip build/deploy)
 python scripts/deploy-local.py <name>         # Redeploy a single service
 ```
 
 Requires: `kind`, `kubectl`, `helm`, `helmfile`, `docker`.
+
+**When ArgoCD is running:** `deploy-local.py` will fail with a Server-Side Apply conflict because ArgoCD already owns the Deployment fields (`image`, `imagePullPolicy`). Use `--forward-only` when the cluster is already up and you just need to re-bind port-forward tunnels after a restart or session change.
 
 ---
 
 ## PR Workflow
 
 **Before opening any final PR** (not just a review request — the PR that goes to main), you MUST run the `superpowers:pr-uat` skill. This walks through unit tests, service startup, HTTP endpoints, Docker build, container runtime, Helm render, Helm lint, and CI action reference resolution. Do not skip it.
+
+---
+
+## ArgoCD / GitOps Behavior
+
+All ArgoCD Applications have `selfHeal: true` and `automated.prune: true`. This means:
+
+- **Any manual `kubectl patch` or `kubectl apply` to a managed resource is reverted within seconds.** Do not try to fix live ConfigMaps, Deployments, or Service objects by hand — the change will disappear before the pod restarts.
+- **The Application objects themselves are also managed** (by the app-of-apps), so patching the Application spec (e.g. disabling selfHeal) is also reverted.
+- **The only way to make a change stick is to merge it to `main`.** ArgoCD tracks `targetRevision: main` for all apps.
+
+If you need to verify a fix that isn't merged yet, work from inside the cluster (e.g. `kubectl exec` into a pod and exercise the changed code path directly) rather than patching cluster state.
 
 ---
 
