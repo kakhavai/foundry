@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/kakhavai/foundry/ci-runner:latest
-      options: --privileged --network host -v /var/run/docker.sock:/var/run/docker.sock
+      options: --privileged -v /var/run/docker.sock:/var/run/docker.sock
     permissions:
       contents: read
       pull-requests: write
@@ -21,8 +21,17 @@ jobs:
       - name: Create Kind cluster
         run: kind create cluster --config infra/kind/cluster.yaml --name foundry
 
-      - name: Verify cluster connectivity
-        run: kubectl cluster-info
+      - name: Fix kubeconfig for container networking
+        run: |
+          # GHA container jobs run on a 'github_network_*' bridge; Kind nodes are on the
+          # 'kind' network. Instead of connecting this container to Kind (requires knowing
+          # our own container ID, unreliable on cgroup v2), connect the Kind control-plane
+          # node to our network — no self-ID needed.
+          GHA_NETWORK=$(docker network ls --format '{{.Name}}' | grep 'github_network' | head -1)
+          docker network connect "$GHA_NETWORK" foundry-control-plane
+          NODE_IP=$(docker inspect foundry-control-plane \
+            --format="{{(index .NetworkSettings.Networks \"$GHA_NETWORK\").IPAddress}}")
+          kubectl config set-cluster kind-foundry --server="https://$NODE_IP:6443"
 
       - name: Deploy observability stack
         run: |
