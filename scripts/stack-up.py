@@ -113,7 +113,10 @@ def argo_password() -> str:
 
 
 def main() -> None:
-    requested = sys.argv[1:] or list(SERVICES.keys())
+    args = sys.argv[1:]
+    forward_only = "--forward-only" in args
+    requested_raw = [a for a in args if not a.startswith("--")]
+    requested = requested_raw or list(SERVICES.keys())
 
     unknown = [s for s in requested if s not in SERVICES]
     if unknown:
@@ -121,50 +124,53 @@ def main() -> None:
         print(f"Available: {', '.join(SERVICES.keys())}")
         sys.exit(1)
 
-    # 1. Cluster
-    if cluster_running():
-        print("\nKind cluster 'foundry' already running — skipping create.")
-    else:
-        run(["kind", "create", "cluster", "--config", ROOT / "infra/kind/cluster.yaml"])
+    if not forward_only:
+        # 1. Cluster
+        if cluster_running():
+            print("\nKind cluster 'foundry' already running — skipping create.")
+        else:
+            run(["kind", "create", "cluster", "--config", ROOT / "infra/kind/cluster.yaml"])
 
-    # 2. Observability stack
-    grafana_stack = ROOT / "infra/grafana-stack"
-    run(["helmfile", "repos"], cwd=grafana_stack)
-    run(["helmfile", "apply"], cwd=grafana_stack)
+        # 2. Observability stack
+        grafana_stack = ROOT / "infra/grafana-stack"
+        run(["helmfile", "repos"], cwd=grafana_stack)
+        run(["helmfile", "apply"], cwd=grafana_stack)
 
-    # 2b. Argo CD
-    argo_dir = ROOT / "infra/argo"
-    run(["helmfile", "repos"], cwd=argo_dir)
-    run(["helmfile", "apply"], cwd=argo_dir)
+        # 2b. Argo CD
+        argo_dir = ROOT / "infra/argo"
+        run(["helmfile", "repos"], cwd=argo_dir)
+        run(["helmfile", "apply"], cwd=argo_dir)
 
-    # Wait for Argo CD server to be ready before applying app-of-apps
-    print("\nWaiting for Argo CD server to be ready...")
-    run([
-        "kubectl", "wait", "--for=condition=available",
-        "deployment/argocd-server",
-        "-n", "argocd",
-        "--timeout=180s",
-    ])
+        # Wait for Argo CD server to be ready before applying app-of-apps
+        print("\nWaiting for Argo CD server to be ready...")
+        run([
+            "kubectl", "wait", "--for=condition=available",
+            "deployment/argocd-server",
+            "-n", "argocd",
+            "--timeout=180s",
+        ])
 
-    # Apply the app-of-apps manifest
-    run(["kubectl", "apply", "-f", ROOT / "infra/gitops/argo/app-of-apps.yaml"])
+        # Apply the app-of-apps manifest
+        run(["kubectl", "apply", "-f", ROOT / "infra/gitops/argo/app-of-apps.yaml"])
 
-    # 3. Services
-    for service in requested:
-        run([sys.executable, ROOT / "scripts/deploy-local.py", service])
+        # 3. Services
+        for service in requested:
+            run([sys.executable, ROOT / "scripts/deploy-local.py", service])
 
-    # 4. Wait for pods to be ready
-    print("\nWaiting for pods to be ready...")
-    run([
-        "kubectl", "wait", "--for=condition=ready", "pod",
-        "--all", "-n", "monitoring", "--timeout=180s",
-    ])
-    for service in requested:
-        label = SERVICES[service]["pod_label"]
+        # 4. Wait for pods to be ready
+        print("\nWaiting for pods to be ready...")
         run([
             "kubectl", "wait", "--for=condition=ready", "pod",
-            "-l", label, "--timeout=120s",
+            "--all", "-n", "monitoring", "--timeout=180s",
         ])
+        for service in requested:
+            label = SERVICES[service]["pod_label"]
+            run([
+                "kubectl", "wait", "--for=condition=ready", "pod",
+                "-l", label, "--timeout=120s",
+            ])
+    else:
+        print("\nSkipping deploy — starting port-forwards only.")
 
     # 5. Start port-forwards in background
     print("\nStarting port-forwards...")
