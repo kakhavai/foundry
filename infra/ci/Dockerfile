@@ -2,8 +2,9 @@ FROM ubuntu:22.04
 
 ARG KIND_VERSION=0.24.0
 ARG KUBECTL_VERSION=1.31.0
-ARG HELM_VERSION=3.17.3
+ARG HELM_VERSION=3.16.4
 ARG HELMFILE_VERSION=0.168.0
+ARG HELM_DIFF_VERSION=3.9.9
 ARG DOCKER_CLI_VERSION=27.3.1
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -38,9 +39,11 @@ RUN curl -Lo /tmp/helmfile.tar.gz \
     && chmod +x /usr/local/bin/helmfile
 
 # helm-diff plugin (required by helmfile)
-# Pin to v3.9.11 — later versions added platformHooks to plugin.yaml which
-# older Helm cannot parse (json: unknown field error).
-RUN helm plugin install https://github.com/databus23/helm-diff --version v3.9.11
+# Install directly from release tarball — bypasses helm plugin install's git clone
+# which can pull a plugin.yaml with fields the current Helm version doesn't parse.
+RUN mkdir -p /root/.local/share/helm/plugins && \
+    curl -fsSL "https://github.com/databus23/helm-diff/releases/download/v${HELM_DIFF_VERSION}/helm-diff-linux-amd64.tgz" \
+      | tar xz -C /root/.local/share/helm/plugins/
 
 # uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
