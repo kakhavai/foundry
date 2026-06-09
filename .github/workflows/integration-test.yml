@@ -31,7 +31,11 @@ jobs:
           docker network connect "$GHA_NETWORK" foundry-control-plane
           NODE_IP=$(docker inspect foundry-control-plane \
             --format="{{(index .NetworkSettings.Networks \"$GHA_NETWORK\").IPAddress}}")
-          kubectl config set-cluster kind-foundry --server="https://$NODE_IP:6443"
+          # --insecure-skip-tls-verify: Kind's cert SANs only include the Kind-network IP
+          # (172.19.x.x), not the GHA-network IP we're now connecting through.
+          kubectl config set-cluster kind-foundry \
+            --server="https://$NODE_IP:6443" \
+            --insecure-skip-tls-verify=true
 
       - name: Deploy observability stack
         run: |
