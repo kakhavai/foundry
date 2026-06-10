@@ -207,44 +207,48 @@ The `weather` and `player-projections` dashboards load automatically in Grafana.
 
 ### Argo CD
 
-`stack-up.py` installs Argo CD automatically — you don't need to run these steps manually unless you're setting up the cluster without the script.
+`argocd-deploy.py` is the dedicated script for the Argo CD lifecycle.
 
-**What `stack-up.py` does with Argo CD:**
-1. Installs Argo CD into the `argocd` namespace via Helmfile (`infra/argo/`)
-2. Waits for the server to be ready
-3. Applies `infra/gitops/argo/app-of-apps.yaml` — this single manifest creates one Argo CD Application per service
-4. Port-forwards the UI to `http://localhost:8080` and prints the admin password
-
-**If you need to set it up manually:**
+**First time setup:**
 
 ```bash
-# Install Argo CD
-cd infra/argo
-helmfile repos
-helmfile apply
-
-# Wait for the server
-kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=180s
-
-# Bootstrap the app-of-apps (creates one Application per service)
-kubectl apply -f infra/gitops/argo/app-of-apps.yaml
-
-# Port-forward the UI
-kubectl port-forward -n argocd svc/argocd-server 8080:80
-
-# Get the admin password
-kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath="{.data.password}" | base64 -d
+python scripts/argocd-deploy.py install --env local
+python scripts/argocd-deploy.py ui
 ```
 
-**What Argo CD is doing:**
+**Sub-commands:**
 
-Argo CD watches `https://github.com/kakhavai/foundry` (the real GitHub repo) every ~3 minutes. When CI merges a change to `main` and commits a new image tag to `infra/gitops/envs/local/<service>/values.yaml`, Argo CD detects it and runs a Helm upgrade on your local cluster automatically. You never run `helm upgrade` for a production deploy — you commit to Git and Argo CD reconciles.
+| Command | What it does |
+|---|---|
+| `install --env <env>` | Install Argo CD via Helmfile, bootstrap app-of-apps, wait for all Applications to sync |
+| `verify --env <env>` | Read-only health check: pods running, Applications Synced+Healthy, repo reachable |
+| `promote <svc> --from <env> --to <env>` | Promote an image tag, commit/push, watch target env sync |
+| `watch <svc> --env <env>` | Stream rollout status and confirm Application is Synced+Healthy |
+| `ui [--port 8080]` | Port-forward the Argo CD UI and print URL + admin password |
+| `help [<command>]` | Show usage for a specific command |
 
-To trigger a deploy manually (e.g. for rollback), edit the tag file and push to `main`:
+All sub-commands accept `--context <ctx>` to target a non-default kubectl context (e.g. an EKS cluster). Omit it to use the active context.
+
+**After a merge (CI updated the image tag — watch the rollout):**
 
 ```bash
-# Or use the rollback script:
+python scripts/argocd-deploy.py watch weather --env local
+```
+
+**Promote a verified build to staging:**
+
+```bash
+python scripts/argocd-deploy.py promote weather --from local --to staging --context my-staging-context
+python scripts/argocd-deploy.py verify --env staging --context my-staging-context
+```
+
+**What Argo CD is doing:** it watches `https://github.com/kakhavai/foundry` every ~3 minutes. When CI merges a change and commits a new image tag to `infra/gitops/envs/<env>/<service>/values.yaml`, Argo CD detects it and rolls out the new image automatically. You never run `helm upgrade` directly.
+
+To roll back a service, use `rollback.py` then confirm with `verify`:
+
+```bash
 python scripts/rollback.py weather <target-tag>
+python scripts/argocd-deploy.py verify --env local
 ```
 
 See [docs/deployment-lifecycle.md](docs/deployment-lifecycle.md) for the full deploy flow.
