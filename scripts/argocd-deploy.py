@@ -297,3 +297,34 @@ def cmd_verify(args) -> None:
         print(f"\nNot Synced+Healthy: {', '.join(failed)}")
         sys.exit(1)
     print("\nAll Applications: Synced + Healthy")
+
+
+def cmd_promote(args) -> None:
+    service = args.service
+    from_env = args.from_env
+    to_env = args.to_env
+    ctx = args.context
+
+    from_file = GITOPS_ROOT / "envs" / from_env / service / "values.yaml"
+    to_file = GITOPS_ROOT / "envs" / to_env / service / "values.yaml"
+
+    tag = read_tag(from_file)
+    print(f"\nPromoting {service}: {from_env} -> {to_env} @ {tag}")
+
+    manifest = ensure_application_manifest(service, to_env)
+    write_tag(to_file, tag)
+
+    files_to_commit: list[Path] = [to_file]
+    if manifest:
+        files_to_commit.append(manifest)
+    git_commit_and_push(
+        files_to_commit,
+        f"chore(gitops): promote {service} from {from_env} to {to_env} @ {tag}",
+    )
+
+    print(f"\nWaiting for {app_name(service, to_env)} to sync in {to_env}...")
+    ok = poll_applications([service], to_env, ctx, timeout=args.timeout)
+    if not ok:
+        print(f"Timeout: {app_name(service, to_env)} did not reach Synced+Healthy within {args.timeout}s")
+        sys.exit(1)
+    print(f"\nDone. {service} @ {tag} is live in {to_env}.")

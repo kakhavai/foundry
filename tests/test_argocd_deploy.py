@@ -341,3 +341,49 @@ def test_cmd_verify_exits_when_app_not_synced():
         ]
         with pytest.raises(SystemExit):
             ad.cmd_verify(_make_verify_args())
+
+
+# ── cmd_promote ───────────────────────────────────────────────────────────────
+
+def _make_promote_args(service="weather", from_env="local", to_env="staging", context=None, timeout=300):
+    return type("Args", (), {
+        "service": service, "from_env": from_env, "to_env": to_env,
+        "context": context, "timeout": timeout,
+    })()
+
+
+def test_cmd_promote_copies_tag_and_commits(tmp_path):
+    from_file = tmp_path / "envs" / "local" / "weather" / "values.yaml"
+    from_file.parent.mkdir(parents=True)
+    from_file.write_text('image:\n  tag: "sha123"\n')
+
+    with patch("argocd_deploy.GITOPS_ROOT", tmp_path), \
+         patch("argocd_deploy.ARGO_MANIFESTS_DIR", tmp_path / "argo"), \
+         patch("argocd_deploy.git_commit_and_push") as mock_git, \
+         patch("argocd_deploy.poll_applications", return_value=True), \
+         patch("argocd_deploy.ensure_application_manifest", return_value=None):
+        ad.cmd_promote(_make_promote_args())
+
+    mock_git.assert_called_once()
+    committed_files = mock_git.call_args[0][0]
+    msg = mock_git.call_args[0][1]
+    assert any("staging" in str(f) for f in committed_files)
+    assert "sha123" in msg
+
+    to_file = tmp_path / "envs" / "staging" / "weather" / "values.yaml"
+    assert to_file.exists()
+    assert 'tag: "sha123"' in to_file.read_text()
+
+
+def test_cmd_promote_exits_on_sync_timeout(tmp_path):
+    from_file = tmp_path / "envs" / "local" / "weather" / "values.yaml"
+    from_file.parent.mkdir(parents=True)
+    from_file.write_text('image:\n  tag: "sha123"\n')
+
+    with patch("argocd_deploy.GITOPS_ROOT", tmp_path), \
+         patch("argocd_deploy.ARGO_MANIFESTS_DIR", tmp_path / "argo"), \
+         patch("argocd_deploy.git_commit_and_push"), \
+         patch("argocd_deploy.poll_applications", return_value=False), \
+         patch("argocd_deploy.ensure_application_manifest", return_value=None):
+        with pytest.raises(SystemExit):
+            ad.cmd_promote(_make_promote_args())
