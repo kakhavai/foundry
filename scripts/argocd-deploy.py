@@ -75,3 +75,53 @@ def argo_values_file(env: str, argo_dir: Path = ARGO_DIR) -> Path:
     """Return the helmfile values file for the given env (env-specific or default)."""
     env_specific = argo_dir / f"values-{env}.yaml"
     return env_specific if env_specific.exists() else argo_dir / "values.yaml"
+
+
+# ── subprocess helpers ────────────────────────────────────────────────────────
+
+def run(cmd: list, cwd: Path | None = None) -> None:
+    """Run a subprocess, print the command, exit on non-zero."""
+    print(f"\n$ {' '.join(str(c) for c in cmd)}")
+    result = subprocess.run(cmd, cwd=cwd)
+    if result.returncode != 0:
+        sys.exit(result.returncode)
+
+
+def _kubectl_cmd(args: tuple, context: str | None) -> list[str]:
+    cmd = ["kubectl"]
+    if context:
+        cmd += ["--context", context]
+    return cmd + list(args)
+
+
+def kubectl_run(*args: str, context: str | None = None) -> None:
+    """Run kubectl, exit on non-zero."""
+    run(_kubectl_cmd(args, context))
+
+
+def kubectl_capture(*args: str, context: str | None = None) -> tuple[int, str]:
+    """Run kubectl, return (returncode, stdout). Never exits."""
+    cmd = _kubectl_cmd(args, context)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode, result.stdout.strip()
+
+
+def helmfile_run(*args: str, context: str | None = None, cwd: Path | None = None) -> None:
+    """Run helmfile, passing --kube-context if provided."""
+    cmd = ["helmfile"]
+    if context:
+        cmd += ["--kube-context", context]
+    run(cmd + list(args), cwd=cwd)
+
+
+def argo_password(context: str | None = None) -> str:
+    """Decode the ArgoCD initial admin password from the cluster secret."""
+    _, out = kubectl_capture(
+        "get", "secret", "argocd-initial-admin-secret",
+        "-n", "argocd",
+        "-o", "jsonpath={.data.password}",
+        context=context,
+    )
+    if not out:
+        return "<not found>"
+    return base64.b64decode(out).decode().strip()

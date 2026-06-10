@@ -105,3 +105,39 @@ def test_argo_values_file_env_specific_when_exists(tmp_path):
 def test_argo_values_file_falls_back_to_default(tmp_path):
     (tmp_path / "values.yaml").write_text("")
     assert ad.argo_values_file("prod", argo_dir=tmp_path) == tmp_path / "values.yaml"
+
+
+# ── subprocess helpers ────────────────────────────────────────────────────────
+
+def test_kubectl_capture_passes_context():
+    with patch("subprocess.run") as mock:
+        mock.return_value = MagicMock(returncode=0, stdout="ok")
+        rc, out = ad.kubectl_capture("get", "pods", context="my-ctx")
+    cmd = mock.call_args[0][0]
+    assert "--context" in cmd
+    assert "my-ctx" in cmd
+    assert rc == 0
+    assert out == "ok"
+
+
+def test_kubectl_capture_no_context_omits_flag():
+    with patch("subprocess.run") as mock:
+        mock.return_value = MagicMock(returncode=0, stdout="result")
+        ad.kubectl_capture("get", "pods", context=None)
+    cmd = mock.call_args[0][0]
+    assert "--context" not in cmd
+
+
+def test_argo_password_decodes_base64():
+    encoded = base64.b64encode(b"supersecret").decode()
+    with patch("subprocess.run") as mock:
+        mock.return_value = MagicMock(returncode=0, stdout=encoded)
+        result = ad.argo_password(context=None)
+    assert result == "supersecret"
+
+
+def test_argo_password_returns_placeholder_on_failure():
+    with patch("subprocess.run") as mock:
+        mock.return_value = MagicMock(returncode=1, stdout="")
+        result = ad.argo_password(context=None)
+    assert result == "<not found>"
