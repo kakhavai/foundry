@@ -18,30 +18,6 @@ The three stages build on each other:
 
 ## Stage 1 — Rigorous Service and Platform Testing
 
-### Diagram
-
-```mermaid
-graph TD
-    PR["Pull Request"]
-
-    subgraph "Per-Service CI Gate (existing)"
-        Lint["ruff lint"]
-        UnitTest["pytest\n(unit tests)"]
-        HelmLint["helm lint"]
-    end
-
-    subgraph "New: Exhaustive Test Gate"
-        Coverage["Coverage Threshold\n(≥ 80% line, ≥ 70% branch)"]
-        Contract["Contract Tests\n(pact — consumer/provider)"]
-        Property["Property-Based Tests\n(hypothesis)"]
-        Integration["Service Integration Tests\n(real HTTP, no mocks)"]
-    end
-
-    PR --> Lint & UnitTest & HelmLint
-    UnitTest --> Coverage
-    Coverage --> Contract --> Property --> Integration
-```
-
 ### What Gets Built
 
 **Coverage enforcement.** `pyproject.toml` gains `[tool.pytest.ini_options]` with `--cov`, `--cov-fail-under=80`, and `--cov-branch`. PRs that drop coverage below threshold fail CI. Per-service coverage reports published as PR comments.
@@ -64,36 +40,6 @@ graph TD
 ---
 
 ## Stage 2 — Chaos Engineering and Scale Testing
-
-### Diagram
-
-```mermaid
-graph TD
-    subgraph "Chaos Scenarios"
-        PodKill["Pod Kill\n(random service termination)"]
-        NetPart["Network Partition\n(upstream unreachable)"]
-        ResourceStarve["Resource Starvation\n(CPU/memory pressure)"]
-        SlowUpstream["Slow Upstream\n(injected latency on outbound calls)"]
-        BadDeploy["Bad Deploy Simulation\n(image that crashes on startup)"]
-    end
-
-    subgraph "Scale Scenarios"
-        LoadRamp["Load Ramp\n(k6: 0 → N RPS over T seconds)"]
-        Soak["Soak Test\n(sustained load for 30 min)"]
-        SpikeSurge["Spike Test\n(sudden 10x traffic burst)"]
-        BreakPoint["Breakpoint Test\n(ramp until failure)"]
-    end
-
-    subgraph "Observation Layer"
-        Grafana["Grafana\n(dashboards)"]
-        Prometheus["Prometheus\n(error rate, latency, saturation)"]
-        Loki["Loki\n(error logs during test)"]
-        IncidentAssistant["Incident Assistant\n(triage report on degradation)"]
-    end
-
-    PodKill & NetPart & ResourceStarve & SlowUpstream & BadDeploy --> Observation Layer
-    LoadRamp & Soak & SpikeSurge & BreakPoint --> Observation Layer
-```
 
 ### What Gets Built
 
@@ -138,37 +84,6 @@ The platform is tested not just against infrastructure failures but against real
 - **Designer/product agent** — drives usage patterns and feature requests that stress the platform in unexpected ways
 
 The hypothesis: if the platform's detection, alerting, incident triage, and rollback machinery works correctly, it should surface and contain any degradation regardless of whether the failure came from a chaos scenario or a bad PR.
-
-### Diagram
-
-```mermaid
-graph TD
-    subgraph "AI Agent Team"
-        DevAgent["Developer Agent\n(Claude — writes code,\nopens PRs)"]
-        DevOpsAgent["DevOps Agent\n(Claude — modifies Helm values,\nCI config, Dockerfiles)"]
-        DesignerAgent["Designer/Product Agent\n(Claude — drives load patterns,\nmakes feature requests)"]
-    end
-
-    subgraph "Platform Under Test"
-        CI["CI Pipeline\n(lint, test, helm-lint)"]
-        IntegrationGate["Integration Gate\n(ready-for-merge)"]
-        GitOps["GitOps Deploy\n(Argo CD)"]
-        Observability["Observability\n(Grafana, Prometheus, Loki, Tempo)"]
-        IncidentAssistant["Incident Assistant\n(foundry triage)"]
-        Rollback["Rollback\n(rollback.py)"]
-    end
-
-    DevAgent -->|"PR with intentional flaw"| CI
-    DevOpsAgent -->|"PR with config degradation"| CI
-    DesignerAgent -->|"load pattern + feature pressure"| GitOps
-
-    CI -->|"pass or fail"| IntegrationGate
-    IntegrationGate -->|"merge"| GitOps
-    GitOps -->|"deploy"| Observability
-    Observability -->|"degradation detected"| IncidentAssistant
-    IncidentAssistant -->|"triage report"| Rollback
-    Rollback -->|"platform recovers"| Observability
-```
 
 ### Agent Roles
 

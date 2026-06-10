@@ -62,12 +62,13 @@ foundry/
 
 ## Phases
 
-| Phase | Dates | Goal |
-|---|---|---|
-| 1 | Apr 13 – Apr 26 | First paved road — one service, full stack |
-| 2 | Apr 27 – May 10 | Golden path — reusable conventions, second service |
-| 3 | May 11 – May 31 | GitOps + safe deployment, rollback, release observability |
-| 4 | Jun 1 – Jun 14 | AI-assisted incident triage |
+| Phase | Goal |
+|---|---|
+| 1 | First paved road — one service, full stack |
+| 2 | Golden path — reusable conventions, second service |
+| 3 | GitOps + safe deployment, rollback, release observability |
+| 4 | AI-assisted incident triage |
+| 5 | Resilience testing + AI agent adversarial layer |
 
 ---
 
@@ -258,3 +259,4 @@ See [docs/deployment-lifecycle.md](docs/deployment-lifecycle.md) for the full de
 - [Phase 2 — Golden Path](docs/architecture/phase-2-golden-path.md)
 - [Phase 3 — GitOps Deployment](docs/architecture/phase-3-gitops-deployment.md)
 - [Phase 4 — Incident Assistant](docs/architecture/phase-4-incident-assistant.md)
+- [Phase 5 — Resilience Testing & AI Adversarial Layer](docs/architecture/phase-5-resilience-and-ai-testing.md)
