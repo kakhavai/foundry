@@ -266,3 +266,33 @@ def test_ensure_application_manifest_creates_env_manifest(tmp_path):
 def test_ensure_application_manifest_missing_source_exits(tmp_path):
     with pytest.raises(SystemExit):
         ad.ensure_application_manifest("unknown-svc", "staging", argo_manifests_dir=tmp_path)
+
+
+# ── cmd_install ───────────────────────────────────────────────────────────────
+
+def _make_install_args(env="local", context=None):
+    return type("Args", (), {"env": env, "context": context})()
+
+
+def test_cmd_install_calls_helmfile_and_kubectl(tmp_path):
+    with patch("argocd_deploy.helmfile_run") as mock_helm, \
+         patch("argocd_deploy.kubectl_run") as mock_kubectl, \
+         patch("argocd_deploy.poll_applications", return_value=True), \
+         patch("argocd_deploy.discover_services", return_value=["weather"]), \
+         patch("argocd_deploy.argo_password", return_value="pwd"), \
+         patch("argocd_deploy.argo_values_file", return_value=tmp_path / "values.yaml"):
+        ad.cmd_install(_make_install_args())
+    assert mock_helm.call_count >= 2  # repos + apply
+    kubectl_calls = [str(c) for c in mock_kubectl.call_args_list]
+    assert any("wait" in c for c in kubectl_calls)
+    assert any("apply" in c for c in kubectl_calls)
+
+
+def test_cmd_install_exits_on_sync_timeout():
+    with patch("argocd_deploy.helmfile_run"), \
+         patch("argocd_deploy.kubectl_run"), \
+         patch("argocd_deploy.poll_applications", return_value=False), \
+         patch("argocd_deploy.discover_services", return_value=["weather"]), \
+         patch("argocd_deploy.argo_values_file", return_value=Path("values.yaml")):
+        with pytest.raises(SystemExit):
+            ad.cmd_install(_make_install_args())

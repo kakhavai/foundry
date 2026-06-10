@@ -199,3 +199,46 @@ def ensure_application_manifest(
     text = text.replace("/infra/gitops/envs/local/", f"/infra/gitops/envs/{env}/")
     manifest_path.write_text(text)
     return manifest_path
+
+
+# ── sub-commands ──────────────────────────────────────────────────────────────
+
+def cmd_install(args) -> None:
+    ctx = args.context
+    env = args.env
+
+    print(f"\nInstalling Argo CD for env '{env}'...")
+    values = argo_values_file(env)
+    helmfile_run("repos", context=ctx, cwd=ARGO_DIR)
+    helmfile_run("apply", "--values", str(values), context=ctx, cwd=ARGO_DIR)
+
+    print("\nWaiting for argocd-server to be ready...")
+    kubectl_run(
+        "wait", "--for=condition=available",
+        "deployment/argocd-server",
+        "-n", "argocd",
+        "--timeout=180s",
+        context=ctx,
+    )
+
+    print("\nApplying app-of-apps...")
+    kubectl_run(
+        "apply", "-f", str(ROOT / "infra/gitops/argo/app-of-apps.yaml"),
+        context=ctx,
+    )
+
+    print("\nWaiting for all Applications to be Synced + Healthy...")
+    services = discover_services(env)
+    if services:
+        ok = poll_applications(services, env, ctx, timeout=300)
+        if not ok:
+            print("Timeout: not all Applications reached Synced+Healthy within 300s")
+            sys.exit(1)
+    else:
+        print(f"  No services found in infra/gitops/envs/{env}/ — skipping sync wait.")
+
+    pwd = argo_password(ctx)
+    print(f"\n{'=' * 50}")
+    print(f"Argo CD installed. Admin password: {pwd}")
+    print("Run 'python scripts/argocd-deploy.py ui' to access the UI at http://localhost:8080")
+    print("=" * 50)
