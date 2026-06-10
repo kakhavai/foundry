@@ -69,6 +69,7 @@ foundry/
 | 3 | GitOps + safe deployment, rollback, release observability |
 | 4 | AI-assisted incident triage |
 | 5 | Resilience testing + AI agent adversarial layer |
+| 6 | AWS deployment — EKS via Terraform, ECR, ALB ingress, IRSA + OIDC |
 
 ---
 
@@ -260,3 +261,4 @@ See [docs/deployment-lifecycle.md](docs/deployment-lifecycle.md) for the full de
 - [Phase 3 — GitOps Deployment](docs/architecture/phase-3-gitops-deployment.md)
 - [Phase 4 — Incident Assistant](docs/architecture/phase-4-incident-assistant.md)
 - [Phase 5 — Resilience Testing & AI Adversarial Layer](docs/architecture/phase-5-resilience-and-ai-testing.md)
+- [Phase 6 — AWS Deployment](docs/architecture/phase-6-aws-deployment.md)
