@@ -24,6 +24,7 @@ Thumbs.db
 
 # Git worktrees
 .worktrees/
+.claude/worktrees/
 
 # AI session artifacts
 docs/superpowers/
