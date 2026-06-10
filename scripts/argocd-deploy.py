@@ -242,3 +242,58 @@ def cmd_install(args) -> None:
     print(f"Argo CD installed. Admin password: {pwd}")
     print("Run 'python scripts/argocd-deploy.py ui' to access the UI at http://localhost:8080")
     print("=" * 50)
+
+
+def cmd_verify(args) -> None:
+    ctx = args.context
+    env = args.env
+
+    print(f"\nVerifying Argo CD ({env})...")
+
+    rc, out = kubectl_capture("get", "pods", "-n", "argocd", "--no-headers", context=ctx)
+    if rc != 0:
+        print("Error: could not list argocd pods — is the cluster reachable?")
+        sys.exit(1)
+
+    pod_lines = [ln for ln in out.splitlines() if ln.strip()]
+    not_running = [ln for ln in pod_lines if "Running" not in ln]
+    if not_running:
+        print("Some Argo CD pods are not Running:")
+        for ln in not_running:
+            print(f"  {ln}")
+        sys.exit(1)
+    print(f"  Pods: {len(pod_lines)} Running")
+
+    services = discover_services(env)
+    if not services:
+        print(f"  No services in infra/gitops/envs/{env}/ — nothing to check.")
+        return
+
+    failed = []
+    print(f"\n  {'Application':<30} {'Sync':<12} {'Health':<12} Last Sync")
+    print(f"  {'-' * 70}")
+    for svc in services:
+        name = app_name(svc, env)
+        kubectl_capture(
+            "annotate", "application", name,
+            "-n", "argocd",
+            "argocd.argoproj.io/refresh=normal",
+            "--overwrite",
+            context=ctx,
+        )
+        _, status_out = kubectl_capture(
+            "get", "application", name,
+            "-n", "argocd",
+            "-o", "jsonpath={.status.sync.status},{.status.health.status},{.status.operationState.finishedAt}",
+            context=ctx,
+        )
+        parts = (status_out + ",,").split(",")
+        sync, health, last_sync = parts[0], parts[1], parts[2]
+        print(f"  {name:<30} {sync:<12} {health:<12} {last_sync}")
+        if sync != "Synced" or health != "Healthy":
+            failed.append(name)
+
+    if failed:
+        print(f"\nNot Synced+Healthy: {', '.join(failed)}")
+        sys.exit(1)
+    print("\nAll Applications: Synced + Healthy")

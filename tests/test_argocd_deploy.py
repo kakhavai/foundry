@@ -296,3 +296,48 @@ def test_cmd_install_exits_on_sync_timeout():
          patch("argocd_deploy.argo_values_file", return_value=Path("values.yaml")):
         with pytest.raises(SystemExit):
             ad.cmd_install(_make_install_args())
+
+
+# ── cmd_verify ────────────────────────────────────────────────────────────────
+
+def _make_verify_args(env="local", context=None):
+    return type("Args", (), {"env": env, "context": context})()
+
+
+def test_cmd_verify_passes_when_all_healthy():
+    pod_output = "argocd-server-xxx   1/1   Running   0   5m"
+    app_output = "Synced,Healthy,2026-06-10T00:00:00Z"
+    with patch("argocd_deploy.kubectl_capture") as mock_capture, \
+         patch("argocd_deploy.discover_services", return_value=["weather"]):
+        mock_capture.side_effect = [
+            (0, pod_output),           # get pods
+            (0, ""),                   # annotate refresh
+            (0, app_output),           # get application status
+        ]
+        ad.cmd_verify(_make_verify_args())  # should not raise
+
+
+def test_cmd_verify_exits_when_pods_not_running():
+    with patch("argocd_deploy.kubectl_capture") as mock_capture:
+        mock_capture.return_value = (0, "argocd-server   0/1   Pending   0   1m")
+        with pytest.raises(SystemExit):
+            ad.cmd_verify(_make_verify_args())
+
+
+def test_cmd_verify_exits_when_kubectl_unreachable():
+    with patch("argocd_deploy.kubectl_capture", return_value=(1, "")):
+        with pytest.raises(SystemExit):
+            ad.cmd_verify(_make_verify_args())
+
+
+def test_cmd_verify_exits_when_app_not_synced():
+    pod_output = "argocd-server-xxx   1/1   Running   0   5m"
+    with patch("argocd_deploy.kubectl_capture") as mock_capture, \
+         patch("argocd_deploy.discover_services", return_value=["weather"]):
+        mock_capture.side_effect = [
+            (0, pod_output),
+            (0, ""),                            # annotate
+            (0, "OutOfSync,Degraded,"),         # get application
+        ]
+        with pytest.raises(SystemExit):
+            ad.cmd_verify(_make_verify_args())
