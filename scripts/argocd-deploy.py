@@ -386,3 +386,80 @@ def cmd_ui(args) -> None:
         print("\nStopping port-forward...")
         proc.terminate()
         print("Done.")
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+def cmd_help(args, parser: argparse.ArgumentParser) -> None:
+    if args.topic:
+        for action in parser._subparsers._actions:
+            if hasattr(action, "_name_parser_map") and args.topic in action._name_parser_map:
+                action._name_parser_map[args.topic].print_help()
+                return
+        print(f"Unknown command: {args.topic}")
+    parser.print_help()
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="argocd-deploy",
+        description="Manage the Argo CD lifecycle: install, verify, promote, watch, and access the UI.",
+    )
+    sub = parser.add_subparsers(dest="command", metavar="<command>")
+    sub.required = True
+
+    # install
+    p = sub.add_parser("install", help="Install Argo CD and bootstrap app-of-apps")
+    p.add_argument("--env", default="local", choices=["local", "staging", "prod"],
+                   help="Target environment (default: local)")
+    p.add_argument("--context", default=None, help="kubectl context (default: active context)")
+    p.set_defaults(func=cmd_install)
+
+    # verify
+    p = sub.add_parser("verify", help="Read-only health check: pods, sync status, repo reachability")
+    p.add_argument("--env", default="local", choices=["local", "staging", "prod"],
+                   help="Target environment (default: local)")
+    p.add_argument("--context", default=None, help="kubectl context (default: active context)")
+    p.set_defaults(func=cmd_verify)
+
+    # promote
+    p = sub.add_parser("promote", help="Promote a service image tag from one env to another")
+    p.add_argument("service", help="Service name (e.g. weather)")
+    p.add_argument("--from", dest="from_env", required=True, help="Source environment")
+    p.add_argument("--to", dest="to_env", required=True, help="Target environment")
+    p.add_argument("--context", default=None,
+                   help="kubectl context for watching target env sync (default: active context)")
+    p.add_argument("--timeout", type=int, default=300, help="Seconds to wait for sync (default: 300)")
+    p.set_defaults(func=cmd_promote)
+
+    # watch
+    p = sub.add_parser("watch", help="Stream rollout status and confirm Application is Synced+Healthy")
+    p.add_argument("service", help="Service name (e.g. weather)")
+    p.add_argument("--env", default="local", choices=["local", "staging", "prod"],
+                   help="Target environment (default: local)")
+    p.add_argument("--context", default=None, help="kubectl context (default: active context)")
+    p.add_argument("--timeout", type=int, default=180, help="Seconds to wait (default: 180)")
+    p.set_defaults(func=cmd_watch)
+
+    # ui
+    p = sub.add_parser("ui", help="Port-forward the Argo CD UI and print credentials")
+    p.add_argument("--context", default=None, help="kubectl context (default: active context)")
+    p.add_argument("--port", type=int, default=8080, help="Local port (default: 8080)")
+    p.set_defaults(func=cmd_ui)
+
+    # help
+    p = sub.add_parser("help", help="Show help for a command")
+    p.add_argument("topic", nargs="?", default=None, help="Command to get help for")
+    p.set_defaults(func=lambda a: cmd_help(a, parser))
+
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

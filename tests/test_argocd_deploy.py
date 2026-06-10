@@ -437,3 +437,58 @@ def test_cmd_ui_starts_portforward_and_prints_credentials():
     assert "port-forward" in pf_cmd_str
     assert "argocd-server" in pf_cmd_str
     mock_proc.terminate.assert_called_once()
+
+
+# ── CLI wiring ────────────────────────────────────────────────────────────────
+
+def test_parser_install_defaults():
+    parser = ad.build_parser()
+    args = parser.parse_args(["install"])
+    assert args.env == "local"
+    assert args.context is None
+
+
+def test_parser_install_env_and_context():
+    parser = ad.build_parser()
+    args = parser.parse_args(["install", "--env", "staging", "--context", "my-ctx"])
+    assert args.env == "staging"
+    assert args.context == "my-ctx"
+
+
+def test_parser_promote_required_args():
+    parser = ad.build_parser()
+    args = parser.parse_args(["promote", "weather", "--from", "local", "--to", "staging"])
+    assert args.service == "weather"
+    assert args.from_env == "local"
+    assert args.to_env == "staging"
+
+
+def test_parser_watch_defaults():
+    parser = ad.build_parser()
+    args = parser.parse_args(["watch", "weather"])
+    assert args.env == "local"
+    assert args.timeout == 180
+
+
+def test_parser_ui_defaults():
+    parser = ad.build_parser()
+    args = parser.parse_args(["ui"])
+    assert args.port == 8080
+
+
+def test_parser_help_command_runs_without_error(capsys):
+    parser = ad.build_parser()
+    args = parser.parse_args(["help"])
+    args.func(args)
+    captured = capsys.readouterr()
+    assert "install" in captured.out
+    assert "verify" in captured.out
+    assert "promote" in captured.out
+
+
+def test_parser_help_with_topic(capsys):
+    parser = ad.build_parser()
+    args = parser.parse_args(["help", "install"])
+    args.func(args)
+    captured = capsys.readouterr()
+    assert "install" in captured.out
