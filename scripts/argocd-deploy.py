@@ -305,6 +305,10 @@ def cmd_promote(args) -> None:
     to_env = args.to_env
     ctx = args.context
 
+    if from_env == to_env:
+        print(f"Error: --from and --to must differ (both are '{from_env}')")
+        sys.exit(1)
+
     from_file = GITOPS_ROOT / "envs" / from_env / service / "values.yaml"
     to_file = GITOPS_ROOT / "envs" / to_env / service / "values.yaml"
 
@@ -342,22 +346,19 @@ def cmd_watch(args) -> None:
         ("rollout", "status", f"deployment/{service}", "-n", "default", f"--timeout={args.timeout}s"),
         ctx,
     )
-    subprocess.run(rollout_cmd)
+    rollout = subprocess.run(rollout_cmd)
+    if rollout.returncode != 0:
+        # Informational only — Argo CD's Application health is the authoritative
+        # gate below. A transient rollout timeout may still reconcile to Healthy.
+        print(f"  (kubectl rollout status exited {rollout.returncode}; checking Argo CD state)")
 
     print("\n--- Application status ---")
     name = app_name(service, env)
-    _, out = kubectl_capture(
-        "get", "application", name,
-        "-n", "argocd",
-        "-o", "jsonpath={.status.sync.status},{.status.health.status}",
-        context=ctx,
-    )
-    sync, _, health = out.partition(",")
-    print(f"  {name}: {sync or '?'}/{health or '?'}")
-    if sync != "Synced" or health != "Healthy":
-        print("Application is not Synced+Healthy.")
+    ok = poll_applications([service], env, ctx, timeout=args.timeout)
+    if not ok:
+        print(f"{name} did not reach Synced+Healthy within {args.timeout}s.")
         sys.exit(1)
-    print("Done.")
+    print(f"{name}: Synced + Healthy")
 
 
 def cmd_ui(args) -> None:
@@ -425,8 +426,10 @@ def build_parser() -> argparse.ArgumentParser:
     # promote
     p = sub.add_parser("promote", help="Promote a service image tag from one env to another")
     p.add_argument("service", help="Service name (e.g. weather)")
-    p.add_argument("--from", dest="from_env", required=True, help="Source environment")
-    p.add_argument("--to", dest="to_env", required=True, help="Target environment")
+    p.add_argument("--from", dest="from_env", required=True,
+                   choices=["local", "staging", "prod"], help="Source environment")
+    p.add_argument("--to", dest="to_env", required=True,
+                   choices=["local", "staging", "prod"], help="Target environment")
     p.add_argument("--context", default=None,
                    help="kubectl context for watching target env sync (default: active context)")
     p.add_argument("--timeout", type=int, default=300, help="Seconds to wait for sync (default: 300)")

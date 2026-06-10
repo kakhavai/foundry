@@ -389,6 +389,13 @@ def test_cmd_promote_exits_on_sync_timeout(tmp_path):
             ad.cmd_promote(_make_promote_args())
 
 
+def test_cmd_promote_exits_when_from_equals_to():
+    with patch("argocd_deploy.git_commit_and_push") as mock_git:
+        with pytest.raises(SystemExit):
+            ad.cmd_promote(_make_promote_args(from_env="prod", to_env="prod"))
+    mock_git.assert_not_called()
+
+
 # ── cmd_watch ─────────────────────────────────────────────────────────────────
 
 def _make_watch_args(service="weather", env="local", context=None, timeout=180):
@@ -397,7 +404,7 @@ def _make_watch_args(service="weather", env="local", context=None, timeout=180):
 
 def test_cmd_watch_exits_zero_when_healthy():
     with patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run, \
-         patch("argocd_deploy.kubectl_capture", return_value=(0, "Synced,Healthy")):
+         patch("argocd_deploy.poll_applications", return_value=True):
         ad.cmd_watch(_make_watch_args())
     rollout_calls = [c for c in mock_run.call_args_list if "rollout" in str(c)]
     assert len(rollout_calls) >= 1
@@ -405,9 +412,18 @@ def test_cmd_watch_exits_zero_when_healthy():
 
 def test_cmd_watch_exits_nonzero_when_app_not_healthy():
     with patch("subprocess.run", return_value=MagicMock(returncode=0)), \
-         patch("argocd_deploy.kubectl_capture", return_value=(0, "OutOfSync,Degraded")):
+         patch("argocd_deploy.poll_applications", return_value=False):
         with pytest.raises(SystemExit):
             ad.cmd_watch(_make_watch_args())
+
+
+def test_cmd_watch_polls_application_as_authoritative_gate():
+    # Even when the rollout step exits non-zero, a Synced+Healthy Application
+    # means success — the Argo CD poll is the gate, not the rollout exit code.
+    with patch("subprocess.run", return_value=MagicMock(returncode=1)), \
+         patch("argocd_deploy.poll_applications", return_value=True) as mock_poll:
+        ad.cmd_watch(_make_watch_args())
+    mock_poll.assert_called_once()
 
 
 # ── cmd_ui ────────────────────────────────────────────────────────────────────
