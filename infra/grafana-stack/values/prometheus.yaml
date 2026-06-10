@@ -17,7 +17,7 @@ extraScrapeConfigs: |
   - job_name: otel-collector
     static_configs:
       - targets:
-          - otel-collector.monitoring.svc.cluster.local:8889
+          - otel-collector-opentelemetry-collector.monitoring.svc.cluster.local:8889
   - job_name: weather
     static_configs:
       - targets:
