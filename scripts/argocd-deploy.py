@@ -40,7 +40,14 @@ def app_name(service: str, env: str) -> str:
 
 
 def write_tag(values_file: Path, tag: str) -> None:
-    """Write image tag to a gitops values file, creating it if needed."""
+    """Write image tag to a gitops values file, creating it if needed.
+
+    Gitops env values files hold only the live image tag (`image.tag`); all
+    other config lives in helm/values/<service>/values.yaml. If the file is
+    missing or has no quoted tag line, it is (re)written to the canonical
+    single-key form. This matches scripts/rollback.py and is safe because
+    these files never carry other keys.
+    """
     if values_file.exists():
         text = values_file.read_text()
         patched = re.sub(r'(tag:\s*")[^"]*(")', rf'\g<1>{tag}\2', text)
