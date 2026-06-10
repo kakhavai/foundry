@@ -328,3 +328,61 @@ def cmd_promote(args) -> None:
         print(f"Timeout: {app_name(service, to_env)} did not reach Synced+Healthy within {args.timeout}s")
         sys.exit(1)
     print(f"\nDone. {service} @ {tag} is live in {to_env}.")
+
+
+def cmd_watch(args) -> None:
+    service = args.service
+    env = args.env
+    ctx = args.context
+
+    print(f"\nWatching {service} rollout in '{env}'...")
+
+    print("\n--- kubectl rollout status ---")
+    rollout_cmd = _kubectl_cmd(
+        ("rollout", "status", f"deployment/{service}", "-n", "default", f"--timeout={args.timeout}s"),
+        ctx,
+    )
+    subprocess.run(rollout_cmd)
+
+    print("\n--- Application status ---")
+    name = app_name(service, env)
+    _, out = kubectl_capture(
+        "get", "application", name,
+        "-n", "argocd",
+        "-o", "jsonpath={.status.sync.status},{.status.health.status}",
+        context=ctx,
+    )
+    sync, _, health = out.partition(",")
+    print(f"  {name}: {sync or '?'}/{health or '?'}")
+    if sync != "Synced" or health != "Healthy":
+        print("Application is not Synced+Healthy.")
+        sys.exit(1)
+    print("Done.")
+
+
+def cmd_ui(args) -> None:
+    ctx = args.context
+    port = args.port
+
+    pf_cmd = _kubectl_cmd(
+        ("port-forward", "svc/argocd-server", "-n", "argocd", f"{port}:80"),
+        ctx,
+    )
+    proc = subprocess.Popen(pf_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1)
+
+    pwd = argo_password(ctx)
+    print(f"\n{'=' * 50}")
+    print(f"Argo CD UI:  http://localhost:{port}")
+    print(f"Username:    admin")
+    print(f"Password:    {pwd}")
+    print("=" * 50)
+    print("Press Ctrl+C to stop the port-forward.")
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nStopping port-forward...")
+        proc.terminate()
+        print("Done.")

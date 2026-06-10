@@ -387,3 +387,53 @@ def test_cmd_promote_exits_on_sync_timeout(tmp_path):
          patch("argocd_deploy.ensure_application_manifest", return_value=None):
         with pytest.raises(SystemExit):
             ad.cmd_promote(_make_promote_args())
+
+
+# ── cmd_watch ─────────────────────────────────────────────────────────────────
+
+def _make_watch_args(service="weather", env="local", context=None, timeout=180):
+    return type("Args", (), {"service": service, "env": env, "context": context, "timeout": timeout})()
+
+
+def test_cmd_watch_exits_zero_when_healthy():
+    with patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run, \
+         patch("argocd_deploy.kubectl_capture", return_value=(0, "Synced,Healthy")):
+        ad.cmd_watch(_make_watch_args())
+    rollout_calls = [c for c in mock_run.call_args_list if "rollout" in str(c)]
+    assert len(rollout_calls) >= 1
+
+
+def test_cmd_watch_exits_nonzero_when_app_not_healthy():
+    with patch("subprocess.run", return_value=MagicMock(returncode=0)), \
+         patch("argocd_deploy.kubectl_capture", return_value=(0, "OutOfSync,Degraded")):
+        with pytest.raises(SystemExit):
+            ad.cmd_watch(_make_watch_args())
+
+
+# ── cmd_ui ────────────────────────────────────────────────────────────────────
+
+def _make_ui_args(context=None, port=8080):
+    return type("Args", (), {"context": context, "port": port})()
+
+
+def test_cmd_ui_starts_portforward_and_prints_credentials():
+    sleep_count = 0
+    def fake_sleep(duration):
+        nonlocal sleep_count
+        sleep_count += 1
+        if sleep_count > 1:  # First sleep is OK, second raises
+            raise KeyboardInterrupt()
+
+    with patch("subprocess.Popen") as mock_popen, \
+         patch("argocd_deploy.argo_password", return_value="testpwd"), \
+         patch("time.sleep", side_effect=fake_sleep):
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
+        ad.cmd_ui(_make_ui_args())
+
+    mock_popen.assert_called_once()
+    pf_cmd = mock_popen.call_args[0][0]
+    pf_cmd_str = " ".join(pf_cmd) if isinstance(pf_cmd, list) else pf_cmd
+    assert "port-forward" in pf_cmd_str
+    assert "argocd-server" in pf_cmd_str
+    mock_proc.terminate.assert_called_once()
