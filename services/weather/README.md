@@ -39,3 +39,6 @@ uv run ruff format .
 docker build -t weather:dev .
 docker run -p 8000:8000 weather:dev
 ```
+
+<!-- throwaway: verifying path-filtered integration test fires on services/** changes -->
+
