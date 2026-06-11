@@ -1,50 +1,30 @@
 # Integration Test as a Path-Filtered Merge Gate
 
 **Date:** 2026-06-10
-**Status:** Final — supersedes the merge-queue design below
+**Status:** Final
 
-**Supersedes:**
-- [`2026-06-10-integration-test-merge-queue-design.md`](2026-06-10-integration-test-merge-queue-design.md)
-- [`2026-06-10-integration-test-merge-queue.md`](2026-06-10-integration-test-merge-queue.md)
-
-## Problem (unchanged)
+## Problem
 
 The required `integration-test` check was gated by `if: contains(labels, 'ready-for-merge')`.
 A **skipped required check counts as a pass in GitHub**, so any PR without the label
 satisfied the gate without running the test. PRs merged with no integration coverage.
 
-## Decision trail (why this is the third design)
+## Chosen approach: path filter, no label, no gate job
 
-We went through two heavier designs before landing here. Recording why, because the
-rejections are the actual lesson:
+Stop trying to *defer* the test until someone signals "ready"; instead run it whenever
+it is *relevant*. A `changes` job inspects the PR diff and the heavy test runs only when
+the deployable surface (`services/`, `helm/`, `infra/`, `scripts/`) changed.
 
-1. **Label + gate job.** Keep the `ready-for-merge` label as the "run it now" signal,
-   and fix the skipped=pass hole with an always-runs `gate` job that fails when
-   deployable paths changed but the label is absent. Rejected: the label is the
-   *source* of the complexity. It is manual and forgettable (the exact failure that
-   hid the original bug), and the gate job exists only to babysit it. Remove the label
-   and the gate job becomes unnecessary.
+### Why not keep the label?
 
-2. **GitHub merge queue.** Trigger the heavy test on the `merge_group` event so it runs
-   only at merge time. Rejected on two grounds:
-   - **Wrong tool.** A merge queue exists to serialize and batch merges for repos with
-     merge contention, testing each PR against the up-to-date base. It defers the test
-     only as a side effect. A single-maintainer repo has no contention to serialize.
-   - **Friction.** Enabling the `merge_queue` ruleset rule via `gh api` was rejected
-     with `422 Invalid rule 'merge_queue'`. Not worth fighting for a property we can
-     get more simply.
+A label is the source of the complexity, not the cure. It is manual and forgettable —
+the exact failure that hid the original bug — and defending against a forgotten label
+requires an extra always-runs gate job whose only purpose is to babysit it.
 
-## Chosen approach: path filter, no label, no queue, no gate job
-
-Stop trying to *defer* the test; instead only run it when it is *relevant*.
-
-### Insight
-
-The whole reason the label design needed a gate job was the "relevant change but not
-labeled → must block" case. Without a label, that case does not exist: a relevant
-change *always* runs the test. The only remaining skip case is "nothing relevant
-changed," which we *want* to pass. So **skipped = pass works in our favor**, and no
-aggregation/gate job is needed.
+Drop the label and that machinery disappears. Without a label, a relevant change
+*always* runs the test, so the only remaining skip case is "nothing relevant changed,"
+which we *want* to pass. **Skipped = pass now works in our favor**, and no gate job is
+needed — `integration-test` itself stays the required check.
 
 ### Workflow — `integration-test.yml`
 
@@ -79,7 +59,7 @@ jobs:
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     container: ghcr.io/kakhavai/foundry/ci-runner:latest   # (+ privileged docker mount)
-    # ... existing heavy Kind steps, unchanged ...
+    # ... heavy Kind steps (create cluster, deploy stack, smoke test, tear down) ...
 ```
 
 ### Behavior — `integration-test` is the required check
@@ -107,19 +87,4 @@ runs cancel while **main pushes serialize instead of cancelling** — an in-flig
 ## Ruleset
 
 **No change required.** The `mainb` ruleset already requires the `integration-test`
-context, which this design keeps. (The `merge_queue` rule from the abandoned design
-never applied, so the ruleset is already clean — verified: 4 rules, no `merge_queue`.)
-
-## What is removed vs. the merged merge-queue version
-
-- The `merge_group` trigger and the `merge_group`-only `if` guards.
-- The `merge_group.base_sha..head_sha` manual diff (replaced by `dorny/paths-filter`).
-- Docs corrected again: CLAUDE.md "How CI Works", `docs/deployment-lifecycle.md`,
-  `docs/why-this-design.md` — all three described the merge queue and now describe the
-  path filter.
-
-## Note on current `main`
-
-Before this change, `main` ran the integration test on *nothing*: the merged
-merge-queue workflow only fired on `merge_group`, which never happens without a queue
-enabled. This change restores real gating on every deployable-surface PR.
+context, which this design keeps.

@@ -68,14 +68,13 @@ The right boundary for AI in incident response is: surface context faster, reduc
 
 ---
 
-## Why Path-Filtered Integration Tests (Not a Label, Not a Merge Queue)
+## Why Path-Filtered Integration Tests (Not a Label)
 
-Running a full Kind cluster + stack deploy on every PR push would add 5-10 minutes to every iteration cycle — wasteful when most pushes don't touch the deployed system at all. The instinct is to *defer* the test until you're "ready." We tried two heavier expressions of that instinct and rejected both:
+Running a full Kind cluster + stack deploy on every PR push would add 5-10 minutes to every iteration cycle — wasteful when most pushes don't touch the deployed system at all. The instinct is to *defer* the test until you're "ready," and the obvious lever for that is a `ready-for-merge` label that triggers it.
 
-- **A `ready-for-merge` label** that triggered the test. The label is manual and forgettable, and a forgotten label silently skipped a required check (skipped = pass) — so PRs merged untested. Worse, defending against the forgotten-label case requires an extra gate job whose only purpose is to babysit the label. The label was the source of the complexity, not the cure.
-- **A GitHub merge queue.** Its actual job is serializing and batching merges for high-traffic repos with merge contention — it only defers the test as a side effect. On a single-maintainer repo there is no contention to serialize, so it is the wrong tool, and the heavier machinery buys nothing here.
+But a label is the source of the complexity, not the cure. It is manual and forgettable, and a forgotten label silently skips a required check (skipped = pass) — so PRs merge untested. Defending against the forgotten-label case then requires an extra gate job whose only purpose is to babysit the label.
 
-The simpler answer is to stop trying to defer and instead **only run what's relevant**. A `changes` job path-filters the PR diff; the Kind test runs on every PR that touches the deployable surface (`services/`, `helm/`, `infra/`, `scripts/`) and is skipped otherwise. No label, no queue, no gate job — and because the only skip case is "nothing relevant changed," skipped = pass works *in our favor*. You also get the test result on the PR itself, before merge, rather than after queuing.
+The simpler answer is to stop trying to defer and instead **only run what's relevant**. A `changes` job path-filters the PR diff; the Kind test runs on every PR that touches the deployable surface (`services/`, `helm/`, `infra/`, `scripts/`) and is skipped otherwise. No label, no gate job — and because the only skip case is "nothing relevant changed," skipped = pass works *in our favor*. You also get the test result on the PR itself, before merge.
 
 **The tradeoff accepted:** the test runs on every push to a deployable-surface PR, not only when you declare readiness. For a Kind-based integration test that is the right default — continuous feedback on the code it validates is the point of CI — and `concurrency: cancel-in-progress` keeps a rapid series of pushes from piling up parallel clusters.
 
