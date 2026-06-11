@@ -6,42 +6,36 @@ env:
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-  merge_group:
+
+# One in-flight run per PR. A new push cancels the previous run so we never
+# spend a Kind cluster on a commit that has already been superseded.
+concurrency:
+  group: integration-test-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # Relevance detection runs only inside the merge queue. On a PR this job is
-  # skipped, which makes the dependent integration-test job skip too — a skipped
-  # required check counts as a pass, so the PR stays queueable with zero compute.
+  # Path filter: the heavy test is only meaningful for changes to the deployable
+  # surface. On a docs/CI-only PR the integration-test job below is skipped, and a
+  # skipped required check counts as a pass — exactly what we want.
   changes:
-    if: github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
     steps:
       - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
         with:
-          fetch-depth: 0
-      - id: filter
-        name: Detect deployable-surface changes
-        env:
-          BASE: ${{ github.event.merge_group.base_sha }}
-          HEAD: ${{ github.event.merge_group.head_sha }}
-        run: |
-          echo "Comparing $BASE..$HEAD"
-          CHANGED="$(git diff --name-only "$BASE" "$HEAD")"
-          echo "Changed files:"
-          echo "$CHANGED"
-          if echo "$CHANGED" | grep -qE '^(services|helm|infra|scripts)/'; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            echo "Deployable surface changed -> integration test required."
-          else
-            echo "relevant=false" >> "$GITHUB_OUTPUT"
-            echo "No deployable-surface changes -> integration test will skip."
-          fi
+          filters: |
+            relevant:
+              - 'services/**'
+              - 'helm/**'
+              - 'infra/**'
+              - 'scripts/**'
 
   integration-test:
     needs: changes
-    if: github.event_name == 'merge_group' && needs.changes.outputs.relevant == 'true'
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/kakhavai/foundry/ci-runner:latest
