@@ -83,7 +83,7 @@ Each service has one workflow file (`.github/workflows/<service>.yml`) that call
 - `helm-lint` → `.github/actions/helm-lint`
 - `build-push` → needs all three; runs only on push to main
 
-There is also a **required** `integration-test` check that gate-keeps merges. It spins up a Kind cluster, deploys the full stack, and runs `scripts/smoke-test.sh`. **It only runs when the `ready-for-merge` label is applied to the PR.** Without that label the check never fires and `gh pr merge` will fail with "Required status check 'integration-test' is expected." Always add the label after the other checks pass.
+There is also a **required** `integration-test` check that gate-keeps merges, enforced through a **GitHub merge queue**. It spins up a Kind cluster, deploys the full stack, and runs `scripts/smoke-test.sh`. On a PR the check reports a skipped pass (zero compute), so the PR is mergeable into the queue. The real test runs on the `merge_group` event when you mark a PR "Merge when ready": GitHub rebuilds the PR on top of the latest `main` and runs the integration test against that combined ref, merging only if it passes. If the change set does not touch the deployable surface (`services/`, `helm/`, `infra/`, `scripts/`), the test auto-skips in the queue and the PR merges immediately. There is no `ready-for-merge` label — merge intent is expressed by adding the PR to the queue.
 
 ---
 

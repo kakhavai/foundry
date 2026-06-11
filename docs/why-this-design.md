@@ -68,13 +68,13 @@ The right boundary for AI in incident response is: surface context faster, reduc
 
 ---
 
-## Why Label-Triggered Integration Tests (Not Per-Push)
+## Why Merge-Queue Integration Tests (Not Per-Push)
 
 Running a full Kind cluster + stack deploy on every PR push would add 5-10 minutes to every iteration cycle. Developers push frequently while working — running the cluster gate that often is wasteful and creates false urgency around fixing flaky infra tests mid-feature.
 
-The label `ready-for-merge` is a deliberate signal: "I'm done, this is ready to ship." The integration test runs once, at that moment, and gates the merge. PRs iterate fast; the gate fires once.
+The GitHub merge queue is a deliberate signal: "I'm done, this is ready to ship." When a developer marks a PR "Merge when ready," GitHub adds it to the queue, rebuilds it on top of the latest `main`, and runs the integration test against that combined ref — merging only if it passes. PRs iterate fast without triggering the cluster; the gate fires exactly once, at merge time. Changes that do not touch the deployable surface (`services/`, `helm/`, `infra/`, `scripts/`) auto-skip the test and merge immediately.
 
-**The tradeoff accepted:** A developer must remember to add the label. Forgetting doesn't block the PR — it means the integration test hasn't run. The required status check ensures it runs before merge, but it requires the label to be added.
+**The tradeoff accepted:** The integration test runs in the merge queue, not on the PR branch itself. A developer cannot pre-validate the cluster behavior before queuing. This is acceptable because the test validates the merged state (PR + latest main), which is the correct artifact to gate on.
 
 ---
 
