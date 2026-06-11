@@ -9,16 +9,17 @@ How a code change goes from a developer's machine to running in the cluster.
 ```
 git push -> PR opened
   └── CI: lint / test / helm-lint  (on every push)
-
-PR ready -> mark "Merge when ready" (adds PR to merge queue)
-  └── CI: integration-test (runs on merge_group event)
-        - Kind cluster created
-        - Observability stack deployed
-        - Services deployed via Helm
-        - All endpoints smoke-tested
-        - Cluster torn down
-        - Auto-skips if change set does not touch services/, helm/, infra/, scripts/
-      -> status check passes -> GitHub merges the combined ref to main
+  └── CI: integration-test  (path-filtered; on every push to the PR)
+        - changes job inspects the PR diff
+        - Skips if the diff does not touch services/, helm/, infra/, scripts/
+        - Otherwise, on the deployable surface:
+            - Kind cluster created
+            - Observability stack deployed
+            - Services deployed via Helm
+            - All endpoints smoke-tested
+            - Cluster torn down
+        - A new push cancels the PR's prior in-flight run (concurrency)
+      -> required status check passes -> merge button unlocks
 
 Merge to main
   └── CI: build-push
@@ -68,4 +69,4 @@ See [docs/runbooks/rollback.md](runbooks/rollback.md).
 | `helm/values/<svc>/values.yaml` | Stable service config (port, resources, image repo) |
 | `helm/charts/generic-service/` | Shared Helm chart template |
 | `.github/actions/update-gitops-tag/action.yml` | CI action that commits the new tag |
-| `.github/workflows/integration-test.yml` | Merge-queue gate (runs on `merge_group` event) |
+| `.github/workflows/integration-test.yml` | Path-filtered PR gate (runs the Kind test on deployable-surface changes) |

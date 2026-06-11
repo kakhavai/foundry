@@ -1,7 +1,14 @@
 # Integration Test as a Real Merge Gate via GitHub Merge Queue
 
+> **⚠️ SUPERSEDED (2026-06-10)** by
+> [`2026-06-10-integration-test-path-filter-design.md`](2026-06-10-integration-test-path-filter-design.md).
+> The merge-queue approach was abandoned: it is the wrong tool for a single-maintainer
+> repo (its purpose is serializing merges under contention, not deferring CI), and the
+> `merge_queue` ruleset rule was rejected by the GitHub API (`422 Invalid rule`). Kept
+> for the decision trail. Do not implement this.
+
 **Date:** 2026-06-10
-**Status:** Approved design — ready for implementation plan
+**Status:** Superseded — see banner above
 
 ## Problem
 

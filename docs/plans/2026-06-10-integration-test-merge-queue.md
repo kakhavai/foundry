@@ -1,5 +1,11 @@
 # Integration Test Merge-Queue Gate Implementation Plan
 
+> **⚠️ SUPERSEDED (2026-06-10)** by the path-filter design
+> ([`2026-06-10-integration-test-path-filter-design.md`](2026-06-10-integration-test-path-filter-design.md)).
+> The merge-queue approach was implemented and merged (PR #27) but then abandoned
+> before enabling the queue — see the superseding doc for the rationale. Kept for the
+> decision trail. Do not implement this.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the broken `ready-for-merge` label gate on the `integration-test` check with a GitHub merge queue, so the integration test genuinely blocks merges of deployable-surface changes and auto-passes everything else.

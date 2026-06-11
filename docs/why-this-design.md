@@ -68,13 +68,16 @@ The right boundary for AI in incident response is: surface context faster, reduc
 
 ---
 
-## Why Merge-Queue Integration Tests (Not Per-Push)
+## Why Path-Filtered Integration Tests (Not a Label, Not a Merge Queue)
 
-Running a full Kind cluster + stack deploy on every PR push would add 5-10 minutes to every iteration cycle. Developers push frequently while working — running the cluster gate that often is wasteful and creates false urgency around fixing flaky infra tests mid-feature.
+Running a full Kind cluster + stack deploy on every PR push would add 5-10 minutes to every iteration cycle — wasteful when most pushes don't touch the deployed system at all. The instinct is to *defer* the test until you're "ready." We tried two heavier expressions of that instinct and rejected both:
 
-The GitHub merge queue is a deliberate signal: "I'm done, this is ready to ship." When a developer marks a PR "Merge when ready," GitHub adds it to the queue, rebuilds it on top of the latest `main`, and runs the integration test against that combined ref — merging only if it passes. PRs iterate fast without triggering the cluster; the gate fires exactly once, at merge time. Changes that do not touch the deployable surface (`services/`, `helm/`, `infra/`, `scripts/`) auto-skip the test and merge immediately.
+- **A `ready-for-merge` label** that triggered the test. The label is manual and forgettable, and a forgotten label silently skipped a required check (skipped = pass) — so PRs merged untested. Worse, defending against the forgotten-label case requires an extra gate job whose only purpose is to babysit the label. The label was the source of the complexity, not the cure.
+- **A GitHub merge queue.** Its actual job is serializing and batching merges for high-traffic repos with merge contention — it only defers the test as a side effect. On a single-maintainer repo there is no contention to serialize, so it is the wrong tool, and the heavier machinery buys nothing here.
 
-**The tradeoff accepted:** The integration test runs in the merge queue, not on the PR branch itself. A developer cannot pre-validate the cluster behavior before queuing. This is acceptable because the test validates the merged state (PR + latest main), which is the correct artifact to gate on.
+The simpler answer is to stop trying to defer and instead **only run what's relevant**. A `changes` job path-filters the PR diff; the Kind test runs on every PR that touches the deployable surface (`services/`, `helm/`, `infra/`, `scripts/`) and is skipped otherwise. No label, no queue, no gate job — and because the only skip case is "nothing relevant changed," skipped = pass works *in our favor*. You also get the test result on the PR itself, before merge, rather than after queuing.
+
+**The tradeoff accepted:** the test runs on every push to a deployable-surface PR, not only when you declare readiness. For a Kind-based integration test that is the right default — continuous feedback on the code it validates is the point of CI — and `concurrency: cancel-in-progress` keeps a rapid series of pushes from piling up parallel clusters.
 
 ---
 

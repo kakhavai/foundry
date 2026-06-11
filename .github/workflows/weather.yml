@@ -19,6 +19,12 @@ on:
       - 'helm/charts/generic-service/**'
       - '.github/actions/**'
 
+# Cancel superseded PR runs; serialize (never cancel) main pushes so an in-flight
+# build-push / update-gitops-tag deploy is not killed mid-commit.
+concurrency:
+  group: weather-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest
