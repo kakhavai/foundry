@@ -19,7 +19,7 @@ jobs:
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # Required for Claude to commit and push file changes
       pull-requests: read
       issues: read
       id-token: write
@@ -35,6 +35,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          # The action's default toolset is read-only + git commit/push. Write and
+          # Edit must be allow-listed explicitly or file changes are denied in CI.
+          claude_args: '--allowedTools "Write,Edit"'
 
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
