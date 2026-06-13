@@ -1,3 +1,8 @@
+---
+name: pr-uat
+description: Use when a PR is ready for review and you need to verify all features actually work at runtime — not just that tests pass and YAML is valid, but that services start, endpoints respond, containers run, and infrastructure renders correctly. Required before opening any final PR to main.
+---
+
 # PR UAT
 
 Verify a PR end-to-end before it ships. Tests pass and YAML validates locally but containers can crash at startup, ports can be wrong, module imports can break, and Helm values can reference non-existent keys. This walks through every layer.
