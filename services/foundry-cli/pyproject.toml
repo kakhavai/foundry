@@ -1,0 +1,32 @@
+[project]
+name = "foundry"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx",
+    "anthropic",
+    "pyyaml",
+]
+
+[project.scripts]
+foundry = "foundry.cli:main"
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "respx",
+]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
