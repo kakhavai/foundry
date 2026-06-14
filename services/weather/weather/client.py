@@ -1,3 +1,7 @@
+import asyncio
+import os
+import random
+
 import httpx
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
@@ -8,10 +12,29 @@ _CURRENT_FIELDS = (
 )
 
 
+async def _maybe_inject_fault() -> None:
+    """Env-var-guarded fault injection for the Incident Detection eval harness.
+    Inert unless a FAULT_* env var is set — mirrors the OTel-guard convention.
+    Phase 5's chaos layer supersedes this.
+    See docs/architecture/phase-4-incident-detection-triage.md."""
+    latency_ms = float(os.getenv("FAULT_UPSTREAM_LATENCY_MS", "0") or "0")
+    if latency_ms > 0:
+        await asyncio.sleep(latency_ms / 1000.0)
+
+    error_rate = float(os.getenv("FAULT_UPSTREAM_ERROR_RATE", "0") or "0")
+    if error_rate > 0 and random.random() < error_rate:
+        request = httpx.Request("GET", WEATHER_URL)
+        response = httpx.Response(503, request=request)
+        raise httpx.HTTPStatusError(
+            "injected upstream fault", request=request, response=response
+        )
+
+
 async def fetch_weather_for_coords(
     lat: float, lon: float, client: httpx.AsyncClient
 ) -> dict:
     """Fetch current weather conditions for a known lat/lon. Core weather primitive."""
+    await _maybe_inject_fault()
     resp = await client.get(
         WEATHER_URL,
         params={"latitude": lat, "longitude": lon, "current": _CURRENT_FIELDS},

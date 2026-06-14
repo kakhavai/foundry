@@ -1,0 +1,9 @@
+name: upstream-latency-no-deploy
+description: upstream p95 spikes with no recent deploy
+induce:
+  FAULT_UPSTREAM_LATENCY_MS: "4000"
+recent_deploy: false
+expected:
+  true_primary_cause: "external/upstream dependency"
+  acceptable_suspects: ["external", "upstream", "dependency"]
+  bad_suspects: ["deploy"]
