@@ -8,7 +8,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     triage = sub.add_parser("triage", help="Run incident detection and triage")
     triage.add_argument("--service", required=True, help="Service name, e.g. weather")
-    triage.add_argument("--endpoint", default=None, help="Affected route, e.g. /activity")
+    triage.add_argument(
+        "--endpoint", default=None, help="Affected route, e.g. /activity"
+    )
     triage.add_argument("--incident", default="", help="Free-text incident description")
     triage.add_argument(
         "--prometheus-url",
@@ -32,8 +34,27 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "triage":
-        # Wired to the detection pipeline in Task 10.
-        print(f"triage: service={args.service}")
+        import json
+
+        from foundry.triage.pipeline import detect
+
+        bundle = detect(
+            service=args.service,
+            endpoint=args.endpoint,
+            description=args.incident,
+            prometheus_url=args.prometheus_url,
+            gitops_dir=args.gitops_dir,
+        )
+
+        if args.json:
+            print(json.dumps(bundle.to_dict(), indent=2))
+            return 0
+
+        from foundry.triage.narrator import narrate
+
+        print(json.dumps(bundle.to_dict(), indent=2))
+        print("\n=== Triage narrative ===\n")
+        print(narrate(bundle))
         return 0
     return 1
 

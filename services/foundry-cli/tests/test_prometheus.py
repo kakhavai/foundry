@@ -5,7 +5,10 @@ from foundry.triage.collectors.prometheus import collect_metrics, query_instant
 
 
 def _instant(value):
-    return {"status": "success", "data": {"result": [{"value": [1718000000, str(value)]}]}}
+    return {
+        "status": "success",
+        "data": {"result": [{"value": [1718000000, str(value)]}]},
+    }
 
 
 def _range(values):
@@ -26,7 +29,9 @@ def test_query_instant_returns_float():
 @respx.mock
 def test_query_instant_empty_result_returns_none():
     respx.get("http://prom:9090/api/v1/query").mock(
-        return_value=httpx.Response(200, json={"status": "success", "data": {"result": []}})
+        return_value=httpx.Response(
+            200, json={"status": "success", "data": {"result": []}}
+        )
     )
     with httpx.Client() as client:
         assert query_instant("http://prom:9090", "up", client) is None
@@ -36,9 +41,9 @@ def test_query_instant_empty_result_returns_none():
 def test_collect_metrics_returns_current_and_baseline():
     respx.get("http://prom:9090/api/v1/query").mock(
         side_effect=[
-            httpx.Response(200, json=_instant(0.124)),   # error_rate current
-            httpx.Response(200, json=_instant(4200)),     # p95_latency current
-            httpx.Response(200, json=_instant(50)),       # request_count current
+            httpx.Response(200, json=_instant(0.124)),  # error_rate current
+            httpx.Response(200, json=_instant(4200)),  # p95_latency current
+            httpx.Response(200, json=_instant(50)),  # request_count current
         ]
     )
     respx.get("http://prom:9090/api/v1/query_range").mock(

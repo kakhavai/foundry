@@ -18,10 +18,8 @@ def query_instant(base_url: str, promql: str, client: httpx.Client) -> float | N
     return float(result[0]["value"][1])
 
 
-def query_range_series(
-    base_url: str, promql: str, client: httpx.Client
-) -> list[float]:
-    """Run a range query over the trailing baseline window and return the sample values."""
+def query_range_series(base_url: str, promql: str, client: httpx.Client) -> list[float]:
+    """Run a range query over the trailing baseline window and return sample values."""
     resp = client.get(
         f"{base_url}/api/v1/query_range",
         params={
@@ -48,8 +46,12 @@ def collect_metrics(
 
     out: dict[str, dict] = {}
     for name, (template, unit) in METRICS.items():
-        current_q = template.format(service=service, route=route, window=_CURRENT_WINDOW)
-        baseline_q = template.format(service=service, route=route, window=_BASELINE_WINDOW)
+        current_q = template.format(
+            service=service, route=route, window=_CURRENT_WINDOW
+        )
+        baseline_q = template.format(
+            service=service, route=route, window=_BASELINE_WINDOW
+        )
         current = query_instant(base_url, current_q, client)
         if current is None:
             continue

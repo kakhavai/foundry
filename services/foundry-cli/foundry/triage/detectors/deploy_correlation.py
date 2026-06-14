@@ -25,7 +25,9 @@ def score_deploy(
     score = 0.6 * proximity
 
     # Path overlap bonus only applies when there's meaningful proximity (> 0).
-    if proximity > 0 and any(p.startswith(f"services/{service}/") for p in touched_paths):
+    if proximity > 0 and any(
+        p.startswith(f"services/{service}/") for p in touched_paths
+    ):
         score += _PATH_OVERLAP_BONUS
 
     if external_dependency_implicated:

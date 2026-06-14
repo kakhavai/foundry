@@ -1,4 +1,7 @@
-from foundry.triage.detectors.metric_anomaly import detect_metric_anomalies, robust_zscore
+from foundry.triage.detectors.metric_anomaly import (
+    detect_metric_anomalies,
+    robust_zscore,
+)
 
 
 def test_robust_zscore_flags_large_deviation():
@@ -15,7 +18,9 @@ def test_robust_zscore_normal_value_is_low():
 
 def test_robust_zscore_zero_variance_baseline_does_not_crash():
     score = robust_zscore(1.0, [0.0, 0.0, 0.0])
-    assert score > 0  # any deviation from a flat baseline is anomalous, not a ZeroDivisionError
+    assert (
+        score > 0
+    )  # any deviation from a flat baseline is anomalous, not a ZeroDivisionError
 
 
 def test_detect_builds_metric_anomalies_above_threshold():
@@ -25,8 +30,8 @@ def test_detect_builds_metric_anomalies_above_threshold():
     }
     anomalies = detect_metric_anomalies(metrics, threshold=3.0)
     names = [a.metric for a in anomalies]
-    assert "error_rate" in names          # large deviation
-    assert "p95_latency" not in names     # within normal range
+    assert "error_rate" in names  # large deviation
+    assert "p95_latency" not in names  # within normal range
     flagged = next(a for a in anomalies if a.metric == "error_rate")
     assert flagged.current == 0.124
     assert flagged.unit == ""

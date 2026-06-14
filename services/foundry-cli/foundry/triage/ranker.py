@@ -31,13 +31,16 @@ def rank(
 ) -> EvidenceBundle:
     """Combine detector outputs into ranked suspects and assemble the EvidenceBundle.
 
-    Milestone-1 candidate suspects: each recent deploy, plus (when an external/downstream
-    dependency is implicated) an external-dependency suspect. log_support / trace_support
-    stay 0 until Milestone 2's detectors populate them."""
+    Milestone-1 candidate suspects: each recent deploy, plus (when an
+    external/downstream dependency is implicated) an external-dependency suspect.
+    log_support / trace_support stay 0 until Milestone 2's detectors populate them."""
 
     metric_support = _metric_support(metric_anomalies)
     metric_evidence = [
-        f"{a.metric} = {a.current}{a.unit} vs baseline {a.baseline}{a.unit} (z={a.score})"
+        (
+            f"{a.metric} = {a.current}{a.unit}"
+            f" vs baseline {a.baseline}{a.unit} (z={a.score})"
+        )
         for a in metric_anomalies
     ]
 

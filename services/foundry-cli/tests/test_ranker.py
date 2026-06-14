@@ -1,8 +1,9 @@
+from datetime import datetime, timezone
+
 from foundry.triage.collectors.gitops import RawDeploy
 from foundry.triage.models.evidence import MetricAnomaly
 from foundry.triage.models.incident import Incident
 from foundry.triage.ranker import rank
-from datetime import datetime, timezone
 
 
 def _deploy(sha, minutes, paths):

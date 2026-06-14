@@ -3,7 +3,8 @@ from dataclasses import dataclass
 
 @dataclass
 class Incident:
-    """The incident under investigation: a service, an optional route, and a description."""
+    """The incident under investigation: a service, an optional route, and a
+    description."""
 
     service: str
     endpoint: str | None

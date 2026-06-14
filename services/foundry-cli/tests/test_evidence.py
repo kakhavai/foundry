@@ -11,7 +11,9 @@ def test_bundle_to_dict_matches_contract():
     bundle = EvidenceBundle(
         incident=Incident("weather", "/activity", "elevated error rate"),
         metric_anomalies=[
-            MetricAnomaly(metric="error_rate", current=0.124, baseline=0.002, score=8.7),
+            MetricAnomaly(
+                metric="error_rate", current=0.124, baseline=0.002, score=8.7
+            ),
             MetricAnomaly(
                 metric="p95_latency", current=4200, baseline=300, score=7.9, unit="ms"
             ),
@@ -25,7 +27,9 @@ def test_bundle_to_dict_matches_contract():
             )
         ],
         suspects=[
-            Suspect(name="api.github.com upstream", score=0.86, evidence=["upstream p95 up"])
+            Suspect(
+                name="api.github.com upstream", score=0.86, evidence=["upstream p95 up"]
+            )
         ],
     )
     d = bundle.to_dict()
