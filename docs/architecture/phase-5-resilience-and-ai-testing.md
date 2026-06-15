@@ -12,7 +12,7 @@ The three stages build on each other:
 
 1. **Rigorous Testing** — close the gap between "tests exist" and "tests cover what matters." Coverage thresholds, contract testing, property-based testing, and load baselines.
 2. **Chaos + Scale Testing** — inject infrastructure-level failures and drive the platform beyond its designed load envelope. Find the breaking points before production does.
-3. **AI Agent Adversarial Layer** — release AI agents acting as realistic team members (developer, devops engineer, designer) that make plausible but intentionally flawed contributions. The platform must detect degradation, surface it to the incident assistant, and support rollback and iteration — all without human intervention in the detection loop.
+3. **AI Agent Adversarial Layer** — release AI agents acting as realistic team members (developer, devops engineer, designer) that make plausible but intentionally flawed contributions. The platform must detect degradation, surface it via the Phase 4 detection engine's `EvidenceBundle` and the 4B triage narrator, and support rollback and iteration — all without human intervention in the detection loop.
 
 ---
 
@@ -119,20 +119,20 @@ Each adversarial test run is a **scenario session**:
 2. **Agent activation** — one or more agents are given tasks and begin making changes
 3. **Platform observation** — changes flow through CI, deploy via GitOps, observability captures state
 4. **Degradation window** — if a fault reaches production, the observation layer detects it
-5. **Triage** — `foundry triage` is invoked automatically when error rate exceeds threshold
+5. **Triage** — `foundry triage` is invoked automatically when error rate exceeds threshold; the Phase 4A detection engine produces an `EvidenceBundle` and the 4B narrator explains it
 6. **Recovery** — rollback or fix is applied; platform returns to steady state
-7. **Session report** — structured output: what changed, what broke, what the incident assistant surfaced, how long recovery took, what the platform missed
+7. **Session report** — structured output: what changed, what broke, what the triage engine surfaced (the `EvidenceBundle` and narrator narrative), how long recovery took, what the platform missed
 
 **Pass criteria:**
 - Faults that fail CI (lint, test, helm-lint) must be caught before merge
 - Faults that pass CI but degrade production must be detected within N minutes
-- Incident assistant must correctly identify the deploy or config change as the likely cause
+- Phase 4 detection engine must correctly identify the deploy or config change as the likely cause in the `EvidenceBundle`; the triage narrator must surface it accurately
 - Rollback must restore steady state within N minutes
 - Platform must reach healthy state before the next scenario begins
 
 **Failure criteria (platform failed):**
 - A fault reaches production and causes degradation not detected by any signal within the window
-- Incident assistant attributes the fault to the wrong cause
+- Triage engine attributes the fault to the wrong cause in the `EvidenceBundle` suspects list
 - Rollback fails or leaves the platform in a degraded state
 
 ### Fault Catalog
@@ -183,5 +183,5 @@ Random pod kills and resource starvation (Stage 2) test infrastructure resilienc
 **Why the designer agent is continuous, not scenario-based.**
 Real product usage is not synchronized with infrastructure events. The designer agent applies background load throughout the session, making it harder for the detection layer to attribute degradation purely to a single deploy. This is closer to how production incidents actually present.
 
-**Why the incident assistant is in the critical path for Stage 3.**
-Stage 3 is the first test where the incident assistant must perform under adversarial conditions it was not explicitly designed for. Its output is part of the pass/fail criterion. This validates Phase 4 in a way that manual testing cannot — the assistant must reason about faults it has not seen before, using only the signals the platform surfaces.
+**Why the Phase 4 detection engine is in the critical path for Stage 3.**
+Stage 3 is the first test where the triage engine must perform under adversarial conditions it was not explicitly designed for. The `EvidenceBundle` suspect ranking is part of the pass/fail criterion. This validates Phase 4 in a way that manual testing cannot — the detection engine must correctly rank suspects for faults it has not seen before, using only the signals the platform surfaces; the 4B narrator must then explain them clearly to the on-call engineer.

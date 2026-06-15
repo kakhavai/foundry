@@ -56,9 +56,9 @@ The alternative — using managed cloud observability (Datadog, Honeycomb) — w
 
 ---
 
-## Why the Incident Assistant is Assistive Only
+## Why the Triage Engine is Assistive Only
 
-The triage assistant gathers context and reasons about likely causes. It does not take action.
+The Phase 4 triage engine detects anomalies and ranks suspects deterministically, then narrates the structured evidence via the Claude API. It does not take action.
 
 Autonomous remediation (auto-rollback, auto-scaling) requires a level of system understanding and failure-mode coverage that is hard to verify. A bad auto-rollback during a database migration, for example, can cause more damage than the original incident.
 

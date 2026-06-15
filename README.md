@@ -28,7 +28,7 @@ graph TD
         Grafana["Grafana\n(Loki · Tempo · Prometheus)"]
     end
 
-    Assistant["Incident Assistant\n(Claude API)"]
+    Assistant["Detection and Triage Engine\n(4A detector + 4B narrator)"]
 
     Dev -->|"git push"| Lint --> Build --> GHCR
     Build -->|"update image tag"| GitOpsRepo --> Argo --> Services
@@ -67,7 +67,7 @@ foundry/
 | 1 | First paved road — one service, full stack |
 | 2 | Golden path — reusable conventions, second service |
 | 3 | GitOps + safe deployment, rollback, release observability |
-| 4 | AI-assisted incident triage |
+| 4 | Incident Detection and Triage Engine (4A detector + 4B narrator) |
 | 5 | Resilience testing + AI agent adversarial layer |
 | 6 | AWS deployment — EKS via Terraform, ECR, ALB ingress, IRSA + OIDC |
 
@@ -263,6 +263,6 @@ See [docs/deployment-lifecycle.md](docs/deployment-lifecycle.md) for the full de
 - [Phase 1 — First Paved Road](docs/architecture/phase-1-first-paved-road.md)
 - [Phase 2 — Golden Path](docs/architecture/phase-2-golden-path.md)
 - [Phase 3 — GitOps Deployment](docs/architecture/phase-3-gitops-deployment.md)
-- [Phase 4 — Incident Assistant](docs/architecture/phase-4-incident-assistant.md)
+- [Phase 4 — Incident Detection and Triage Engine](docs/architecture/phase-4-incident-detection-triage.md)
 - [Phase 5 — Resilience Testing & AI Adversarial Layer](docs/architecture/phase-5-resilience-and-ai-testing.md)
 - [Phase 6 — AWS Deployment](docs/architecture/phase-6-aws-deployment.md)
