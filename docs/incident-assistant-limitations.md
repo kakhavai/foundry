@@ -47,8 +47,8 @@ These are acceptable tradeoffs for an on-demand CLI. A continuously-maintained b
 
 ## The fault toggle is for the eval harness only
 
-`FAULT_UPSTREAM_LATENCY_MS`, `FAULT_UPSTREAM_ERROR_RATE`, and `FAULT_BREAK_ROUTE` are env-var-guarded fault behaviors in the `weather` upstream client, present solely to give the Phase 4 eval harness reproducible incidents to measure accuracy against.
+`FAULT_UPSTREAM_LATENCY_MS` and `FAULT_UPSTREAM_ERROR_RATE` are env-var-guarded fault behaviors in the `weather` upstream client, present solely to give the Phase 4 eval harness reproducible incidents to measure accuracy against.
 
-The fault toggle is not a chaos engineering framework. It covers only the `weather` service's upstream calls, exposes only three failure modes, and is not suitable for testing infrastructure-level failures.
+The fault toggle is not a chaos engineering framework. It covers only the `weather` service's upstream calls, exposes only two failure modes (injected latency and a 5xx error rate), and is not suitable for testing infrastructure-level failures.
 
 Phase 5 ships a proper chaos layer (Chaos Mesh) that supersedes the fault toggle for all resilience and adversarial testing purposes. Once Phase 5 is in place, the fault toggle's only remaining use is bootstrapping the Phase 4 eval in environments where the Phase 5 chaos stack is not running.

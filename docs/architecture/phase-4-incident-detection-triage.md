@@ -76,13 +76,16 @@ services/foundry-cli/foundry/triage/
     evidence.py              # EvidenceBundle + the per-signal anomaly records
     suspect.py               # SuspectScore (the ranking model)
   ranker.py                  # detector outputs -> ranked suspects
-  faults.py                  # deterministic fault toggle (4A's own incident source)
   narrator.py                # 4B — EvidenceBundle -> Claude -> narrative
   cli.py                     # `foundry triage ...`
   eval/
     scenarios/*.yaml         # how to induce + expected answer per scenario
     run_eval.py              # induce, detect, score top-1/top-3/FP/time-to-detect
 ```
+
+The fault toggle (4A's own incident source) is not a module here — it lives in the
+`weather` service's upstream client (`services/weather/weather/client.py`), env-var-guarded
+so it is inert in production. See the Fault toggle section below.
 
 Each unit has one purpose and a defined interface: a **collector** turns a telemetry source into typed records; a **detector** turns records into scored anomalies for one signal; the **ranker** turns all anomalies into ranked suspects; the **narrator** turns the bundle into prose. Collectors and detectors never call the LLM; the narrator never queries telemetry.
 
@@ -204,7 +207,6 @@ Env-var-guarded fault behavior in the `weather` upstream client, mirroring the e
 |---|---|
 | `FAULT_UPSTREAM_LATENCY_MS` | inject N ms of latency into the upstream call |
 | `FAULT_UPSTREAM_ERROR_RATE` | fail that fraction of upstream calls with a 5xx |
-| `FAULT_BREAK_ROUTE` | force one route to error |
 
 Injected via Helm values and ConfigMap. Because it is guarded, it adds no behavior to a normal production deploy. Phase 5's chaos layer supersedes this toggle later.
 
@@ -266,7 +268,8 @@ It strictly narrates the structured evidence — it does not re-query telemetry,
 
 ## Deliverables
 
-- `services/foundry-cli/foundry/triage/` — collectors, detectors, models, ranker, narrator, faults module, CLI, eval harness
+- `services/foundry-cli/foundry/triage/` — collectors, detectors, models, ranker, narrator, CLI, eval harness
+- `services/weather/weather/client.py` — env-var-guarded fault toggle (eval incident source)
 - Env-var fault toggle in the `weather` service + Helm values plumbing
 - `eval/scenarios/` + `run_eval.py` with documented accuracy metrics
 - `docs/incident-assistant-limitations.md` — what this tool does not do and why
