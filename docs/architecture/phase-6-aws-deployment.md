@@ -2,16 +2,18 @@
 
 **Goal:** Lift the Foundry platform from local Kind to production AWS. The Kubernetes workload model, GitOps patterns, observability stack, and CI pipeline established in Phases 1–3 carry forward unchanged. Phase 6 adds the AWS infrastructure layer underneath them and defines the delta that any new service needs to be live on AWS beyond what Phase 2 already covers.
 
+**Sizing & cost decision:** This phase runs at a deliberate **minimum always-on footprint** — a single Graviton (`t4g.large`) node, single NAT, one shared ALB, S3-backed Loki/Tempo — sized for *learning to operate EKS*, not for scale. Budget ~$150–185/mo; scale-up is a one-variable Terraform change. The full analysis and rationale are in **[ADR 0001 — EKS Cost and Minimum Sizing](../adr/0001-eks-cost-and-minimum-sizing.md)**, which governs all sizing in this phase.
+
 ---
 
 ## Scope
 
 **In scope:**
-- EKS cluster provisioned via Terraform (VPC, node groups, IAM, OIDC provider)
+- EKS cluster provisioned via Terraform (VPC, single Graviton/ARM64 node group per ADR 0001, IAM, OIDC provider)
 - AWS Load Balancer Controller + ACM + Route 53 for ingress and TLS
 - IRSA for pod-level IAM; GitHub Actions OIDC federation for CI (no stored credentials anywhere)
 - ECR as the container registry (replaces GHCR)
-- Full LGTM observability stack running on EKS with EBS-backed persistent storage
+- Full LGTM observability stack running on EKS: Loki/Tempo → S3 (per ADR 0001, cheaper and node-independent), Prometheus/Grafana → small EBS PVCs
 - ArgoCD running on EKS, tracking `main` via the existing app-of-apps pattern from Phase 3
 - Per-service AWS delta documented — what changes beyond the Phase 2 golden path
 - Terraform module structure designed to support workspace-based ephemeral environments (full CI wiring deferred to a later phase)
