@@ -1,5 +1,7 @@
 # Phase 5 — Resilience Testing & AI Agent Adversarial Layer
 
+> **Status:** ▶ **Next** — design complete, implementation not started · [roadmap](../../README.md#phases)
+
 **Goal:** Prove the platform survives real-world conditions — not just happy-path deployments. Introduce rigorous service and platform-level testing in three escalating stages: exhaustive automated testing, chaos and scale validation, and finally an AI agent adversarial layer where synthetic engineers are released against the platform to test whether it can detect, recover, and iterate under realistic failure modes.
 
 ---
@@ -185,3 +187,13 @@ Real product usage is not synchronized with infrastructure events. The designer 
 
 **Why the Phase 4 detection engine is in the critical path for Stage 3.**
 Stage 3 is the first test where the triage engine must perform under adversarial conditions it was not explicitly designed for. The `EvidenceBundle` suspect ranking is part of the pass/fail criterion. This validates Phase 4 in a way that manual testing cannot — the detection engine must correctly rank suspects for faults it has not seen before, using only the signals the platform surfaces; the 4B narrator must then explain them clearly to the on-call engineer.
+
+---
+
+## Definition of Done
+
+- [ ] All stage deliverables implemented and merged to `main`
+- [ ] Tests green in CI; integration gate passing
+- [ ] This doc's Status banner flipped to ✅ **Done** with the delivering PR
+- [ ] README Phases table updated (Status + Landed)
+- [ ] Milestone commit tagged `phase-5` and pushed — see [tagging-policy.md](../tagging-policy.md)

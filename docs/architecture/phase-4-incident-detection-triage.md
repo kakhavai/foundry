@@ -1,5 +1,7 @@
 # Phase 4 — Incident Detection and Triage Engine
 
+> **Status:** ✅ **Done** · landed in [#36](https://github.com/kakhavai/foundry/pull/36) · tagged `phase-4` · [roadmap](../../README.md#phases)
+
 **Goal:** A deterministic detection engine produces a structured evidence bundle and ranked suspects before Claude sees anything. Claude only narrates. Detection is statistical, testable, and evaluable; explanation is what the LLM is actually good at.
 
 ---

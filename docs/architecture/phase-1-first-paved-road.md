@@ -1,5 +1,7 @@
 # Phase 1 — First Paved Road
 
+> **Status:** ✅ **Done** · landed in [#10](https://github.com/kakhavai/foundry/pull/10) · tagged `phase-1` · [roadmap](../../README.md#phases)
+
 **Goal:** Stand up the first complete paved road for a single service — from source to deployed, observable service running in Kubernetes.
 
 ---

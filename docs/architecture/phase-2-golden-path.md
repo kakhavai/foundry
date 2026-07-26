@@ -1,5 +1,7 @@
 # Phase 2 — Golden Path
 
+> **Status:** ✅ **Done** · landed in [#12](https://github.com/kakhavai/foundry/pull/12) · tagged `phase-2` · [roadmap](../../README.md#phases)
+
 **Goal:** Prove this is a reusable platform path, not a one-service demo. Onboard a second service using the same conventions. Extract and standardize shared patterns.
 
 ---

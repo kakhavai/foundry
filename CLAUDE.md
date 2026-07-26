@@ -222,6 +222,12 @@ Requires: `kind`, `kubectl`, `helm`, `helmfile`, `docker`.
 
 ---
 
+## Phase Status & Tagging
+
+The **README Phases table** is the single source of truth for where the project is; each `docs/architecture/phase-N-*.md` carries a Status banner that echoes it. When a PR completes a phase, flip the doc banner + README table and tag the milestone commit `phase-N` (annotated, then push). Full rules — including why GitOps stays on Git-SHA image tags and when a service graduates to SemVer — are in [`docs/tagging-policy.md`](docs/tagging-policy.md). Milestone tags are documentary and never touch `infra/gitops/`.
+
+---
+
 ## ArgoCD / GitOps Behavior
 
 All ArgoCD Applications have `selfHeal: true` and `automated.prune: true`. This means:
