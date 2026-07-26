@@ -126,7 +126,15 @@ OTEL_RESOURCE_ATTRIBUTES=team=<team>,cost_center=<cc>   # cohort tags for slicin
 - **Enforces no prompt-content logging.** The `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES`, and raw-body switches stay off by default; the processor is the backstop so a stray client setting cannot leak prompt content into Loki.
 - **Passes through cohort tags** (`team`, `cost_center`) for slicing.
 
-**Honest attribution — pairing with delivery.** AI-usage counts measure *activity*, not *outcome*. Token spend, sessions, lines "AI-authored," and acceptance rate all rise simply when the tool is used more — whether or not anything ships faster or better. Industry findings reinforce this: the DORA 2025 report shows AI lifting individual throughput while team-level *stability* often stays flat or worsens, and a controlled study found experienced developers were measurably slower with AI while *believing* they were faster. A dashboard of activity counts would hide exactly that gap. So the developer-AI dashboard pairs the AI signals with **DORA outcomes** (deploy frequency, lead time, change failure rate, MTTR) sourced from git / PR and the existing CI / GitOps metadata. AI activity is always read *beside* delivery health — diagnostic ("is the tool being adopted?"), never a standalone productivity claim.
+**Honest attribution — pairing with delivery.** AI-usage counts measure *activity*, not *outcome*. Token spend, sessions, lines "AI-authored," and acceptance rate all rise simply when the tool is used more — whether or not anything ships faster or better. Industry findings reinforce this: the DORA 2025 report shows AI lifting individual throughput while team-level *stability* often stays flat or worsens, and a controlled study found experienced developers were measurably slower with AI while *believing* they were faster. A dashboard of activity counts would hide exactly that gap.
+
+So the developer-AI dashboard pairs the AI signals with **DORA outcomes**. DORA — DevOps Research and Assessment, the long-running (now Google-led) research program — defines the four metrics that are the industry-standard measure of software *delivery performance*: **deploy frequency** and **lead time for changes** (throughput), and **change failure rate** and **mean time to restore** (stability). Three reasons this is the framework Phase 7 reaches for, named explicitly:
+
+1. **They are outcome metrics, the exact counterweight to activity.** Activity answers "how much is the tool used?"; DORA answers "did delivery actually get faster *and* stay stable?" — which is the question activity dashboards silently dodge.
+2. **They are vendor-neutral and research-backed.** They describe the delivery system, not any one AI tool, so the reading stays honest as tools change, and they are the metrics the DORA-2025 AI findings above are themselves stated in — the comparison is apples-to-apples.
+3. **The platform can already derive them from data it owns** — git / PR history plus the existing CI / GitOps metadata — so pairing adds no new dependency or SaaS, consistent with the OTel-native constraint.
+
+AI activity is therefore always read *beside* delivery health — diagnostic ("is the tool being adopted?"), never a standalone productivity claim.
 
 **Explicit non-goals.** Lines-of-code and "percent AI-authored" as success metrics, and any per-developer leaderboard, are rejected by design — they are the documented Goodhart failure modes that poison both the data and the culture.
 
@@ -190,5 +198,7 @@ The **CI eval gate is explicitly deferred** — designed for, not built in this 
 **Governance-first, not dashboard-first.** The dashboards are cheap on this stack; the durable design work is cost budgets, PII protection, identity anonymization, and provenance. Get those right and the panels follow.
 
 **Reject activity-only developer metrics.** Lines-of-code, "percent AI-authored," and per-developer leaderboards are named non-goals. Developer-AI activity is only reported beside DORA delivery outcomes, so the platform never claims productivity from raw activity.
+
+**Why DORA specifically.** DORA's four metrics are chosen as the delivery counterweight for three concrete reasons: they measure *outcome* (delivery throughput + stability) rather than activity, so they answer the question activity dashboards dodge; they are vendor-neutral and research-backed — the same terms the DORA-2025 AI findings are stated in, keeping the comparison honest as tools change; and they are derivable from data the platform already owns (git/PR + CI/GitOps metadata), so pairing adds no new dependency and stays within the OTel-native constraint.
 
 **Independent of Phase 6.** Everything here instruments what exists today on the local Kind stack and rides the Collector to AWS unchanged. Phase 7 can be executed before, after, or alongside Phase 6.
