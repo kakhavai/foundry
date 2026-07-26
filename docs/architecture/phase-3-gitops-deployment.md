@@ -1,5 +1,7 @@
 # Phase 3 — GitOps + Safe Deployment
 
+> **Status:** ✅ **Done** · landed in `b68a58f` · tagged `phase-3` · [roadmap](../../README.md#phases)
+
 **Goal:** Make the platform safe and operationally mature. Introduce GitOps as the deployment source of truth. Add rollout visibility, rollback flow, and deployment health checks. Connect release metadata to observability.
 
 ---

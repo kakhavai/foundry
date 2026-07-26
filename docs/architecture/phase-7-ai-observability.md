@@ -1,5 +1,7 @@
 # Phase 7 — AI Observability & Governance
 
+> **Status:** 📋 **Planned** — design done, no code yet · [roadmap](../../README.md#phases)
+
 **Goal:** Make every AI interaction in the platform — the AI the platform *runs* and the AI developers *use to build it* — a first-class observable signal in the existing OpenTelemetry / Grafana stack, with lightweight governance. Close the current blind spot: the platform instruments every HTTP request to death, yet its one real AI call (the Phase 4 triage narrator) and the tools that build it (Claude Code) emit nothing.
 
 **Positioning:** This is Phase 7, after Phase 6, but deliberately **independent of Phase 6**. Everything here instruments things that exist *today* on the local Kind stack — the Phase 4 `foundry-cli` narrator and Claude Code in the developer workflow — and rides the existing OTel Collector to AWS unchanged when Phase 6 lands. No AWS dependency.
@@ -202,3 +204,13 @@ The **CI eval gate is explicitly deferred** — designed for, not built in this 
 **Why DORA specifically.** DORA's four metrics are chosen as the delivery counterweight for three concrete reasons: they measure *outcome* (delivery throughput + stability) rather than activity, so they answer the question activity dashboards dodge; they are vendor-neutral and research-backed — the same terms the DORA-2025 AI findings are stated in, keeping the comparison honest as tools change; and they are derivable from data the platform already owns (git/PR + CI/GitOps metadata), so pairing adds no new dependency and stays within the OTel-native constraint.
 
 **Independent of Phase 6.** Everything here instruments what exists today on the local Kind stack and rides the Collector to AWS unchanged. Phase 7 can be executed before, after, or alongside Phase 6.
+
+---
+
+## Definition of Done
+
+- [ ] All deliverables implemented and merged to `main`
+- [ ] Tests green in CI; integration gate passing
+- [ ] This doc's Status banner flipped to ✅ **Done** with the delivering PR
+- [ ] README Phases table updated (Status + Landed)
+- [ ] Milestone commit tagged `phase-7` and pushed — see [tagging-policy.md](../tagging-policy.md)

@@ -1,5 +1,7 @@
 # Phase 6 — AWS Deployment
 
+> **Status:** 📋 **Planned** — design + implementation plan done, no code yet · [roadmap](../../README.md#phases)
+
 **Goal:** Lift the Foundry platform from local Kind to production AWS. The Kubernetes workload model, GitOps patterns, observability stack, and CI pipeline established in Phases 1–3 carry forward unchanged. Phase 6 adds the AWS infrastructure layer underneath them and defines the delta that any new service needs to be live on AWS beyond what Phase 2 already covers.
 
 **Sizing & cost decision:** This phase runs at a deliberate **minimum always-on footprint** — a single Graviton (`t4g.large`) node, single NAT, one shared ALB, S3-backed Loki/Tempo — sized for *learning to operate EKS*, not for scale. Budget ~$150–185/mo; scale-up is a one-variable Terraform change. The full analysis and rationale are in **[ADR 0001 — EKS Cost and Minimum Sizing](../adr/0001-eks-cost-and-minimum-sizing.md)**, which governs all sizing in this phase.
@@ -249,3 +251,13 @@ ECR integrates natively with EKS via the node IAM role — no `imagePullSecrets`
 
 **Why cluster-level components are managed by ArgoCD, not Terraform.**
 Terraform owns AWS infrastructure. ArgoCD owns Kubernetes resources. Mixing them via the Terraform Helm/Kubernetes providers blurs that boundary and makes cluster state harder to reason about. The ALB controller, ExternalDNS, and cert-manager are Kubernetes workloads — they belong in GitOps.
+
+---
+
+## Definition of Done
+
+- [ ] All deliverables implemented and merged to `main`
+- [ ] Tests green in CI; integration gate passing
+- [ ] This doc's Status banner flipped to ✅ **Done** with the delivering PR
+- [ ] README Phases table updated (Status + Landed)
+- [ ] Milestone commit tagged `phase-6` and pushed — see [tagging-policy.md](../tagging-policy.md)
