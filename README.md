@@ -70,6 +70,7 @@ foundry/
 | 4 | Incident Detection and Triage Engine (4A detector + 4B narrator) |
 | 5 | Resilience testing + AI agent adversarial layer |
 | 6 | AWS deployment — EKS via Terraform, ECR, ALB ingress, IRSA + OIDC |
+| 7 | AI observability & governance — instrument runtime AI (triage narrator) + developer AI (Claude Code) into the OTel/Grafana stack |
 
 ---
 
@@ -266,3 +267,4 @@ See [docs/deployment-lifecycle.md](docs/deployment-lifecycle.md) for the full de
 - [Phase 4 — Incident Detection and Triage Engine](docs/architecture/phase-4-incident-detection-triage.md)
 - [Phase 5 — Resilience Testing & AI Adversarial Layer](docs/architecture/phase-5-resilience-and-ai-testing.md)
 - [Phase 6 — AWS Deployment](docs/architecture/phase-6-aws-deployment.md)
+- [Phase 7 — AI Observability & Governance](docs/architecture/phase-7-ai-observability.md)
