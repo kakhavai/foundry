@@ -6,7 +6,9 @@
 
 **Architecture:** Terraform (in `infra/terraform/`) owns all AWS infrastructure — VPC, EKS, IAM, ECR, Route 53. ArgoCD owns everything inside Kubernetes, including the platform add-ons (AWS Load Balancer Controller, ExternalDNS, cert-manager, External Secrets Operator) and the existing services, via the Phase 3 app-of-apps pattern. CI uses GitHub Actions OIDC to assume an IAM role — no stored credentials. The boundary is strict: Terraform stops at the cluster edge; ArgoCD takes over inside it.
 
-**Tech Stack:** Terraform >= 1.9, terraform-aws-modules (vpc ~> 5.0, eks ~> 20.0), AWS provider ~> 5.0, EKS 1.30, Helm 3.16, ArgoCD (chart 7.6.0), AWS Load Balancer Controller, ExternalDNS, cert-manager, External Secrets Operator, ECR, GitHub Actions OIDC.
+**Tech Stack:** Terraform >= 1.9, terraform-aws-modules (vpc ~> 5.0, eks ~> 20.0), AWS provider ~> 5.0, EKS 1.30 on **Graviton/ARM64** (`t4g.large`), Helm 3.16, ArgoCD (chart 7.6.0), AWS Load Balancer Controller, ExternalDNS, cert-manager, External Secrets Operator, ECR, GitHub Actions OIDC.
+
+**Sizing & cost:** Single-node minimum footprint, always-on. See **ADR 0001** (`docs/adr/0001-eks-cost-and-minimum-sizing.md`) — it fixes the node group (`t4g.large`, `desired = 1`, `max = 3`), single NAT, single shared ALB, and S3-backed Loki/Tempo at ~$150–185/mo. Node group and `build-push` platform below already reflect it.
 
 **Reference spec:** `docs/architecture/phase-6-aws-deployment.md`
 
@@ -396,12 +398,15 @@ module "eks" {
   vpc_id     = var.vpc_id
   subnet_ids = var.private_subnets
 
+  # Sizing per ADR 0001 (docs/adr/0001-eks-cost-and-minimum-sizing.md):
+  # minimum always-on footprint — single Graviton node, scale-up is a variable change.
   eks_managed_node_groups = {
     default = {
-      min_size       = 2
-      max_size       = 4
-      desired_size   = 2
-      instance_types = ["t3.large"]
+      min_size       = 1
+      max_size       = 3
+      desired_size   = 1
+      instance_types = ["t4g.large"] # ARM/Graviton — ~15% cheaper; Python images run on ARM
+      ami_type       = "AL2023_ARM_64_STANDARD"
       iam_role_additional_policies = {
         ecr = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
         ebs = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
@@ -832,7 +837,7 @@ git add .github/workflows/terraform.yml
 git commit -m "feat(ci): add terraform plan-on-PR and gated apply-on-merge via OIDC"
 ```
 
-**STAGE 1 GATE:** Operator runs the bootstrap (Task 1) then `terraform apply` in `envs/prod`. Verify: `aws eks update-kubeconfig --name foundry-prod --region us-east-1 && kubectl get nodes` shows 2 Ready nodes. Do not proceed to Stage 2 until this passes.
+**STAGE 1 GATE:** Operator runs the bootstrap (Task 1) then `terraform apply` in `envs/prod`. Verify: `aws eks update-kubeconfig --name foundry-prod --region us-east-1 && kubectl get nodes` shows 1 Ready node (minimum footprint per ADR 0001). Do not proceed to Stage 2 until this passes.
 
 ---
 
@@ -1069,12 +1074,20 @@ git commit -m "feat(gitops): add cert-manager and External Secrets Operator via 
 
 ---
 
-### Task 13: LGTM observability stack with EBS-backed storage
+### Task 13: LGTM observability stack storage
 
 **Files:**
-- Modify: `infra/grafana-stack/` Helmfile values (add `persistence` blocks)
+- Modify: `infra/grafana-stack/` Helmfile values (storage backends)
 
-The Phase 1–2 LGTM Helmfile runs on Kind with ephemeral storage. On EKS, Loki/Tempo/Prometheus need EBS-backed PersistentVolumes via the `gp3` StorageClass (the EBS CSI driver was enabled in Task 4).
+The Phase 1–2 LGTM Helmfile runs on Kind with `filesystem`/ephemeral storage. On EKS:
+
+> **Storage split (ADR 0001):** to keep the single node stateless and EBS spend near zero,
+> **Loki and Tempo use S3 chunk storage**, not EBS PVCs. Only **Prometheus and Grafana**
+> get small `gp3` EBS PersistentVolumes (EBS CSI driver enabled in Task 4). Implementing
+> the S3 backends requires: an S3 bucket (or one per component), and an IRSA role granting
+> each component `s3:*Object` on its prefix (reuse the IRSA pattern from Task 6). The
+> `persistence` blocks below apply to Prometheus/Grafana; replace the Loki/Tempo
+> `persistence` config with their respective `storage: { type: s3, ... }` schema.
 
 - [ ] **Step 1: Inspect current Helmfile**
 
@@ -1091,7 +1104,7 @@ server:
     storageClass: gp3
     size: 20Gi
 ```
-For Loki and Tempo, add the equivalent `persistence: { enabled: true, storageClassName: gp3, size: 10Gi }` block per their chart schema. Grafana:
+For Loki and Tempo, do **not** add EBS persistence — configure S3 chunk storage instead (per ADR 0001): set each chart's `storage: { type: s3, ... }` (bucket + region) and attach the IRSA role created above. Grafana:
 ```yaml
 persistence:
   enabled: true
@@ -1301,12 +1314,21 @@ runs:
       with:
         context: services/${{ inputs.service }}
         push: true
+        platforms: linux/arm64  # nodes are Graviton (t4g) per ADR 0001 — images MUST be arm64
         tags: ${{ inputs.image-name }}:${{ inputs.tag }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 ```
 
 Note: `aws-actions/amazon-ecr-login@v2` requires AWS credentials already configured — the caller workflow (Task 17) adds `configure-aws-credentials` via OIDC before calling this action.
+
+> **ARM64 / Graviton (ADR 0001):** the node group runs `t4g.large` (ARM). Images therefore
+> **must** be built for `linux/arm64` (`platforms: linux/arm64` above), or pods fail with
+> `exec format error` / `ImagePullBackOff`. The base images (`python:3.12-slim`,
+> `ghcr.io/astral-sh/uv`) are multi-arch, so no Dockerfile change is needed — only the
+> build platform. If a future service pulls an x86-only dependency, either build
+> multi-arch (`linux/amd64,linux/arm64`) or move that node group to `t3.large` (x86,
+> ~$12/mo more).
 
 - [ ] **Step 2: Validate YAML**
 
