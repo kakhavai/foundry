@@ -1,0 +1,9 @@
+name: app-regression-after-deploy
+description: /activity starts returning 5xx shortly after a deploy
+induce:
+  FAULT_UPSTREAM_ERROR_RATE: "0.5"
+recent_deploy: true
+expected:
+  true_primary_cause: "weather deploy"
+  acceptable_suspects: ["weather deploy", "deploy regression"]
+  bad_suspects: ["external dependency", "upstream"]

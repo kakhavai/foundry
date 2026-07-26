@@ -43,8 +43,8 @@ graph TD
         end
     end
 
-    subgraph "Phase 4 — Incident Assistant"
-        Assistant["Triage CLI\n(Claude API)"]
+    subgraph "Phase 4 — Incident Detection and Triage Engine"
+        Assistant["Triage CLI\n(4A detector + 4B narrator)"]
     end
 
     Dev -->|"git push"| SvcRepo
@@ -109,8 +109,8 @@ All telemetry flows through a single OpenTelemetry Collector, which fans out to:
 
 This shared backend model means every service gets observability by default, with no per-service configuration of the backend stack.
 
-### Phase 4 — Incident Assistant
-A CLI tool that accepts a service name and incident trigger, queries recent deploy context, logs, traces, and metrics, and produces a structured triage summary using the Claude API. Assistive only — no autonomous actions.
+### Phase 4 — Incident Detection and Triage Engine
+A CLI tool (`foundry triage`) split on a hard boundary: a deterministic **detection engine** (4A) collects telemetry, scores anomalies, ranks suspects, and emits a structured `EvidenceBundle`; a **narrator** (4B) consumes the bundle and produces a human-readable triage narrative via the Claude API. Assistive only — no autonomous actions.
 
 ---
 

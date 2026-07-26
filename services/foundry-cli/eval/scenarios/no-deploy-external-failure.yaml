@@ -1,0 +1,10 @@
+name: no-deploy-external-failure
+description: upstream errors with no app change
+induce:
+  FAULT_UPSTREAM_ERROR_RATE: "0.8"
+  FAULT_UPSTREAM_LATENCY_MS: "2000"
+recent_deploy: false
+expected:
+  true_primary_cause: "external/upstream dependency"
+  acceptable_suspects: ["external", "upstream", "dependency"]
+  bad_suspects: ["deploy"]
