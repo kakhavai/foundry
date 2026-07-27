@@ -14,6 +14,10 @@ runs:
       shell: bash
       run: uv sync --frozen
       working-directory: ${{ inputs.working-directory }}
+    - name: Check lockfile is current
+      shell: bash
+      run: uv lock --check
+      working-directory: ${{ inputs.working-directory }}
     - name: Test
       shell: bash
       run: uv run pytest
