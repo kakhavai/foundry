@@ -19,6 +19,12 @@
 - **Coverage gate is 80%** line + branch, with **no omitted files**. Applies to `weather`, `player-projections`, `foundry-cli`.
 - **No new GitHub Actions workflows, composite actions, or workflow permissions.** The only workflow file created is `foundry-cli.yml` (Task 2), which exists because the package is currently untested in CI at all.
 - **No new runtime dependencies.** Everything added lands in `[dependency-groups] dev`.
+- **Every `pyproject.toml` dependency change must be followed by `uv lock` in that
+  service directory, and the regenerated `uv.lock` committed in the same commit.**
+  Without it `uv run` silently re-resolves and rewrites the lock on every
+  invocation, so the committed lock drifts and developers get spurious diffs.
+  Verify with `uv lock --check` (exit 0 = current, exit 1 = stale) before
+  committing. This binds Tasks 1, 2, 4, and 9 — each adds a dev dependency.
 - **Do not use the term "NFL" anywhere.** The project does not hold those rights. Use "pro football" or "stadium".
 - **Player IDs in contracts are opaque**, e.g. `p_8f3a21` — no league namespace.
 - **Nothing in this phase may require `player-data` to exist.** Schemas encode the intended shape; they are validated against fixtures, not a live provider.
@@ -181,6 +187,10 @@ Expected: both pass, each printing a coverage table. `weather` totals 61%, `play
 Replace the `Test` step in `.github/actions/python-test/action.yml` with:
 
 ```yaml
+    - name: Check lockfile is current
+      shell: bash
+      run: uv lock --check
+      working-directory: ${{ inputs.working-directory }}
     - name: Test
       shell: bash
       run: uv run pytest
@@ -193,6 +203,11 @@ Replace the `Test` step in `.github/actions/python-test/action.yml` with:
         uv run coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY"
       working-directory: ${{ inputs.working-directory }}
 ```
+
+The `uv lock --check` step goes **before** `Test`. It exits 1 when `uv.lock`
+disagrees with `pyproject.toml`, turning silent lock drift into a hard CI
+failure. Without it, `uv run` quietly re-resolves and rewrites the lock on
+every invocation and the staleness never surfaces.
 
 `if: always()` makes the report appear even when the gate fails in Task 13 — that is exactly when you want to see it. `--format=markdown` is a `coverage report` option (coverage.py 6.5+, verified against 7.15.2); it is **not** a valid `pytest --cov-report` value.
 
