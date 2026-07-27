@@ -20,6 +20,7 @@ dev = [
     "ruff",
     "pytest",
     "pytest-asyncio",
+    "pytest-cov",
     "httpx",
     "respx",
 ]
@@ -37,3 +38,11 @@ select = ["E", "F", "I"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "--cov=player_projections --cov-branch --cov-report=term"
+
+[tool.coverage.run]
+branch = true
+source = ["player_projections"]
+
+[tool.coverage.report]
+show_missing = true

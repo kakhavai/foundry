@@ -18,3 +18,10 @@ runs:
       shell: bash
       run: uv run pytest
       working-directory: ${{ inputs.working-directory }}
+    - name: Coverage summary
+      if: always()
+      shell: bash
+      run: |
+        echo "### Coverage — ${{ inputs.working-directory }}" >> "$GITHUB_STEP_SUMMARY"
+        uv run coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY"
+      working-directory: ${{ inputs.working-directory }}

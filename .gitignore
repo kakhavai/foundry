@@ -33,3 +33,9 @@ docs/superpowers/
 .claude/settings.local.json
 .claude/todos/
 .claude/*.json
+
+# Test artifacts
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
