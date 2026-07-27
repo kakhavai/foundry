@@ -1,0 +1,34 @@
+{
+  "/health": [
+    "status"
+  ],
+  "/weather/stadiums": [
+    "count",
+    "stadiums[].city",
+    "stadiums[].id",
+    "stadiums[].latitude",
+    "stadiums[].longitude",
+    "stadiums[].name",
+    "stadiums[].team",
+    "stadiums[].weather.precipitation_mm",
+    "stadiums[].weather.relative_humidity_pct",
+    "stadiums[].weather.temperature_c",
+    "stadiums[].weather.time",
+    "stadiums[].weather.weather_code",
+    "stadiums[].weather.wind_speed_kmh"
+  ],
+  "/weather/stadiums/{stadium_id}": [
+    "city",
+    "id",
+    "latitude",
+    "longitude",
+    "name",
+    "team",
+    "weather.precipitation_mm",
+    "weather.relative_humidity_pct",
+    "weather.temperature_c",
+    "weather.time",
+    "weather.weather_code",
+    "weather.wind_speed_kmh"
+  ]
+}
