@@ -2906,18 +2906,30 @@ an interval and caches the result in memory. The document shape is contracted in
 
 - [ ] **Step 6: Remove the trademark references**
 
-In `services/weather/README.md`, replace both occurrences:
+There are **five** occurrences across four tracked files — an earlier count of two was
+wrong. Replace all of them:
 
-- Line 3: `Current conditions by NFL stadium location.` → `Current conditions by pro football stadium location.`
-- Line 11: `Current conditions for all 30 NFL stadiums` → `Current conditions for all 30 pro football stadiums`
+| File | Line | Change |
+|---|---|---|
+| `services/weather/README.md` | 3 | `Current conditions by NFL stadium location.` → `Current conditions by pro football stadium location.` |
+| `services/weather/README.md` | 11 | `Current conditions for all 30 NFL stadiums` → `Current conditions for all 30 pro football stadiums` |
+| `CLAUDE.md` | 42 | `per-stadium NFL game-day forecasts` → `per-stadium pro football game-day forecasts` |
+| `docs/architecture/architecture-overview.md` | 101 | `with an NFL stadium endpoint planned` → `with a pro football stadium endpoint planned` |
+| `docs/architecture/phase-1-first-paved-road.md` | 48 | `reserved for future per-stadium NFL game-day weather` → `reserved for future per-stadium pro football game-day weather` |
 
-Confirm none remain anywhere:
+Line numbers are indicative — match on the text, not the number.
+
+Confirm none remain in tracked files. Exclude virtualenvs and lockfiles, or the
+search drowns in third-party matches (`hypothesis` vendors a TLD list containing
+`NFL`, and `CONFLICT` matches a naive case-insensitive search):
 
 ```bash
-grep -rn "NFL" --exclude-dir=.git --exclude="*.lock" . || echo "clean"
+grep -rn "NFL" --exclude-dir=.git --exclude-dir=.venv --exclude-dir=.superpowers \
+  --exclude="*.lock" --exclude-dir=docs/plans . || echo "clean"
 ```
 
-Expected: `clean`.
+Expected: `clean`. The plan file itself and `docs/superpowers/` (gitignored) are
+excluded — they document the removal and may name the term.
 
 - [ ] **Step 7: Commit**
 
