@@ -81,6 +81,7 @@ The design proposed a service-side test asserting the OTel collector endpoint co
 | `contracts/player-data/{standard,half-ppr,ppr}.v1.schema.json` | Create | Snapshot contracts, one per scoring format |
 | `contracts/player-data/fixtures/*.json` | Create | Valid and invalid sample payloads |
 | `contracts/openapi/{weather,player-projections}.json` | Create | Committed OpenAPI snapshots |
+| `contracts/responses/{weather,player-projections}.json` | Create | Response-shape contracts — dotted key paths per route, catching field renames the OpenAPI snapshot cannot see |
 | `tests/test_helm_otel_endpoint.py` | Create | Helm render assertion for the collector DNS name |
 | `docs/adr/0002-provider-driven-contracts.md` | Create | Why schema-first over Pact; revisit trigger |
 | `docs/testing-strategy.md` | Create | What is tested at each layer and why |
@@ -936,12 +937,152 @@ uv run pytest tests/test_contract.py -q
 
 Expected: PASS.
 
-- [ ] **Step 6: Lint and commit**
+- [ ] **Step 6: Add the response-shape contract**
+
+**Why this exists.** The OpenAPI snapshot alone does *not* catch a renamed response
+field. The handlers return bare dicts with no `response_model=`, so FastAPI emits
+`"schema": {}` for every 200 response — renaming `stadiums` → `venues` produces zero
+diff against `contracts/openapi/weather.json`. Verified against the committed
+snapshot: all four 200 responses carry an empty schema; the only real schema is the
+422 validation error.
+
+This closes that gap in the test layer, without touching production code and without
+the runtime risk of `response_model=` (which makes FastAPI validate and filter
+responses, silently dropping undeclared fields).
+
+Append to `services/weather/tests/test_contract.py`:
+
+```python
+RESPONSES = (
+    Path(__file__).resolve().parents[3] / "contracts" / "responses" / "weather.json"
+)
+
+
+def response_shape(obj, prefix: str = "") -> list[str]:
+    """Dotted key paths for a JSON body. Lists are represented by their first
+    element with a `[]` marker, so `stadiums[].weather.temperature_c` pins a
+    nested field name. Scalars terminate a path."""
+    if isinstance(obj, dict):
+        out: list[str] = []
+        for key in sorted(obj):
+            child = f"{prefix}.{key}" if prefix else key
+            out.extend(response_shape(obj[key], child))
+        return out or ([prefix] if prefix else [])
+    if isinstance(obj, list):
+        return response_shape(obj[0], f"{prefix}[]") if obj else [f"{prefix}[]"]
+    return [prefix]
+
+
+SHAPE_HINT = (
+    "A response body's field names changed.\n"
+    "If intentional, regenerate contracts/responses/weather.json and include it "
+    "in the same PR so the change is explicit in review."
+)
+
+
+@respx.mock
+def test_response_shapes_match_committed_contract():
+    """Catches renamed or dropped response fields at any nesting depth."""
+    respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json=VALID_CURRENT))
+    committed = json.loads(RESPONSES.read_text())
+    stadium_id = next(iter(STADIUMS))
+
+    with TestClient(app) as client:
+        actual = {
+            "/health": response_shape(client.get("/health").json()),
+            "/weather/stadiums": response_shape(
+                client.get("/weather/stadiums").json()
+            ),
+            "/weather/stadiums/{stadium_id}": response_shape(
+                client.get(f"/weather/stadiums/{stadium_id}").json()
+            ),
+        }
+
+    assert actual == committed, SHAPE_HINT
+```
+
+Add these imports to the top of the file alongside the existing ones:
+
+```python
+import httpx
+import respx
+from fastapi.testclient import TestClient
+
+from weather.client import WEATHER_URL
+from weather.stadiums import STADIUMS
+
+VALID_CURRENT = {
+    "current": {
+        "temperature_2m": 18.0,
+        "relative_humidity_2m": 62,
+        "wind_speed_10m": 11.0,
+        "weather_code": 1,
+        "precipitation": 0.0,
+        "time": "2026-09-30T14:00",
+    }
+}
+```
+
+- [ ] **Step 7: Generate the response-shape fixture**
+
+The upstream mock **must succeed** when generating this. With a failing upstream
+`weather` is `null`, which collapses the nested subtree and would bake a weaker
+contract into the fixture.
+
+```bash
+mkdir -p contracts/responses
+cd services/weather && uv run python - <<'PY'
+import json, pathlib, httpx, respx
+from fastapi.testclient import TestClient
+from tests.test_contract import response_shape, VALID_CURRENT
+from weather.client import WEATHER_URL
+from weather.main import app
+from weather.stadiums import STADIUMS
+
+with respx.mock:
+    respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json=VALID_CURRENT))
+    sid = next(iter(STADIUMS))
+    with TestClient(app) as c:
+        shapes = {
+            "/health": response_shape(c.get("/health").json()),
+            "/weather/stadiums": response_shape(c.get("/weather/stadiums").json()),
+            "/weather/stadiums/{stadium_id}": response_shape(
+                c.get(f"/weather/stadiums/{sid}").json()
+            ),
+        }
+pathlib.Path("../../contracts/responses/weather.json").write_text(
+    json.dumps(shapes, indent=2, sort_keys=True) + "\n"
+)
+print(json.dumps(shapes, indent=2, sort_keys=True))
+PY
+```
+
+Confirm the printed output contains nested paths such as
+`stadiums[].weather.temperature_c` — not a bare `stadiums[].weather`. A bare entry
+means the upstream mock did not take effect and the fixture is too weak to commit.
+
+- [ ] **Step 8: Prove the response-shape test detects a rename**
+
+```bash
+cd services/weather
+python - <<'PY'
+import json, pathlib
+p = pathlib.Path('../../contracts/responses/weather.json')
+d = json.loads(p.read_text())
+d['/health'] = ['statuz']
+p.write_text(json.dumps(d, indent=2, sort_keys=True) + '\n')
+PY
+uv run pytest tests/test_contract.py::test_response_shapes_match_committed_contract -q
+```
+
+Expected: FAIL. Then regenerate with the Step 7 command and confirm it passes.
+
+- [ ] **Step 9: Lint and commit**
 
 ```bash
 cd services/weather && uv run ruff check . && uv run ruff format --check .
-cd ../.. && git add contracts/openapi/weather.json services/weather/tests/test_contract.py
-git commit -m "test(weather): commit OpenAPI snapshot with divergence detection"
+cd ../.. && git add contracts/ services/weather/tests/test_contract.py
+git commit -m "test(weather): commit OpenAPI and response-shape contracts"
 ```
 
 ---
@@ -1982,6 +2123,86 @@ uv run pytest tests/test_contract.py -v
 ```
 
 Expected: PASS.
+
+- [ ] **Step 3b: Add the response-shape contract**
+
+The OpenAPI snapshot does **not** catch a renamed response field — these handlers
+return bare dicts with no `response_model=`, so FastAPI emits `"schema": {}` for
+every 200 response. This mirrors what Task 5 added for `weather`; read
+`services/weather/tests/test_contract.py` and reuse the same `response_shape`
+helper verbatim (copy it — the two services are independent packages with no
+shared test utility, and the plan's ruling is that this duplication stands).
+
+Append to `services/player-projections/tests/test_contract.py`:
+
+```python
+RESPONSES = (
+    Path(__file__).resolve().parents[3]
+    / "contracts"
+    / "responses"
+    / "player-projections.json"
+)
+
+SHAPE_HINT = (
+    "A response body's field names changed.\n"
+    "If intentional, regenerate contracts/responses/player-projections.json and "
+    "include it in the same PR so the change is explicit in review."
+)
+
+
+def test_response_shapes_match_committed_contract():
+    """Catches renamed or dropped response fields at any nesting depth.
+
+    The cache is pre-populated so nested projection fields appear in the shape —
+    an empty stub-mode response would bake a weaker contract into the fixture.
+    """
+    main._state["projections"] = {
+        "p_8f3a21": {
+            "id": "p_8f3a21",
+            "name": "Deebo Samuel",
+            "pos": "WR",
+            "team": "SF",
+            "rank": 3,
+            "proj_points": {"floor": 5.2, "expected": 12.4, "ceiling": 20.1},
+        }
+    }
+    main._state["upstream_healthy"] = True
+    main._state["last_updated"] = "2026-09-30T14:00:00+00:00"
+    committed = json.loads(RESPONSES.read_text())
+
+    with TestClient(app) as client:
+        actual = {
+            "/health": response_shape(client.get("/health").json()),
+            "/projections": response_shape(client.get("/projections").json()),
+            "/projections/{player_id}": response_shape(
+                client.get("/projections/p_8f3a21").json()
+            ),
+        }
+
+    main._state["projections"] = {}
+    main._state["upstream_healthy"] = False
+    main._state["last_updated"] = None
+
+    assert actual == committed, SHAPE_HINT
+```
+
+Copy the `response_shape` function from `services/weather/tests/test_contract.py`
+unchanged, and add these imports at the top of the file:
+
+```python
+from fastapi.testclient import TestClient
+
+from player_projections import main
+```
+
+Set `PLAYER_DATA_URL` to empty in the environment for this test so the background
+poll loop stays in stub mode and does not overwrite the cache you just seeded.
+
+Generate the fixture, then prove the test detects a rename (change one key in the
+committed JSON, confirm FAIL, regenerate, confirm PASS) exactly as Task 5 did.
+The printed fixture must contain nested paths such as
+`projections[].proj_points.ceiling` — a bare `projections[]` means the cache was
+not seeded and the contract is too weak to commit.
 
 - [ ] **Step 4: Write the integration suite**
 
