@@ -21,6 +21,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
+    "hypothesis",
     "httpx",
     "respx",
 ]
