@@ -15,6 +15,7 @@ foundry = "foundry.cli:main"
 dev = [
     "ruff",
     "pytest",
+    "pytest-cov",
     "respx",
 ]
 
@@ -30,3 +31,14 @@ select = ["E", "F", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--cov=foundry --cov-branch --cov-report=term"
+
+[tool.coverage.run]
+branch = true
+source = ["foundry"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.setuptools.packages.find]
+include = ["foundry*"]
