@@ -50,6 +50,27 @@ def test_all_stadiums_degrades_per_stadium_on_upstream_error(client):
 
 
 @respx.mock
+def test_all_stadiums_degrades_only_the_failing_stadium(client):
+    """One stadium's upstream failing must leave the other 29 populated."""
+    target = next(iter(STADIUMS.values()))
+
+    def side_effect(request):
+        if request.url.params["latitude"] == str(target["latitude"]):
+            return httpx.Response(503)
+        return httpx.Response(200, json=VALID_CURRENT)
+
+    respx.get(WEATHER_URL).mock(side_effect=side_effect)
+
+    stadiums = client.get("/weather/stadiums").json()["stadiums"]
+    failed = [s for s in stadiums if s["weather"] is None]
+    healthy = [s for s in stadiums if s["weather"] is not None]
+
+    assert len(failed) == 1
+    assert failed[0]["id"] == target["id"]
+    assert len(healthy) == len(STADIUMS) - 1
+
+
+@respx.mock
 def test_all_stadiums_survives_upstream_timeout(client):
     respx.get(WEATHER_URL).mock(side_effect=httpx.ConnectTimeout("timed out"))
 
@@ -90,7 +111,13 @@ def test_unknown_stadium_returns_404(client):
 
 @respx.mock
 def test_concurrent_requests_are_independent(client):
-    """Twenty simultaneous requests must all succeed with identical bodies."""
+    """Twenty concurrent requests through the ASGI stack return identical bodies.
+
+    `weather/main.py` holds no shared mutable state today — each request builds
+    its own client and response dict — so this cannot currently detect a race.
+    It is a regression guard: if shared state is ever introduced, this starts
+    doing real work. Treat a failure here as a genuine concurrency bug.
+    """
     respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json=VALID_CURRENT))
     stadium_id = next(iter(STADIUMS))
 
