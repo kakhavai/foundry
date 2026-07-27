@@ -26,7 +26,11 @@ async def _poll_loop() -> None:
     while True:
         try:
             players = await fetch_projections(url)
-            _state["projections"] = {p["id"]: p for p in players}
+            _state["projections"] = {
+                p["id"]: p
+                for p in players
+                if isinstance(p, dict) and isinstance(p.get("id"), str)
+            }
             _state["last_updated"] = _now_iso()
             _state["upstream_healthy"] = True
         except Exception:
