@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/contracts/player-data/half-ppr.v1.schema.json",
+  "title": "player-data weekly projections snapshot (Half-PPR scoring)",
+  "type": "object",
+  "required": ["format", "season", "week", "generated_at", "players"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "half-ppr" },
+    "season": { "type": "integer", "minimum": 2020, "maximum": 2100 },
+    "week": { "type": "integer", "minimum": 1, "maximum": 22 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "players": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/player" }
+    }
+  },
+  "$defs": {
+    "player": {
+      "type": "object",
+      "required": ["id", "name", "pos", "team", "rank", "proj_points"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^p_[a-z0-9]+$" },
+        "name": { "type": "string", "minLength": 1 },
+        "pos": { "enum": ["QB", "RB", "WR", "TE", "K", "DST"] },
+        "team": { "type": "string", "minLength": 2, "maxLength": 4 },
+        "rank": { "type": "integer", "minimum": 1 },
+        "proj_points": { "$ref": "#/$defs/spread" }
+      }
+    },
+    "spread": {
+      "type": "object",
+      "required": ["floor", "expected", "ceiling"],
+      "additionalProperties": false,
+      "properties": {
+        "floor": { "type": "number", "minimum": 0 },
+        "expected": { "type": "number", "minimum": 0 },
+        "ceiling": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

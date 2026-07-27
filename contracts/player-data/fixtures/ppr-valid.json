@@ -1,0 +1,24 @@
+{
+  "format": "ppr",
+  "season": 2026,
+  "week": 5,
+  "generated_at": "2026-09-30T14:00:00Z",
+  "players": [
+    {
+      "id": "p_8f3a21",
+      "name": "Deebo Samuel",
+      "pos": "WR",
+      "team": "SF",
+      "rank": 3,
+      "proj_points": { "floor": 5.2, "expected": 12.4, "ceiling": 20.1 }
+    },
+    {
+      "id": "p_1c9e04",
+      "name": "Christian McCaffrey",
+      "pos": "RB",
+      "team": "SF",
+      "rank": 1,
+      "proj_points": { "floor": 11.0, "expected": 21.7, "ceiling": 33.5 }
+    }
+  ]
+}
