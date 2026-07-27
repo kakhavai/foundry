@@ -694,10 +694,16 @@ The fault-injection branches in `_maybe_inject_fault` are the remaining `client.
 
 ```python
 @SETTINGS
-@given(rate=st.floats(min_value=0.999, max_value=1.0))
+@given(rate=st.floats(min_value=0.01, max_value=1.0))
 @respx.mock
 async def test_fault_error_rate_injects_503(monkeypatch, rate):
-    """FAULT_UPSTREAM_ERROR_RATE at ~1.0 always raises before the real call."""
+    """Any non-zero FAULT_UPSTREAM_ERROR_RATE raises when the draw falls under it.
+
+    `random.random()` is pinned to 0.0 so the branch is deterministic — asserting
+    on real randomness would make this test flaky at exactly the rate it claims
+    to verify.
+    """
+    monkeypatch.setattr("weather.client.random.random", lambda: 0.0)
     monkeypatch.setenv("FAULT_UPSTREAM_ERROR_RATE", str(rate))
     route = respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json={}))
 
@@ -707,6 +713,33 @@ async def test_fault_error_rate_injects_503(monkeypatch, rate):
 
     assert exc.value.response.status_code == 503
     assert not route.called  # fault short-circuits before the upstream request
+
+
+@respx.mock
+async def test_fault_error_rate_not_drawn_lets_request_through(monkeypatch):
+    """The other side of the branch: draw above the rate means no fault."""
+    monkeypatch.setattr("weather.client.random.random", lambda: 0.99)
+    monkeypatch.setenv("FAULT_UPSTREAM_ERROR_RATE", "0.5")
+    route = respx.get(WEATHER_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "current": {
+                    "temperature_2m": 1.0,
+                    "relative_humidity_2m": 1,
+                    "wind_speed_10m": 1.0,
+                    "weather_code": 1,
+                    "precipitation": 0.0,
+                    "time": "t",
+                }
+            },
+        )
+    )
+
+    async with httpx.AsyncClient() as client:
+        await fetch_weather_for_coords(37.7, -122.4, client)
+
+    assert route.called
 
 
 async def test_fault_latency_delays_call(monkeypatch):
