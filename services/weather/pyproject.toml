@@ -39,7 +39,7 @@ select = ["E", "F", "I"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=weather --cov-branch --cov-report=term"
+addopts = "--cov=weather --cov-branch --cov-report=term --cov-fail-under=80"
 
 [tool.coverage.run]
 branch = true

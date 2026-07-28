@@ -31,7 +31,7 @@ select = ["E", "F", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=foundry --cov-branch --cov-report=term"
+addopts = "--cov=foundry --cov-branch --cov-report=term --cov-fail-under=80"
 
 [tool.coverage.run]
 branch = true

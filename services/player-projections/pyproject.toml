@@ -40,7 +40,7 @@ select = ["E", "F", "I"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=player_projections --cov-branch --cov-report=term"
+addopts = "--cov=player_projections --cov-branch --cov-report=term --cov-fail-under=80"
 
 [tool.coverage.run]
 branch = true
