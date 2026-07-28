@@ -33,6 +33,25 @@ jobs:
               - 'infra/**'
               - 'scripts/**'
 
+  # Repo-root tests/ cover platform concerns that no per-service suite can see —
+  # rollback, Argo CD deploy manifests, and the OTel collector DNS name rendered
+  # by the Helm chart. Nothing ran them before; they need helm on PATH but no
+  # cluster, so they sit beside the heavy job rather than inside it.
+  platform-tests:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v5
+        with:
+          helm-version: "v3.17.3"
+      - uses: astral-sh/setup-uv@v5
+      - name: Run platform tests
+        run: uv run --with pyyaml --with pytest pytest tests/ -q
+
   integration-test:
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
