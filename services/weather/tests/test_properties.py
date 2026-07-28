@@ -82,6 +82,20 @@ async def test_non_object_body_raises_typeerror_or_keyerror(body):
             await fetch_weather_for_coords(37.7, -122.4, client)
 
 
+@respx.mock
+async def test_json_null_body_raises_typeerror():
+    """A literal JSON `null` from the upstream must fail loudly, not silently.
+
+    Note `content=b"null"`, not `json=None` — httpx treats `json=None` as
+    "no payload supplied" and sends an empty body instead.
+    """
+    respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, content=b"null"))
+
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(TypeError):
+            await fetch_weather_for_coords(37.7, -122.4, client)
+
+
 @SETTINGS
 @given(
     temp=st.floats(min_value=-100, max_value=100, allow_nan=False),

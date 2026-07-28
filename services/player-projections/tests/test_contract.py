@@ -5,7 +5,7 @@ import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 
 from player_projections import main
 from player_projections.client import fetch_projections
@@ -28,10 +28,63 @@ def test_schema_declares_its_own_format(fmt):
     assert schema["properties"]["format"]["const"] == fmt
 
 
+def test_fixture_spreads_are_ordered():
+    """JSON Schema cannot express this; assert it as a business rule instead."""
+    doc = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
+
+    for player in doc["players"]:
+        spread = player.get("proj_points")
+        if spread is None:
+            continue
+        assert spread["floor"] <= spread["expected"] <= spread["ceiling"], (
+            f"{player['id']} has a spread out of order: {spread}"
+        )
+
+
 def test_fixture_validates_against_ppr_schema():
     schema = json.loads((CONTRACTS / "ppr.v1.schema.json").read_text())
     fixture = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
-    Draft202012Validator(schema).validate(fixture)
+    Draft202012Validator(schema, format_checker=FormatChecker()).validate(fixture)
+
+
+def test_bad_generated_at_is_rejected():
+    """`format: date-time` is only enforced when a FormatChecker is attached."""
+    schema = json.loads((CONTRACTS / "ppr.v1.schema.json").read_text())
+    doc = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
+    doc["generated_at"] = "not-a-date-at-all"
+
+    errors = list(
+        Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(doc)
+    )
+
+    assert errors, "a malformed generated_at must fail validation"
+
+
+def test_dst_row_carrying_skill_player_fields_is_rejected():
+    """A DST row must not also carry rank/proj_points — the conditional's
+    `then` branch must positively exclude the `else` branch's shape."""
+    schema = json.loads((CONTRACTS / "ppr.v1.schema.json").read_text())
+    fixture = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
+    dst = next(p for p in fixture["players"] if p["pos"] == "DST")
+    dst["rank"] = 5
+    dst["proj_points"] = {"floor": 1, "expected": 2, "ceiling": 3}
+
+    errors = list(Draft202012Validator(schema).iter_errors(fixture))
+
+    assert errors, "a DST row carrying rank/proj_points must fail validation"
+
+
+def test_wr_row_carrying_dst_fields_is_rejected():
+    """A non-DST row must not also carry yahoo_rank/espn_rank — the
+    conditional's `else` branch must positively exclude the `then` shape."""
+    schema = json.loads((CONTRACTS / "ppr.v1.schema.json").read_text())
+    fixture = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
+    wr = next(p for p in fixture["players"] if p["pos"] == "WR")
+    wr["yahoo_rank"] = 1
+
+    errors = list(Draft202012Validator(schema).iter_errors(fixture))
+
+    assert errors, "a non-DST row carrying yahoo_rank must fail validation"
 
 
 def test_schemas_are_structurally_identical_across_formats():

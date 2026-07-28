@@ -22,7 +22,7 @@ dev = [
     "pytest-asyncio",
     "pytest-cov",
     "hypothesis",
-    "jsonschema",
+    "jsonschema[format]",
     "httpx",
     "respx",
 ]

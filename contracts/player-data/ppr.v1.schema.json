@@ -34,8 +34,14 @@
       "allOf": [
         {
           "if": { "properties": { "pos": { "const": "DST" } } },
-          "then": { "required": ["yahoo_rank", "espn_rank"] },
-          "else": { "required": ["rank", "proj_points"] }
+          "then": {
+            "required": ["yahoo_rank", "espn_rank"],
+            "properties": { "rank": false, "proj_points": false }
+          },
+          "else": {
+            "required": ["rank", "proj_points"],
+            "properties": { "yahoo_rank": false, "espn_rank": false }
+          }
         }
       ]
     },

@@ -45,7 +45,7 @@ The data collection services (injury, weather, news, betting lines, field type, 
 
 ### player-projections — How It Works
 
-Runs in **stub mode** when `PLAYER_DATA_URL` is empty (no upstream yet). Returns `{"projections":[], "count":0, "upstream_healthy":false}`.
+Runs in **stub mode** when `PLAYER_DATA_URL` is empty (no upstream yet). Returns `{"projections":[], "count":0, "last_updated":null, "upstream_healthy":false}`.
 
 **Upstream architecture:** `player-data` aggregates data from internal sources —
 weather, injury reports, betting lines, news, field type — and writes one

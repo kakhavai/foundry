@@ -12,14 +12,15 @@ async def fetch_projections(url: str) -> list[dict]:
 
     Raises:
         httpx.HTTPStatusError: the upstream returned a 4xx or 5xx.
-        MalformedSnapshotError: the body was not valid JSON, or not a JSON object.
+        MalformedSnapshotError: the body was not valid JSON, not a JSON object,
+            or was not decodable text (invalid encoding).
     """
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.get(url)
         response.raise_for_status()
         try:
             body = response.json()
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise MalformedSnapshotError(
                 f"expected valid JSON at {url}: {exc}"
             ) from exc
