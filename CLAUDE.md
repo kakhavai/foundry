@@ -32,7 +32,7 @@ fantasy-frontend (future)
   └── user-facing web UI consuming the projections API
 ```
 
-The data collection services (injury, weather, news, betting lines, field type, and others) are all internal inputs to `player-data` — they are not separate user-facing services. `player-data` is the single gatekeeper for that data. It writes a curated projections JSON file to S3; `player-projections` polls that file.
+The data collection services (injury, weather, news, betting lines, field type, and others) are all internal inputs to `player-data` — they are not separate user-facing services. `player-data` is the single gatekeeper for that data. It writes one curated projections JSON document per scoring format (standard, half-PPR, PPR) to S3; `player-projections` polls the document for its configured format.
 
 ---
 
@@ -60,7 +60,9 @@ Once `player-data` begins publishing:
 
 No API key or Kubernetes Secret needed — S3 auth is handled at the infrastructure level (IAM role on the pod, or a presigned URL baked into `PLAYER_DATA_URL`).
 
-The S3 file shape: `{"players": [...]}` — each player object needs at least an `id` field for the cache key.
+Each document's shape is defined by the schema in `contracts/player-data/` (see
+`docs/testing-strategy.md`). The in-memory cache is a flat list in upstream
+order — not keyed by `id` — and the frontend does all slicing and grouping.
 
 ---
 
@@ -252,5 +254,5 @@ If you need to verify a fix that isn't merged yet, work from inside the cluster 
 - **`--no-editable` Docker** — canonical uv pattern for packages; package dir copied directly into the build stage, wheels go into venv, no PYTHONPATH needed in runtime.
 - **Per-service workflow files** — one file to copy per onboard, no reusable workflow indirection.
 - **OTel guard on env var** — no collector needed for local dev or tests; Kubernetes injects it.
-- **`player-data` internal-only** — proprietary data pipeline never exposed publicly; only `player-projections` (and future internal consumers) can reach it via authenticated polling.
+- **`player-data` internal-only** — proprietary data pipeline never exposed publicly; it publishes to S3 for `player-projections` (and future internal consumers) to poll, with S3 auth handled at the infrastructure level (see ADR 0002).
 - **Stub mode for not-yet-built upstreams** — `PLAYER_DATA_URL` empty = service runs, returns empty data, no crashes. Lets the service be deployed and observed before its dependency exists.
