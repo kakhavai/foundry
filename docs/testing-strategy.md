@@ -79,9 +79,9 @@ are not — those are asserted directly in the integration suite instead. A `nul
 value or an empty list or dict also collapses its subtree to a bare path, which
 is why fixtures must be generated against a populated, successful response.
 
-**The `player-data` schemas encode an intended shape, not an observed one.**
-No provider exists yet. They become genuinely enforcing when `player-data`
-validates its own output against the same files in its CI. One schema gap
+**The `player-data` schema encodes an intended shape, not an observed one.**
+No provider exists yet. It becomes genuinely enforcing when `player-data`
+validates its own output against the same file in its CI. One schema gap
 remains, not three: `floor <= expected <= ceiling` cannot be expressed in JSON
 Schema 2020-12 — there is no portable way to compare sibling properties — so it
 is asserted as a business rule against the **committed fixtures only**

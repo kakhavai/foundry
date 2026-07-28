@@ -24,8 +24,8 @@ replayed in the provider's CI.
 
 Enforce contracts **provider-side**, with committed schemas:
 
-- **JSON Schema** for the `player-data` snapshot documents, one per scoring
-  format, in `contracts/player-data/`.
+- **JSON Schema** for the `player-data` snapshot documents — one schema covering
+  all three scoring formats, in `contracts/player-data/`.
 - **Committed OpenAPI snapshots** for `weather` and `player-projections`, in
   `contracts/openapi/`, with CI failing on undeclared divergence.
 

@@ -3,15 +3,24 @@
 `player-data` publishes one JSON document per scoring format per week to S3.
 `player-projections` polls the document matching the requested format.
 
-| File | Scoring |
-|---|---|
-| `standard.v1.schema.json` | Standard (no reception points) |
-| `half-ppr.v1.schema.json` | 0.5 points per reception |
-| `ppr.v1.schema.json` | 1 point per reception |
+**One schema — `snapshot.v1.schema.json` — covers all three formats.** Scoring
+changes the *values* of `rank` and `proj_points` for skill positions, never the
+shape of the document, so there is nothing for a per-format schema to say. The
+document's own `format` field records which of the three it is:
 
-The three schemas are structurally identical. Scoring format changes the
-*values* of `rank` and `proj_points` for skill positions, not the shape of
-the document.
+| `format` | Scoring |
+|---|---|
+| `standard` | Standard (no reception points) |
+| `half-ppr` | 0.5 points per reception |
+| `ppr` | 1 point per reception |
+
+This started as three near-identical files whose shapes were kept in sync by a
+test. Collapsing them makes that invariant structural rather than asserted.
+The tradeoff: a per-file `format: {"const": "ppr"}` could catch the PPR
+document being published at the standard URL, and an enum cannot. That check
+belongs at read time in the consumer, against the format it was configured to
+expect — it catches the real misconfiguration in production rather than only
+in CI.
 
 Each player row is one of two shapes, selected by `pos`:
 
@@ -52,7 +61,7 @@ publishing. Until then the schemas are validated against the fixtures in
 
 ## Versioning
 
-The `.v1.` in each filename is the contract version. A backward-compatible
+The `.v1.` in the filename is the contract version. A backward-compatible
 addition (a new optional field) may amend v1 in place. Any change that would
 break an existing consumer — removing a field, narrowing a type, changing an
 enum — requires a new `.v2.` file published alongside v1.

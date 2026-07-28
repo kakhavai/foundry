@@ -13,20 +13,37 @@ from player_projections.client import fetch_projections
 from player_projections.main import app
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts" / "player-data"
+SCHEMA_FILE = "snapshot.v1.schema.json"
 FORMATS = ["standard", "half-ppr", "ppr"]
 
 
-@pytest.mark.parametrize("fmt", FORMATS)
-def test_schema_is_valid_json_schema(fmt):
-    schema = json.loads((CONTRACTS / f"{fmt}.v1.schema.json").read_text())
+def test_schema_is_valid_json_schema():
+    schema = json.loads((CONTRACTS / SCHEMA_FILE).read_text())
     Draft202012Validator.check_schema(schema)
 
 
 @pytest.mark.parametrize("fmt", FORMATS)
-def test_schema_declares_its_own_format(fmt):
-    """Each schema pins `format` to its own scoring type — files can't be mixed up."""
-    schema = json.loads((CONTRACTS / f"{fmt}.v1.schema.json").read_text())
-    assert schema["properties"]["format"]["const"] == fmt
+def test_schema_accepts_every_scoring_format(fmt):
+    """Scoring changes the values in `rank`/`proj_points`, never the shape, so
+    one schema covers all three documents."""
+    schema = json.loads((CONTRACTS / SCHEMA_FILE).read_text())
+    doc = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
+    doc["format"] = fmt
+
+    Draft202012Validator(schema, format_checker=FormatChecker()).validate(doc)
+
+
+def test_unknown_scoring_format_is_rejected():
+    """`format` is an enum, not a free string — an invented scoring mode must
+    not validate. This is what replaced the per-file `const` when the three
+    schemas collapsed into one."""
+    schema = json.loads((CONTRACTS / SCHEMA_FILE).read_text())
+    doc = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
+    doc["format"] = "quarter-ppr"
+
+    errors = list(Draft202012Validator(schema).iter_errors(doc))
+
+    assert errors, "an unknown scoring format must fail validation"
 
 
 def test_fixture_spreads_are_ordered():
@@ -43,14 +60,14 @@ def test_fixture_spreads_are_ordered():
 
 
 def test_fixture_validates_against_ppr_schema():
-    schema = json.loads((CONTRACTS / "ppr.v1.schema.json").read_text())
+    schema = json.loads((CONTRACTS / SCHEMA_FILE).read_text())
     fixture = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
     Draft202012Validator(schema, format_checker=FormatChecker()).validate(fixture)
 
 
 def test_bad_generated_at_is_rejected():
     """`format: date-time` is only enforced when a FormatChecker is attached."""
-    schema = json.loads((CONTRACTS / "ppr.v1.schema.json").read_text())
+    schema = json.loads((CONTRACTS / SCHEMA_FILE).read_text())
     doc = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
     doc["generated_at"] = "not-a-date-at-all"
 
@@ -64,7 +81,7 @@ def test_bad_generated_at_is_rejected():
 def test_dst_row_carrying_skill_player_fields_is_rejected():
     """A DST row must not also carry rank/proj_points — the conditional's
     `then` branch must positively exclude the `else` branch's shape."""
-    schema = json.loads((CONTRACTS / "ppr.v1.schema.json").read_text())
+    schema = json.loads((CONTRACTS / SCHEMA_FILE).read_text())
     fixture = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
     dst = next(p for p in fixture["players"] if p["pos"] == "DST")
     dst["rank"] = 5
@@ -78,7 +95,7 @@ def test_dst_row_carrying_skill_player_fields_is_rejected():
 def test_wr_row_carrying_dst_fields_is_rejected():
     """A non-DST row must not also carry yahoo_rank/espn_rank — the
     conditional's `else` branch must positively exclude the `then` shape."""
-    schema = json.loads((CONTRACTS / "ppr.v1.schema.json").read_text())
+    schema = json.loads((CONTRACTS / SCHEMA_FILE).read_text())
     fixture = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
     wr = next(p for p in fixture["players"] if p["pos"] == "WR")
     wr["yahoo_rank"] = 1
@@ -88,13 +105,14 @@ def test_wr_row_carrying_dst_fields_is_rejected():
     assert errors, "a non-DST row carrying yahoo_rank must fail validation"
 
 
-def test_schemas_are_structurally_identical_across_formats():
-    """Scoring changes values, not shape. Divergence here is a contract bug."""
-    defs = []
-    for fmt in FORMATS:
-        schema = json.loads((CONTRACTS / f"{fmt}.v1.schema.json").read_text())
-        defs.append(schema["$defs"])
-    assert defs[0] == defs[1] == defs[2]
+def test_only_one_snapshot_schema_exists():
+    """The three per-format schemas differed only in `$id`, `title`, and
+    `format.const` — identical shapes kept in sync by a test. One file makes
+    that structural instead. A new `*.v1.schema.json` here means someone
+    reintroduced the drift this consolidation removed."""
+    schemas = sorted(p.name for p in CONTRACTS.glob("*.schema.json"))
+
+    assert schemas == [SCHEMA_FILE]
 
 
 @respx.mock

@@ -1,12 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://foundry.internal/contracts/player-data/ppr.v1.schema.json",
-  "title": "player-data weekly projections snapshot (PPR scoring)",
+  "$id": "https://foundry.internal/contracts/player-data/snapshot.v1.schema.json",
+  "title": "player-data weekly projections snapshot",
+  "description": "One curated projections document. Scoring format changes the VALUES in `rank` and `proj_points`, never the shape — so all three formats (standard, half-ppr, ppr) share this single schema and `format` records which one a given document is.",
   "type": "object",
   "required": ["format", "season", "week", "generated_at", "players"],
   "additionalProperties": false,
   "properties": {
-    "format": { "const": "ppr" },
+    "format": { "enum": ["standard", "half-ppr", "ppr"] },
     "season": { "type": "integer", "minimum": 2020, "maximum": 2100 },
     "week": { "type": "integer", "minimum": 1, "maximum": 22 },
     "generated_at": { "type": "string", "format": "date-time" },

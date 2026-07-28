@@ -33,7 +33,7 @@ The three stages build on each other:
 ### Deliverables
 
 - Updated `pyproject.toml` per service with coverage thresholds and branch coverage
-- `contracts/player-data/` — JSON Schema contracts for the three scoring-format snapshots
+- `contracts/player-data/` — one JSON Schema covering the snapshot documents for all three scoring formats
 - `contracts/openapi/` — committed OpenAPI snapshots with CI divergence detection
 - `services/*/tests/test_properties.py` — Hypothesis suites for all external data parsers
 - `services/*/tests/integration/` — real HTTP integration tests per service
