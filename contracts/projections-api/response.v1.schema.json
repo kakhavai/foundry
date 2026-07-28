@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/contracts/projections-api/response.v1.schema.json",
+  "title": "player-projections GET /projections response",
+  "description": "What player-projections serves to the frontend. Player rows are $ref'd from the snapshot schema rather than restated, so the row shape has exactly one definition across the inbound and outbound contracts. This is a design-first contract: the frontend that consumes it does not exist yet.",
+  "type": "object",
+  "required": [
+    "format",
+    "projections",
+    "count",
+    "last_updated",
+    "upstream_healthy"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "enum": ["standard", "half-ppr", "ppr"],
+      "description": "Echoes the requested scoring mode, so a client can confirm what it got."
+    },
+    "projections": {
+      "type": "array",
+      "description": "Player rows in upstream order, optionally narrowed by the `pos` filter. Never null — an unpopulated or failing upstream yields an empty array with upstream_healthy false.",
+      "items": {
+        "$ref": "https://foundry.internal/contracts/projections-snapshot/snapshot.v1.schema.json#/$defs/player"
+      }
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Length of `projections` AFTER filtering. `count == len(projections)` is the intended invariant; JSON Schema 2020-12 cannot compare siblings, so it is asserted in the consumer's tests."
+    },
+    "last_updated": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "When this format's cache was last refreshed successfully. Null in stub mode or before the first successful poll."
+    },
+    "upstream_healthy": {
+      "type": "boolean",
+      "description": "False means the last poll for THIS format failed. Rows may still be present and stale — the cache is retained on failure, and no staleness bound is enforced yet."
+    }
+  }
+}

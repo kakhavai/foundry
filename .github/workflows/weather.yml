@@ -10,6 +10,7 @@ on:
       - 'helm/values/weather/**'
       - 'helm/charts/generic-service/**'
       - '.github/actions/**'
+      - 'contracts/**'
   push:
     branches:
       - main
@@ -18,6 +19,7 @@ on:
       - 'helm/values/weather/**'
       - 'helm/charts/generic-service/**'
       - '.github/actions/**'
+      - 'contracts/**'
 
 # Cancel superseded PR runs; serialize (never cancel) main pushes so an in-flight
 # build-push / update-gitops-tag deploy is not killed mid-commit.

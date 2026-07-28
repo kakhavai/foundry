@@ -1,0 +1,38 @@
+name: foundry-cli
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+on:
+  pull_request:
+    paths:
+      - "services/foundry-cli/**"
+      - ".github/workflows/foundry-cli.yml"
+      - ".github/actions/python-lint/**"
+      - ".github/actions/python-test/**"
+  push:
+    branches: [main]
+    paths:
+      - "services/foundry-cli/**"
+      - ".github/workflows/foundry-cli.yml"
+
+concurrency:
+  group: foundry-cli-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-lint
+        with:
+          working-directory: services/foundry-cli
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-test
+        with:
+          working-directory: services/foundry-cli

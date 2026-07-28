@@ -1,6 +1,6 @@
 # weather
 
-Current conditions by NFL stadium location. Fetches live data from [Open-Meteo](https://open-meteo.com/) (no API key required).
+Current conditions by pro football stadium location. Fetches live data from [Open-Meteo](https://open-meteo.com/) (no API key required).
 
 ## Endpoints
 
@@ -8,7 +8,7 @@ Current conditions by NFL stadium location. Fetches live data from [Open-Meteo](
 |---|---|---|
 | `GET` | `/health` | Liveness check — `{"status": "ok"}` |
 | `GET` | `/metrics` | Prometheus metrics |
-| `GET` | `/weather/stadiums` | Current conditions for all 30 NFL stadiums |
+| `GET` | `/weather/stadiums` | Current conditions for all 30 pro football stadiums |
 | `GET` | `/weather/stadiums/{id}` | Current conditions for a single stadium |
 
 Stadium IDs are short slugs: `lambeau`, `gillette`, `metlife`, etc. Full list from `/weather/stadiums`.
