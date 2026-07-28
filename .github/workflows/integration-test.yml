@@ -51,7 +51,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v5
         with:
-          helm-version: "v3.17.3"
+          # The input is `version`, not `helm-version` — v5 ignores unknown
+          # inputs with only a warning, so a typo here silently installs latest.
+          version: "v3.17.3"
       - name: Verify helm is available
         run: helm version
       - uses: astral-sh/setup-uv@v5
