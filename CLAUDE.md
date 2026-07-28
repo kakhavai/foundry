@@ -40,7 +40,7 @@ The data collection services (injury, weather, news, betting lines, field type, 
 
 | Service | Port | Status | Purpose |
 |---|---|---|---|
-| `weather` | 8000 | Live | Current conditions by location (Open-Meteo, no auth); `/weather/stadiums` stub reserved for per-stadium pro football game-day forecasts |
+| `weather` | 8000 | Live | Current conditions per pro football stadium (Open-Meteo, no auth). Exposes exactly `/health`, `/metrics`, `/weather/stadiums`, `/weather/stadiums/{stadium_id}` — there is no by-location route |
 | `player-projections` | 8001 | Stub mode | Polls `player-data` for weekly projections; returns empty until `player-data` is built |
 
 ### player-projections — How It Works

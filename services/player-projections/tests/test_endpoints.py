@@ -34,11 +34,12 @@ def test_projections_empty_with_no_upstream_data():
 def test_projections_returns_cached_players():
     _state["projections"] = [
         {
-            "id": "allen-josh",
+            "id": "p_allenjosh",
             "name": "Josh Allen",
             "team": "BUF",
-            "position": "QB",
-            "projected_points": 32.1,
+            "pos": "QB",
+            "rank": 1,
+            "proj_points": {"floor": 18.4, "expected": 32.1, "ceiling": 41.7},
         }
     ]
     _state["upstream_healthy"] = True

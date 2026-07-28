@@ -35,4 +35,4 @@ async def fetch_projections(url: str) -> list[dict]:
         raise MalformedSnapshotError(
             f"expected `players` to be a list, got {type(players).__name__}"
         )
-    return players
+    return [p for p in players if isinstance(p, dict)]

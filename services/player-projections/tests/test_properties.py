@@ -48,7 +48,12 @@ async def test_error_status_raises_http_error(status):
 @given(size=st.integers(min_value=500, max_value=2000))
 @respx.mock
 async def test_large_snapshot_parses(size):
-    """A full-league snapshot is ~500-1000 players. Parsing must not degrade."""
+    """A snapshot far larger than production still parses without truncation.
+
+    Real files are ~350 rows (roughly 100 per display lane); this runs well
+    past that. It asserts completeness only — there is no timing assertion, so
+    it says nothing about parse performance.
+    """
     payload = {
         "format": "ppr",
         "players": [{"id": f"p_{i}", "rank": i + 1} for i in range(size)],

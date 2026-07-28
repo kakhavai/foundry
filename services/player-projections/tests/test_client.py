@@ -49,6 +49,28 @@ async def test_fetch_projections_raises_on_network_failure():
 
 
 @respx.mock
+async def test_fetch_projections_drops_non_dict_elements():
+    """Malformed elements in `players` must not reach callers as if they were
+    valid records — a downstream frontend can't render a bare string or int."""
+    respx.get(S3_URL).mock(
+        return_value=httpx.Response(
+            200, json={"players": ["garbage", 42, None, MOCK_PLAYERS[0]]}
+        )
+    )
+    players = await fetch_projections(S3_URL)
+    assert players == [MOCK_PLAYERS[0]]
+
+
+@respx.mock
+async def test_fetch_projections_all_non_dict_yields_empty_list():
+    respx.get(S3_URL).mock(
+        return_value=httpx.Response(200, json={"players": ["garbage", 42, None]})
+    )
+    players = await fetch_projections(S3_URL)
+    assert players == []
+
+
+@respx.mock
 async def test_fetch_projections_wraps_invalid_encoding():
     """A body that fails to decode as text must raise MalformedSnapshotError,
     not leak an untyped UnicodeDecodeError. `\\x80\\x80\\x80\\x80` has no BOM

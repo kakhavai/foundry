@@ -35,6 +35,7 @@ jobs:
               # Without this, a PR editing only the platform tests skips the very
               # job that runs them — including the OTel-DNS guard test itself.
               - 'tests/**'
+              - 'contracts/**'
 
   # Repo-root tests/ cover platform concerns that no per-service suite can see —
   # rollback, Argo CD deploy manifests, and the OTel collector DNS name rendered
@@ -51,9 +52,11 @@ jobs:
       - uses: azure/setup-helm@v5
         with:
           helm-version: "v3.17.3"
+      - name: Verify helm is available
+        run: helm version
       - uses: astral-sh/setup-uv@v5
       - name: Run platform tests
-        run: uv run --with pyyaml --with pytest pytest tests/ -q
+        run: uv run --with pyyaml==6.0.3 --with pytest==9.0.3 pytest tests/ -q
 
   integration-test:
     needs: changes

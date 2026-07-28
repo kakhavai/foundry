@@ -81,14 +81,19 @@ is why fixtures must be generated against a populated, successful response.
 
 **The `player-data` schemas encode an intended shape, not an observed one.**
 No provider exists yet. They become genuinely enforcing when `player-data`
-validates its own output against the same files in its CI. Three gaps are known
-and deliberate: `format: date-time` is not mechanically checked (`jsonschema`
-ships without `rfc3339-validator`); `floor <= expected <= ceiling` cannot be
-expressed, since JSON Schema 2020-12 has no portable sibling comparison; and the
-`pos`-based conditional requires the right fields per position without forbidding
-the wrong ones — a DST row may also carry `rank` and still validate. `FLEX` is a
-frontend-derived display lane, not a stored position, and does not appear in the
-`pos` enum.
+validates its own output against the same files in its CI. One schema gap
+remains, not three: `floor <= expected <= ceiling` cannot be expressed in JSON
+Schema 2020-12 — there is no portable way to compare sibling properties — so it
+is asserted as a business rule against the **committed fixtures only**
+(`test_fixture_spreads_are_ordered`), not against arbitrary provider output.
+`format: date-time` is mechanically enforced (`jsonschema[format]` with a
+`FormatChecker` attached — see `test_bad_generated_at_is_rejected`), and the
+`pos`-based conditional positively excludes the wrong branch's fields in both
+directions (see `test_dst_row_carrying_skill_player_fields_is_rejected` and
+`test_wr_row_carrying_dst_fields_is_rejected`) — a DST row carrying `rank` now
+fails validation, as does a skill player carrying `yahoo_rank`. `FLEX` is a
+frontend-derived display lane, not a stored position, and does not appear in
+the `pos` enum.
 
 **Concurrency tests are regression guards, not race detectors.** `weather` holds
 no shared mutable state, so its concurrent test cannot currently fail for the
@@ -102,6 +107,20 @@ appears — but neither proves race safety today.
 80%, and `weather` is at 100%. That measures execution, not assertion quality.
 Several tests in this phase reached the reviewer as passing-but-toothless and
 had to be strengthened; assume the next one will too.
+
+**`_poll_loop`'s bare `except Exception` emits no signal.** Every upstream
+failure in `player-projections` — 5xx, timeout, malformed snapshot, encoding
+error — collapses to one boolean (`upstream_healthy`), with no log, no metric,
+no exception detail, and no staleness bound on the retained cache. The service
+can serve week-old data indefinitely and nothing in Loki, Tempo, or Prometheus
+says why or for how long. This is deliberate for now: neither service logs
+anything today, and choosing a platform-wide logging approach (structured vs
+plain, OTel log bridge or not) is its own decision rather than a side effect of
+a testing phase. Tracked as a Phase 5B follow-up.
+
+**The coverage gate is 80 against actuals of 93-100.** A regression from 100%
+to 81% passes silently. Deliberate: a ratcheting threshold makes unrelated PRs
+fail. Tracked as a Phase 5B follow-up, not raised here.
 
 ## Not Covered Here
 

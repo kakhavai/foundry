@@ -20,6 +20,19 @@ VALID_CURRENT = {
     }
 }
 
+# Well-formed 200 whose `current` object is missing a required field. The
+# upstream never raises an HTTP error status here — this exercises the
+# KeyError path in weather/client.py, not the httpx exception path.
+MALFORMED_CURRENT = {
+    "current": {
+        "relative_humidity_2m": 62,
+        "wind_speed_10m": 11.0,
+        "weather_code": 1,
+        "precipitation": 0.0,
+        "time": "2026-09-30T14:00",
+    }
+}
+
 
 @pytest.fixture
 def client():
@@ -78,6 +91,37 @@ def test_all_stadiums_survives_upstream_timeout(client):
 
     assert body["count"] == len(STADIUMS)
     assert all(s["weather"] is None for s in body["stadiums"])
+
+
+@respx.mock
+def test_all_stadiums_degrades_on_malformed_upstream_body(client):
+    """A well-formed 200 missing a required `current.*` field must degrade that
+    stadium's weather to None, not 500 the whole collection."""
+    respx.get(WEATHER_URL).mock(
+        return_value=httpx.Response(200, json=MALFORMED_CURRENT)
+    )
+
+    resp = client.get("/weather/stadiums")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == len(STADIUMS)
+    assert all(s["weather"] is None for s in body["stadiums"])
+
+
+@respx.mock
+def test_single_stadium_returns_502_on_malformed_upstream_body(client):
+    """A well-formed 200 missing a required `current.*` field must surface as a
+    502, not an unhandled 500."""
+    respx.get(WEATHER_URL).mock(
+        return_value=httpx.Response(200, json=MALFORMED_CURRENT)
+    )
+    stadium_id = next(iter(STADIUMS))
+
+    resp = client.get(f"/weather/stadiums/{stadium_id}")
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "Weather API error"
 
 
 @respx.mock

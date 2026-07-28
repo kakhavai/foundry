@@ -1,6 +1,6 @@
 # Phase 5 — Resilience Testing & AI Agent Adversarial Layer
 
-> **Status:** ▶ **Next** — design complete, implementation not started · [roadmap](../../README.md#phases)
+> **Status:** 🚧 **In progress** — Stage 1 (rigorous service and platform testing) delivered; Stages 2 and 3 not started · [roadmap](../../README.md#phases)
 
 **Goal:** Prove the platform survives real-world conditions — not just happy-path deployments. Introduce rigorous service and platform-level testing in three escalating stages: exhaustive automated testing, chaos and scale validation, and finally an AI agent adversarial layer where synthetic engineers are released against the platform to test whether it can detect, recover, and iterate under realistic failure modes.
 
@@ -165,7 +165,7 @@ The catalog is updated after every adversarial test session. It becomes the livi
 
 ## Milestones
 
-- [ ] Stage 1: Coverage thresholds enforced, schema contract tests in CI, Hypothesis suites for all external data parsers
+- [x] Stage 1: Coverage thresholds enforced, schema contract tests in CI, Hypothesis suites for all external data parsers
 - [ ] Stage 2: Chaos Mesh running, all 5 chaos scenarios documented and passing, k6 baselines established for all services
 - [ ] Stage 3: Agent scaffolding built, first adversarial session run against weather and player-projections, fault catalog seeded with results
 

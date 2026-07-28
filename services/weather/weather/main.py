@@ -41,7 +41,13 @@ async def all_stadiums_weather():
                 weather = await fetch_weather_for_coords(
                     stadium["latitude"], stadium["longitude"], client
                 )
-            except (httpx.HTTPStatusError, httpx.RequestError):
+            except (
+                httpx.HTTPStatusError,
+                httpx.RequestError,
+                KeyError,
+                TypeError,
+                ValueError,
+            ):
                 weather = None
             results.append({**stadium, "weather": weather})
     return {"stadiums": results, "count": len(results)}
@@ -57,7 +63,7 @@ async def stadium_weather(stadium_id: str):
             weather = await fetch_weather_for_coords(
                 stadium["latitude"], stadium["longitude"], client
             )
-        except httpx.HTTPStatusError:
+        except (httpx.HTTPStatusError, KeyError, TypeError, ValueError):
             raise HTTPException(status_code=502, detail="Weather API error")
         except httpx.RequestError:
             raise HTTPException(status_code=502, detail="Weather API unreachable")

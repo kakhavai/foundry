@@ -41,11 +41,11 @@ graph LR
 ## What Gets Built
 
 ### Service — weather
-A Python HTTP API (FastAPI) that returns current weather conditions for a given location using the Open-Meteo API (free, no auth required). Endpoints:
+A Python HTTP API (FastAPI) that returns current weather conditions for pro football stadiums using the Open-Meteo API (free, no auth required). Endpoints:
 - `GET /health` — liveness check
 - `GET /metrics` — Prometheus scrape endpoint
-- `GET /weather/{location}` — current conditions (temperature, humidity, wind speed, precipitation)
-- `GET /weather/stadiums` — stub endpoint; reserved for future per-stadium pro football game-day weather
+- `GET /weather/stadiums` — current conditions for every stadium in the roster; a stadium whose upstream call fails comes back with `weather: null` rather than failing the collection
+- `GET /weather/stadiums/{stadium_id}` — current conditions for one stadium (temperature, humidity, wind speed, precipitation); 404 if unknown, 502 if the upstream fails
 
 The service is instrumented with the OpenTelemetry Python SDK. Every request produces a trace span. Request count and latency are emitted as metrics. Structured JSON logs are written to stdout.
 

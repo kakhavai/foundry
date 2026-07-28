@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -168,48 +169,47 @@ SHAPE_HINT = (
 )
 
 
-def test_response_shapes_match_committed_contract(monkeypatch):
+async def test_response_shapes_match_committed_contract(monkeypatch):
     """Catches renamed or dropped response fields at any nesting depth.
 
-    The cache is pre-populated so nested projection fields appear in the shape —
-    an empty stub-mode response would bake a weaker contract into the fixture.
+    Data flows through the real production path, not a literal seeded straight
+    into `_state`: `fetch_projections()` parses the committed player-data
+    fixture served over HTTP, `_poll_loop()` runs one real iteration and
+    populates `_state`, and `/projections` serves it back through `TestClient`.
+    A field rename in `client.py`'s return path or in the fixture itself now
+    breaks this test — see the `main.py`/`client.py` rename check below.
+
+    `response_shape` represents a list by its FIRST element only, so this
+    contract pins skill-player fields (rank, proj_points.*, blurb) from the
+    fixture's leading WR entry and does NOT cover DST's yahoo_rank/espn_rank.
+    Those are asserted directly in
+    tests/integration/test_app.py::test_populated_cache_is_served.
     """
-    monkeypatch.setenv("PLAYER_DATA_URL", "")
-    # `response_shape` represents a list by its FIRST element only, so this
-    # contract pins skill-player fields (rank, proj_points.*, blurb) and does
-    # NOT cover DST's yahoo_rank/espn_rank. Those are asserted directly in
-    # tests/integration/test_app.py::test_populated_cache_is_served.
-    main._state["projections"] = [
-        {
-            "id": "p_8f3a21",
-            "name": "Deebo Samuel",
-            "pos": "WR",
-            "team": "SF",
-            "rank": 3,
-            "proj_points": {"floor": 5.2, "expected": 12.4, "ceiling": 20.1},
-            "blurb": "Faces a secondary allowing the third-most yards to WRs.",
-        },
-        {
-            "id": "p_9a2f77",
-            "name": "Baltimore",
-            "pos": "DST",
-            "team": "BAL",
-            "yahoo_rank": 1,
-            "espn_rank": 3,
-        },
-    ]
-    main._state["upstream_healthy"] = True
-    main._state["last_updated"] = "2026-09-30T14:00:00+00:00"
+    fixture = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
+    url = "https://example.test/ppr.json"
+    monkeypatch.setenv("PLAYER_DATA_URL", url)
+
+    async def stop_after_first(_seconds):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(main.asyncio, "sleep", stop_after_first)
+
     committed = json.loads(RESPONSES.read_text())
 
-    with TestClient(app) as client:
-        actual = {
-            "/health": response_shape(client.get("/health").json()),
-            "/projections": response_shape(client.get("/projections").json()),
-        }
+    try:
+        with respx.mock:
+            respx.get(url).mock(return_value=httpx.Response(200, json=fixture))
+            with pytest.raises(asyncio.CancelledError):
+                await main._poll_loop()
 
-    main._state["projections"] = []
-    main._state["upstream_healthy"] = False
-    main._state["last_updated"] = None
+        with TestClient(app) as client:
+            actual = {
+                "/health": response_shape(client.get("/health").json()),
+                "/projections": response_shape(client.get("/projections").json()),
+            }
+    finally:
+        main._state["projections"] = []
+        main._state["upstream_healthy"] = False
+        main._state["last_updated"] = None
 
     assert actual == committed, SHAPE_HINT

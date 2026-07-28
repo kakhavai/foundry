@@ -94,9 +94,11 @@ def test_upstream_order_is_preserved(client):
 def test_concurrent_reads_are_consistent():
     """Fifty simultaneous reads against a populated cache return identical bodies.
 
-    Unlike the equivalent weather test, this one exercises real shared mutable
-    state: `main._state` is a module-level dict read by the handler and written
-    by the background poll loop.
+    `main._state` is genuinely shared mutable state, but no concurrent writer
+    runs here — the poll loop is not started — so this cannot currently detect
+    a read/write race. It is a regression guard: reads must stay consistent,
+    and if a writer is ever exercised alongside them this starts doing real
+    work. Treat a failure here as a genuine concurrency bug.
     """
     main._state["projections"] = [{"id": f"p_{i}", "rank": i + 1} for i in range(100)]
 
