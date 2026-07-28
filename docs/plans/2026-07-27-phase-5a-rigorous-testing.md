@@ -2887,6 +2887,45 @@ silently while `/metrics` keeps working.
 5. Add an integration suite under `tests/integration/`.
 6. Confirm the 80% gate passes before opening the PR.
 
+## Known Limits of These Tests
+
+Stated plainly so nobody mistakes a green suite for a proof it does not carry.
+
+**The OpenAPI snapshot cannot see response field names.** Handlers return bare
+dicts with no `response_model=`, so FastAPI emits an empty schema for every 200
+response. The snapshot catches routes added or removed, path-parameter changes,
+and operationId renames — not a renamed field inside a body. That is what the
+response-shape contracts exist for.
+
+**Response-shape contracts pin a list by its first element only.** For
+`player-projections` the seed leads with a skill player, so `rank`,
+`proj_points.*`, and `blurb` are contracted while DST's `yahoo_rank`/`espn_rank`
+are not — those are asserted directly in the integration suite instead. A `null`
+value or an empty list or dict also collapses its subtree to a bare path, which
+is why fixtures must be generated against a populated, successful response.
+
+**The `player-data` schemas encode an intended shape, not an observed one.**
+No provider exists yet. They become genuinely enforcing when `player-data`
+validates its own output against the same files in its CI. Three gaps are known
+and deliberate: `format: date-time` is not mechanically checked (`jsonschema`
+ships without `rfc3339-validator`); `floor <= expected <= ceiling` cannot be
+expressed, since JSON Schema 2020-12 has no portable sibling comparison; and the
+`pos`-based conditional requires the right fields per position without forbidding
+the wrong ones — a DST row may also carry `rank` and still validate.
+
+**Concurrency tests are regression guards, not race detectors.** `weather` holds
+no shared mutable state, so its concurrent test cannot currently fail for the
+reason its name suggests. `player-projections` does hold shared state in
+`main._state`, but no writer runs during the read burst, so under asyncio's
+cooperative scheduling it is close to guaranteed to pass. Both are worth keeping
+— they start doing real work the moment shared state or a concurrent writer
+appears — but neither proves race safety today.
+
+**Coverage is a floor, not evidence of good tests.** Every package sits above
+80%, and `weather` is at 100%. That measures execution, not assertion quality.
+Several tests in this phase reached the reviewer as passing-but-toothless and
+had to be strengthened; assume the next one will too.
+
 ## Not Covered Here
 
 Chaos scenarios, load and scale testing, and adversarial agent sessions are
