@@ -122,6 +122,10 @@ def test_response_shapes_match_committed_contract(monkeypatch):
     an empty stub-mode response would bake a weaker contract into the fixture.
     """
     monkeypatch.setenv("PLAYER_DATA_URL", "")
+    # `response_shape` represents a list by its FIRST element only, so this
+    # contract pins skill-player fields (rank, proj_points.*, blurb) and does
+    # NOT cover DST's yahoo_rank/espn_rank. Those are asserted directly in
+    # tests/integration/test_app.py::test_populated_cache_is_served.
     main._state["projections"] = [
         {
             "id": "p_8f3a21",

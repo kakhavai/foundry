@@ -77,12 +77,18 @@ def test_populated_cache_is_served(client):
 
 def test_upstream_order_is_preserved(client):
     """The frontend renders ranked lanes directly from this order — it must not
-    be reordered or deduplicated in transit."""
-    main._state["projections"] = [{"id": f"p_{i}", "rank": i + 1} for i in range(50)]
+    be reordered or deduplicated in transit.
+
+    Rank deliberately runs opposite to list position: a regression that sorted
+    by rank would reverse the output and fail this test. With rank ascending in
+    list order, such a bug would be invisible.
+    """
+    main._state["projections"] = [{"id": f"p_{i}", "rank": 50 - i} for i in range(50)]
 
     body = client.get("/projections").json()
 
     assert [p["id"] for p in body["projections"]] == [f"p_{i}" for i in range(50)]
+    assert [p["rank"] for p in body["projections"]] == list(range(50, 0, -1))
 
 
 def test_concurrent_reads_are_consistent():
