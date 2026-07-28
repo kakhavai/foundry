@@ -133,7 +133,13 @@ can serve week-old data indefinitely and nothing in Loki, Tempo, or Prometheus
 says why or for how long. This is deliberate for now: neither service logs
 anything today, and choosing a platform-wide logging approach (structured vs
 plain, OTel log bridge or not) is its own decision rather than a side effect of
-a testing phase. Tracked as a Phase 5B follow-up.
+a testing phase.
+
+**Resolved for Phase 5B: metrics first, logs later.** `upstream_poll_failures_total{format, reason}`,
+`upstream_cache_age_seconds{format}`, and `upstream_healthy{format}` land before
+any chaos scenario is written, because a scenario's pass/fail criterion is a
+Prometheus query and a failure mode that emits no metric cannot supply one. The
+logging decision stays open — nothing forces it yet.
 
 **The coverage gate is 80 against actuals of 93-100.** A regression from 100%
 to 81% passes silently. Deliberate: a ratcheting threshold makes unrelated PRs
