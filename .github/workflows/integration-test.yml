@@ -32,6 +32,9 @@ jobs:
               - 'helm/**'
               - 'infra/**'
               - 'scripts/**'
+              # Without this, a PR editing only the platform tests skips the very
+              # job that runs them — including the OTel-DNS guard test itself.
+              - 'tests/**'
 
   # Repo-root tests/ cover platform concerns that no per-service suite can see —
   # rollback, Argo CD deploy manifests, and the OTel collector DNS name rendered
