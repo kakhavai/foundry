@@ -45,7 +45,7 @@ A Python HTTP API (FastAPI) that returns current weather conditions for a given 
 - `GET /health` — liveness check
 - `GET /metrics` — Prometheus scrape endpoint
 - `GET /weather/{location}` — current conditions (temperature, humidity, wind speed, precipitation)
-- `GET /weather/stadiums` — stub endpoint; reserved for future per-stadium NFL game-day weather
+- `GET /weather/stadiums` — stub endpoint; reserved for future per-stadium pro football game-day weather
 
 The service is instrumented with the OpenTelemetry Python SDK. Every request produces a trace span. Request count and latency are emitted as metrics. Structured JSON logs are written to stdout.
 

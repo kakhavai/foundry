@@ -18,7 +18,8 @@ The end-state is a fully managed fantasy football product running on Foundry:
 player-data (internal, auth-gated)
   └── hidden backend — aggregates data from proprietary sources
       (injury reports, weather, news, betting lines, field type, etc.)
-  └── never exposed publicly; accessed only by internal services via API key
+  └── never exposed publicly; publishes curated snapshots to S3 that internal
+      services poll (S3 auth handled at the infrastructure level — see ADR 0002)
   └── the methodology and data pipeline stay private
 
 player-projections (this service — first real consumer of player-data)
@@ -39,14 +40,19 @@ The data collection services (injury, weather, news, betting lines, field type, 
 
 | Service | Port | Status | Purpose |
 |---|---|---|---|
-| `weather` | 8000 | Live | Current conditions by location (Open-Meteo, no auth); `/weather/stadiums` stub reserved for per-stadium NFL game-day forecasts |
+| `weather` | 8000 | Live | Current conditions by location (Open-Meteo, no auth); `/weather/stadiums` stub reserved for per-stadium pro football game-day forecasts |
 | `player-projections` | 8001 | Stub mode | Polls `player-data` for weekly projections; returns empty until `player-data` is built |
 
 ### player-projections — How It Works
 
 Runs in **stub mode** when `PLAYER_DATA_URL` is empty (no upstream yet). Returns `{"projections":[], "count":0, "upstream_healthy":false}`.
 
-**Upstream architecture:** `player-data` (the private backend) aggregates data from internal sources — weather, injury reports, betting lines, news, field type, etc. — and writes a curated projections JSON file to S3. `player-projections` polls that S3 file on an interval and caches the result in memory.
+**Upstream architecture:** `player-data` aggregates data from internal sources —
+weather, injury reports, betting lines, news, field type — and writes one
+curated projections JSON document per scoring format (standard, half-PPR, PPR)
+to S3. `player-projections` polls the document matching the requested format on
+an interval and caches the result in memory. The document shape is contracted in
+`contracts/player-data/` — see `docs/testing-strategy.md`.
 
 Once `player-data` begins publishing:
 1. Set `PLAYER_DATA_URL` in the ConfigMap to the S3 file URL
