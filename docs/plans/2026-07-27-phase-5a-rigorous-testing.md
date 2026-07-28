@@ -2099,13 +2099,13 @@ def test_openapi_snapshot_matches_committed_contract():
 
 def test_documented_paths_are_present():
     paths = set(app.openapi()["paths"])
-    assert {
-        "/health",
-        "/metrics",
-        "/projections",
-        "/projections/{player_id}",
-    } <= paths
+    assert paths == {"/health", "/metrics", "/projections"}
 ```
+
+Note the exact-equality assertion rather than a subset. Task 10b deleted
+`GET /projections/{player_id}` — the API is bulk-only. Asserting equality means a
+re-introduced per-player route fails the test rather than passing silently, which
+a `<=` subset check would allow.
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -2156,16 +2156,25 @@ def test_response_shapes_match_committed_contract():
     The cache is pre-populated so nested projection fields appear in the shape —
     an empty stub-mode response would bake a weaker contract into the fixture.
     """
-    main._state["projections"] = {
-        "p_8f3a21": {
+    main._state["projections"] = [
+        {
             "id": "p_8f3a21",
             "name": "Deebo Samuel",
             "pos": "WR",
             "team": "SF",
             "rank": 3,
             "proj_points": {"floor": 5.2, "expected": 12.4, "ceiling": 20.1},
-        }
-    }
+            "blurb": "Faces a secondary allowing the third-most yards to WRs.",
+        },
+        {
+            "id": "p_9a2f77",
+            "name": "Baltimore",
+            "pos": "DST",
+            "team": "BAL",
+            "yahoo_rank": 1,
+            "espn_rank": 3,
+        },
+    ]
     main._state["upstream_healthy"] = True
     main._state["last_updated"] = "2026-09-30T14:00:00+00:00"
     committed = json.loads(RESPONSES.read_text())
@@ -2174,17 +2183,20 @@ def test_response_shapes_match_committed_contract():
         actual = {
             "/health": response_shape(client.get("/health").json()),
             "/projections": response_shape(client.get("/projections").json()),
-            "/projections/{player_id}": response_shape(
-                client.get("/projections/p_8f3a21").json()
-            ),
         }
 
-    main._state["projections"] = {}
+    main._state["projections"] = []
     main._state["upstream_healthy"] = False
     main._state["last_updated"] = None
 
     assert actual == committed, SHAPE_HINT
 ```
+
+**On `response_shape` and heterogeneous lists:** the helper represents a list by its
+FIRST element only. The seed above deliberately puts a skill player first, so the
+contract pins `projections[].rank` and `projections[].proj_points.*`. The DST entry
+(second) contributes nothing to the shape. That is a known limitation of the helper,
+not a bug to fix here — record it, and do not reorder the seed to chase DST fields.
 
 Copy the `response_shape` function from `services/weather/tests/test_contract.py`
 unchanged, and add these imports at the top of the file:
@@ -2228,11 +2240,11 @@ from player_projections.main import app
 def stub_mode(monkeypatch):
     """No upstream configured — the deployed default today."""
     monkeypatch.setenv("PLAYER_DATA_URL", "")
-    main._state["projections"] = {}
+    main._state["projections"] = []
     main._state["last_updated"] = None
     main._state["upstream_healthy"] = False
     yield
-    main._state["projections"] = {}
+    main._state["projections"] = []
     main._state["last_updated"] = None
     main._state["upstream_healthy"] = False
 
@@ -2253,39 +2265,66 @@ def test_stub_mode_returns_empty_projections(client):
     assert body["last_updated"] is None
 
 
-def test_unknown_player_returns_404(client):
-    resp = client.get("/projections/p_does_not_exist")
+def test_per_player_lookup_route_does_not_exist(client):
+    """The API is bulk-only. A per-player route must 404 as an unknown path,
+    not resolve to a handler — Task 10b deleted it deliberately."""
+    resp = client.get("/projections/p_8f3a21")
 
     assert resp.status_code == 404
-    assert resp.json()["detail"] == "Player not found"
+    assert "/projections/{player_id}" not in app.openapi()["paths"]
 
 
 def test_populated_cache_is_served(client):
-    main._state["projections"] = {
-        "p_8f3a21": {
+    main._state["projections"] = [
+        {
             "id": "p_8f3a21",
             "name": "Deebo Samuel",
             "pos": "WR",
             "rank": 3,
             "proj_points": {"floor": 5.2, "expected": 12.4, "ceiling": 20.1},
-        }
-    }
+        },
+        {
+            "id": "p_9a2f77",
+            "name": "Baltimore",
+            "pos": "DST",
+            "team": "BAL",
+            "yahoo_rank": 1,
+            "espn_rank": 3,
+        },
+    ]
     main._state["upstream_healthy"] = True
 
     listing = client.get("/projections").json()
-    single = client.get("/projections/p_8f3a21").json()
 
-    assert listing["count"] == 1
+    assert listing["count"] == 2
     assert listing["upstream_healthy"] is True
-    assert single["name"] == "Deebo Samuel"
-    assert single["proj_points"]["ceiling"] == 20.1
+    assert listing["projections"][0]["name"] == "Deebo Samuel"
+    assert listing["projections"][0]["proj_points"]["ceiling"] == 20.1
+    assert listing["projections"][1]["espn_rank"] == 3
+
+
+def test_upstream_order_is_preserved(client):
+    """The frontend renders ranked lanes directly from this order — it must not
+    be reordered or deduplicated in transit."""
+    main._state["projections"] = [
+        {"id": f"p_{i}", "rank": i + 1} for i in range(50)
+    ]
+
+    body = client.get("/projections").json()
+
+    assert [p["id"] for p in body["projections"]] == [f"p_{i}" for i in range(50)]
 
 
 def test_concurrent_reads_are_consistent():
-    """Fifty simultaneous reads against a populated cache return identical bodies."""
-    main._state["projections"] = {
-        f"p_{i}": {"id": f"p_{i}", "rank": i + 1} for i in range(100)
-    }
+    """Fifty simultaneous reads against a populated cache return identical bodies.
+
+    Unlike the equivalent weather test, this one exercises real shared mutable
+    state: `main._state` is a module-level dict read by the handler and written
+    by the background poll loop.
+    """
+    main._state["projections"] = [
+        {"id": f"p_{i}", "rank": i + 1} for i in range(100)
+    ]
 
     async def hammer():
         transport = httpx.ASGITransport(app=app)
