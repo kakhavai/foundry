@@ -9,7 +9,6 @@ Weekly fantasy football player projections. Polls an S3 file published by the in
 | `GET` | `/health` | Liveness check — `{"status": "ok"}` |
 | `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/projections` | All cached player projections |
-| `GET` | `/projections/{player_id}` | Single player projection |
 
 In stub mode (no `PLAYER_DATA_URL` set), `/projections` returns `{"projections": [], "count": 0, "upstream_healthy": false}`.
 

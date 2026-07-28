@@ -2,7 +2,7 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
@@ -10,7 +10,7 @@ from .client import fetch_projections
 
 # In-memory projection cache — refreshed by the background polling loop.
 _state: dict = {
-    "projections": {},  # player_id → player dict
+    "projections": [],  # list of player dicts, in upstream order
     "last_updated": None,
     "upstream_healthy": False,
 }
@@ -26,11 +26,7 @@ async def _poll_loop() -> None:
     while True:
         try:
             players = await fetch_projections(url)
-            _state["projections"] = {
-                p["id"]: p
-                for p in players
-                if isinstance(p, dict) and isinstance(p.get("id"), str)
-            }
+            _state["projections"] = players
             _state["last_updated"] = _now_iso()
             _state["upstream_healthy"] = True
         except Exception:
@@ -77,16 +73,8 @@ async def prometheus_metrics():
 @app.get("/projections")
 async def list_projections():
     return {
-        "projections": list(_state["projections"].values()),
+        "projections": _state["projections"],
         "count": len(_state["projections"]),
         "last_updated": _state["last_updated"],
         "upstream_healthy": _state["upstream_healthy"],
     }
-
-
-@app.get("/projections/{player_id}")
-async def get_projection(player_id: str):
-    player = _state["projections"].get(player_id)
-    if player is None:
-        raise HTTPException(status_code=404, detail="Player not found")
-    return player

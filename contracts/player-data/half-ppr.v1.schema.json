@@ -18,7 +18,7 @@
   "$defs": {
     "player": {
       "type": "object",
-      "required": ["id", "name", "pos", "team", "rank", "proj_points"],
+      "required": ["id", "name", "pos", "team"],
       "additionalProperties": false,
       "properties": {
         "id": { "type": "string", "pattern": "^p_[a-z0-9]+$" },
@@ -26,8 +26,18 @@
         "pos": { "enum": ["QB", "RB", "WR", "TE", "K", "DST"] },
         "team": { "type": "string", "minLength": 2, "maxLength": 4 },
         "rank": { "type": "integer", "minimum": 1 },
-        "proj_points": { "$ref": "#/$defs/spread" }
-      }
+        "proj_points": { "$ref": "#/$defs/spread" },
+        "yahoo_rank": { "type": "integer", "minimum": 1 },
+        "espn_rank": { "type": "integer", "minimum": 1 },
+        "blurb": { "type": "string", "maxLength": 600 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "pos": { "const": "DST" } } },
+          "then": { "required": ["yahoo_rank", "espn_rank"] },
+          "else": { "required": ["rank", "proj_points"] }
+        }
+      ]
     },
     "spread": {
       "type": "object",
@@ -37,7 +47,8 @@
         "floor": { "type": "number", "minimum": 0 },
         "expected": { "type": "number", "minimum": 0 },
         "ceiling": { "type": "number", "minimum": 0 }
-      }
+      },
+      "description": "floor <= expected <= ceiling is the intended invariant. JSON Schema 2020-12 cannot compare sibling properties, so it is not mechanically enforced here — assert it in provider and consumer tests."
     }
   }
 }

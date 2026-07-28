@@ -8,11 +8,11 @@ from player_projections import main
 @pytest.fixture(autouse=True)
 def reset_state():
     """_state is module-global; reset it around every test."""
-    main._state["projections"] = {}
+    main._state["projections"] = []
     main._state["last_updated"] = None
     main._state["upstream_healthy"] = False
     yield
-    main._state["projections"] = {}
+    main._state["projections"] = []
     main._state["last_updated"] = None
     main._state["upstream_healthy"] = False
 
@@ -53,7 +53,10 @@ async def test_successful_poll_populates_cache(monkeypatch, one_iteration):
     with pytest.raises(asyncio.CancelledError):
         await main._poll_loop()
 
-    assert set(main._state["projections"]) == {"p_1", "p_2"}
+    assert main._state["projections"] == [
+        {"id": "p_1", "name": "A", "pos": "WR", "rank": 1},
+        {"id": "p_2", "name": "B", "pos": "RB", "rank": 2},
+    ]
     assert main._state["upstream_healthy"] is True
     assert main._state["last_updated"] is not None
 
@@ -70,12 +73,12 @@ async def test_upstream_failure_marks_unhealthy(monkeypatch, one_iteration):
         await main._poll_loop()
 
     assert main._state["upstream_healthy"] is False
-    assert main._state["projections"] == {}
+    assert main._state["projections"] == []
 
 
 async def test_failure_after_success_retains_last_good_data(monkeypatch, one_iteration):
     """A later failure must not wipe the cache — stale data beats no data."""
-    main._state["projections"] = {"p_1": {"id": "p_1"}}
+    main._state["projections"] = [{"id": "p_1"}]
     main._state["upstream_healthy"] = True
     monkeypatch.setenv("PLAYER_DATA_URL", "https://example.test/ppr.json")
 
@@ -87,7 +90,7 @@ async def test_failure_after_success_retains_last_good_data(monkeypatch, one_ite
     with pytest.raises(asyncio.CancelledError):
         await main._poll_loop()
 
-    assert main._state["projections"] == {"p_1": {"id": "p_1"}}
+    assert main._state["projections"] == [{"id": "p_1"}]
     assert main._state["upstream_healthy"] is False
 
 

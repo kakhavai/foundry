@@ -10,7 +10,8 @@
       "pos": "WR",
       "team": "SF",
       "rank": 3,
-      "proj_points": { "floor": 5.2, "expected": 12.4, "ceiling": 20.1 }
+      "proj_points": { "floor": 5.2, "expected": 12.4, "ceiling": 20.1 },
+      "blurb": "Faces a secondary allowing the third-most yards to receivers. Volume has climbed in each of the last three weeks."
     },
     {
       "id": "p_1c9e04",
@@ -19,6 +20,23 @@
       "team": "SF",
       "rank": 1,
       "proj_points": { "floor": 11.0, "expected": 21.7, "ceiling": 33.5 }
+    },
+    {
+      "id": "p_4d7b12",
+      "name": "Harrison Butker",
+      "pos": "K",
+      "team": "KC",
+      "rank": 2,
+      "proj_points": { "floor": 4.0, "expected": 8.5, "ceiling": 15.0 }
+    },
+    {
+      "id": "p_9a2f77",
+      "name": "Baltimore",
+      "pos": "DST",
+      "team": "BAL",
+      "yahoo_rank": 1,
+      "espn_rank": 3,
+      "blurb": "Draws a rookie quarterback on the road."
     }
   ]
 }

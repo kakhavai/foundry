@@ -4,7 +4,6 @@ import respx
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from player_projections import main
 from player_projections.client import MalformedSnapshotError, fetch_projections
 
 SETTINGS = settings(
@@ -43,36 +42,6 @@ async def test_error_status_raises_http_error(status):
 
     with pytest.raises(httpx.HTTPStatusError):
         await fetch_projections(URL)
-
-
-@SETTINGS
-@given(
-    good=st.integers(min_value=1, max_value=5),
-    bad=st.integers(min_value=1, max_value=5),
-)
-async def test_records_without_id_are_skipped_not_fatal(monkeypatch, good, bad):
-    """One malformed record must not discard the whole batch."""
-    main._state["projections"] = {}
-    main._state["upstream_healthy"] = False
-
-    players = [{"id": f"p_{i}", "name": "ok"} for i in range(good)]
-    players += [{"name": "no id here"} for _ in range(bad)]
-
-    async def fake_fetch(url):
-        return players
-
-    async def stop(_s):
-        raise ImportError("stop")  # sentinel distinct from any real failure
-
-    monkeypatch.setenv("PLAYER_DATA_URL", URL)
-    monkeypatch.setattr(main, "fetch_projections", fake_fetch)
-    monkeypatch.setattr(main.asyncio, "sleep", stop)
-
-    with pytest.raises(ImportError):
-        await main._poll_loop()
-
-    assert len(main._state["projections"]) == good
-    assert main._state["upstream_healthy"] is True
 
 
 @SETTINGS

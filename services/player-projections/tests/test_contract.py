@@ -49,6 +49,11 @@ async def test_consumer_parses_a_schema_valid_snapshot():
 
     players = await fetch_projections(url)
 
-    assert len(players) == 2
-    assert {p["id"] for p in players} == {"p_8f3a21", "p_1c9e04"}
+    assert len(players) == 4
+    assert {p["id"] for p in players} == {
+        "p_8f3a21",
+        "p_1c9e04",
+        "p_4d7b12",
+        "p_9a2f77",
+    }
     assert players[0]["proj_points"]["expected"] == 12.4

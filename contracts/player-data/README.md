@@ -10,7 +10,32 @@
 | `ppr.v1.schema.json` | 1 point per reception |
 
 The three schemas are structurally identical. Scoring format changes the
-*values* of `rank` and `proj_points`, not the shape of the document.
+*values* of `rank` and `proj_points` for skill positions, not the shape of
+the document.
+
+Each player row is one of two shapes, selected by `pos`:
+
+- **DST** carries two ratings instead of a single projection: `yahoo_rank`
+  and `espn_rank`. It has no `rank` or `proj_points`.
+- **Every other stored position** (`QB`, `RB`, `WR`, `TE`, `K`) carries
+  `rank` and `proj_points` (a `floor`/`expected`/`ceiling` spread). The
+  intended invariant is `floor <= expected <= ceiling`; JSON Schema 2020-12
+  cannot compare sibling properties, so this is not mechanically enforced by
+  the schema — assert it in provider and consumer tests instead.
+
+`blurb` is an optional short free-text field (a few sentences) that the
+frontend shows on hover to explain a player's rating.
+
+`FLEX` is **not** a stored position and does not appear in the `pos` enum.
+It is a frontend-derived display lane, populated client-side from RB/WR/TE
+rows — there is nothing for the schema to represent.
+
+Kicker (`K`) uses standard kicking scoring, so it is format-independent:
+its rows are identical across `standard`, `half-ppr`, and `ppr`. `DST` rows
+are likewise identical across all three files, since they carry rank data
+rather than a scoring-dependent projection. This duplication (~64 rows) is
+deliberate — it means the frontend makes one fetch per scoring mode and has
+everything it needs, with no second file and no merge step.
 
 ## Direction
 
