@@ -11,7 +11,7 @@ from player_projections.main import app
 @pytest.fixture(autouse=True)
 def stub_mode(monkeypatch):
     """No upstream configured — the deployed default today."""
-    monkeypatch.setenv("PLAYER_DATA_URL", "")
+    monkeypatch.setenv("PROJECTIONS_SNAPSHOT_URL", "")
     for fmt in main.FORMATS:
         main._state[fmt] = main._empty_cache()
     yield

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://foundry.internal/contracts/player-data/snapshot.v1.schema.json",
-  "title": "player-data weekly projections snapshot",
+  "$id": "https://foundry.internal/contracts/projections-snapshot/snapshot.v1.schema.json",
+  "title": "Weekly projections snapshot",
   "description": "One curated projections document. Scoring format changes the VALUES in `rank` and `proj_points`, never the shape — so all three formats (standard, half-ppr, ppr) share this single schema and `format` records which one a given document is.",
   "type": "object",
   "required": ["format", "season", "week", "generated_at", "players"],

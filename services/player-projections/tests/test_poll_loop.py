@@ -28,8 +28,8 @@ def one_iteration(monkeypatch):
 
 
 async def test_stub_mode_returns_immediately_without_polling(monkeypatch):
-    """No PLAYER_DATA_URL means the loop exits without ever calling upstream."""
-    monkeypatch.setenv("PLAYER_DATA_URL", "")
+    """An empty PROJECTIONS_SNAPSHOT_URL exits before calling upstream at all."""
+    monkeypatch.setenv("PROJECTIONS_SNAPSHOT_URL", "")
     called = []
 
     async def record(url, expect_format=None):
@@ -46,7 +46,7 @@ async def test_stub_mode_returns_immediately_without_polling(monkeypatch):
 
 async def test_one_pass_fetches_every_format(monkeypatch, one_iteration):
     """A single iteration polls all three documents, not just one."""
-    monkeypatch.setenv("PLAYER_DATA_URL", URL_TEMPLATE)
+    monkeypatch.setenv("PROJECTIONS_SNAPSHOT_URL", URL_TEMPLATE)
     requested = []
 
     async def fake_fetch(url, expect_format=None):
@@ -66,7 +66,7 @@ async def test_one_pass_fetches_every_format(monkeypatch, one_iteration):
 
 
 async def test_successful_poll_populates_every_format_cache(monkeypatch, one_iteration):
-    monkeypatch.setenv("PLAYER_DATA_URL", URL_TEMPLATE)
+    monkeypatch.setenv("PROJECTIONS_SNAPSHOT_URL", URL_TEMPLATE)
 
     async def fake_fetch(url, expect_format=None):
         return [
@@ -89,7 +89,7 @@ async def test_successful_poll_populates_every_format_cache(monkeypatch, one_ite
 
 
 async def test_upstream_failure_marks_unhealthy(monkeypatch, one_iteration):
-    monkeypatch.setenv("PLAYER_DATA_URL", URL_TEMPLATE)
+    monkeypatch.setenv("PROJECTIONS_SNAPSHOT_URL", URL_TEMPLATE)
 
     async def boom(url, expect_format=None):
         raise RuntimeError("upstream down")
@@ -109,7 +109,7 @@ async def test_one_format_failing_does_not_affect_the_others(
 ):
     """Formats are polled independently — a broken half-ppr document must not
     mark standard and ppr unhealthy or discard their rows."""
-    monkeypatch.setenv("PLAYER_DATA_URL", URL_TEMPLATE)
+    monkeypatch.setenv("PROJECTIONS_SNAPSHOT_URL", URL_TEMPLATE)
 
     async def selective(url, expect_format=None):
         if expect_format == "half-ppr":
@@ -135,7 +135,7 @@ async def test_failure_after_success_retains_last_good_data(monkeypatch, one_ite
     """A later failure must not wipe the cache — stale data beats no data."""
     main._state["ppr"]["projections"] = [{"id": "p_1"}]
     main._state["ppr"]["upstream_healthy"] = True
-    monkeypatch.setenv("PLAYER_DATA_URL", URL_TEMPLATE)
+    monkeypatch.setenv("PROJECTIONS_SNAPSHOT_URL", URL_TEMPLATE)
 
     async def boom(url, expect_format=None):
         raise RuntimeError("upstream down")
@@ -151,7 +151,7 @@ async def test_failure_after_success_retains_last_good_data(monkeypatch, one_ite
 
 async def test_poll_interval_read_from_env(monkeypatch):
     """POLL_INTERVAL_SECONDS controls the sleep duration."""
-    monkeypatch.setenv("PLAYER_DATA_URL", URL_TEMPLATE)
+    monkeypatch.setenv("PROJECTIONS_SNAPSHOT_URL", URL_TEMPLATE)
     monkeypatch.setenv("POLL_INTERVAL_SECONDS", "42")
     slept = []
 

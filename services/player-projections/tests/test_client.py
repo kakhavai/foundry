@@ -4,7 +4,7 @@ import respx
 
 from player_projections.client import MalformedSnapshotError, fetch_projections
 
-S3_URL = "https://foundry-player-data.s3.amazonaws.com/projections/latest.json"
+S3_URL = "https://foundry-projections.s3.amazonaws.com/projections/latest.json"
 
 MOCK_PLAYERS = [
     {
@@ -90,7 +90,7 @@ async def test_fetch_projections_wraps_invalid_encoding():
 async def test_wrong_format_snapshot_is_rejected():
     """The schema's `format` is an enum across all three modes, so it cannot
     pin a document to its own URL. This check does — it catches a PPR document
-    served at the standard URL, which is what a `PLAYER_DATA_URL` missing its
+    served at the standard URL, which is what a `PROJECTIONS_SNAPSHOT_URL` missing its
     `{format}` placeholder produces.
     """
     respx.get(S3_URL).mock(

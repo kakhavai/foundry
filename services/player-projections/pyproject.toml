@@ -23,6 +23,9 @@ dev = [
     "pytest-cov",
     "hypothesis",
     "jsonschema[format]",
+    # Always installed by jsonschema, but the contract tests import it directly
+    # to resolve the cross-file $ref between the snapshot and response schemas.
+    "referencing",
     "httpx",
     "respx",
 ]

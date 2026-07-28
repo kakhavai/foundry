@@ -23,7 +23,7 @@
 **Out of scope:**
 - Multi-account AWS setup
 - Ephemeral environment CI automation and environment promotion runbook (planned for a later phase)
-- `player-data` service buildout
+- Projections generator buildout (it lives outside this repo)
 - Multi-region deployment
 
 **Design principle:** A service that works locally after following Phase 2 should need only the additions described in the Per-Service Delta section to be live on AWS. Phase 2 and Phase 6 docs are the complete onboarding path.

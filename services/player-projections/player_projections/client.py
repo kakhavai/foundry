@@ -8,7 +8,7 @@ class MalformedSnapshotError(ValueError):
 
 
 async def fetch_projections(url: str, expect_format: str | None = None) -> list[dict]:
-    """Fetch player projections from the S3 file written by the player-data backend.
+    """Fetch player projections from the S3 file written by the projections generator.
 
     `expect_format` is the scoring format this URL is supposed to serve. The
     schema's `format` is an enum across all three modes, so it cannot pin any

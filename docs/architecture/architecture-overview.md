@@ -98,7 +98,7 @@ Services live in `services/<name>/`. Each service owns its own Dockerfile, depen
 
 **Deployment:** `helm/charts/generic-service/` is a single parameterized base chart used by every standard HTTP service. Adding a service = add `helm/values/<service-name>/values.yaml`. The base chart automatically injects OTel env vars and Prometheus pod annotations — every service gets full observability with zero per-service observability config.
 
-Current services are `weather` (current conditions per pro football stadium, in bulk or one at a time) and `player-projections` (polls an internal player-data backend; stubs gracefully until that upstream is built).
+Current services are `weather` (current conditions per pro football stadium, in bulk or one at a time) and `player-projections` (polls projections snapshots from S3, written by an out-of-repo generator; stubs gracefully until that upstream publishes).
 
 ### Observability Stack
 All telemetry flows through a single OpenTelemetry Collector, which fans out to:

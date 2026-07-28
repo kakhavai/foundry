@@ -644,6 +644,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "referencing" },
     { name = "respx" },
     { name = "ruff" },
 ]
@@ -670,6 +671,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "referencing" },
     { name = "respx" },
     { name = "ruff" },
 ]

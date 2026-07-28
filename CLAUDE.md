@@ -15,24 +15,44 @@ The platform is built incrementally. Each phase proves a pattern, then the next 
 The end-state is a fully managed fantasy football product running on Foundry:
 
 ```
-player-data (internal, auth-gated)
-  └── hidden backend — aggregates data from proprietary sources
-      (injury reports, weather, news, betting lines, field type, etc.)
-  └── never exposed publicly; publishes curated snapshots to S3 that internal
-      services poll (S3 auth handled at the infrastructure level — see ADR 0002)
-  └── the methodology and data pipeline stay private
+collectors — IN this repo
+  └── weather, betting lines, social/news feeds, injury + health reports,
+      field type, and others; each gathers one kind of raw signal
 
-player-projections (this service — first real consumer of player-data)
-  └── polls player-data, exposes weekly player projections via API
+projections generator — NOT in this repo, runs privately
+  └── consumes the collectors' output plus proprietary sources
+  └── the ML / ranking methodology is the product's value and stays out of
+      version control entirely
+  └── writes one projections snapshot per scoring format to S3, on a cadence
+      or dispatched by hand
 
-injury-tracker (future internal consumer)
-  └── feeds into player-data
+        ↓  S3 — the ENTIRE integration surface between the two halves.
+           Contract: contracts/projections-snapshot/
 
-fantasy-frontend (future)
+player-projections — IN this repo
+  └── polls the snapshots, serves them at GET /projections
+
+fantasy-frontend (future) — IN this repo
   └── user-facing web UI consuming the projections API
 ```
 
-The data collection services (injury, weather, news, betting lines, field type, and others) are all internal inputs to `player-data` — they are not separate user-facing services. `player-data` is the single gatekeeper for that data. It writes one curated projections JSON document per scoring format (standard, half-PPR, PPR) to S3; `player-projections` polls the document for its configured format.
+**There is no `player-data` service, and there is not going to be one.** Earlier
+revisions of this document described an auth-gated internal backend by that
+name. That was wrong. The producer is an **offline generator that runs outside
+this repository** — nothing in Foundry deploys it, calls it, or can observe it.
+The platform's only contact with it is a file appearing in an S3 bucket. If you
+find yourself looking for `services/player-data/`, it does not exist by design.
+
+That is also why the contract lives in `contracts/projections-snapshot/` and is
+named for the **artifact** rather than a producer: the artifact is the only part
+of the producer that Foundry can see.
+
+The collectors are internal inputs, not user-facing products. **How they reach
+the generator is not yet decided** — either they publish to S3 as well and the
+generator reads files, or they expose APIs it calls with credentials. Worth
+settling before the second collector is built, since it determines whether
+"collector" means "service with an API" or "job that writes a file." Today
+`weather` is a standalone API that feeds nothing, so the question is still open.
 
 ---
 
@@ -41,11 +61,11 @@ The data collection services (injury, weather, news, betting lines, field type, 
 | Service | Port | Status | Purpose |
 |---|---|---|---|
 | `weather` | 8000 | Live | Current conditions per pro football stadium (Open-Meteo, no auth). Exposes exactly `/health`, `/metrics`, `/weather/stadiums`, `/weather/stadiums/{stadium_id}` — there is no by-location route |
-| `player-projections` | 8001 | Stub mode | Polls `player-data` for weekly projections; returns empty until `player-data` is built |
+| `player-projections` | 8001 | Stub mode | Polls the S3 projections snapshots; returns empty until the generator publishes |
 
 ### player-projections — How It Works
 
-Runs in **stub mode** when `PLAYER_DATA_URL` is empty (no upstream yet). Returns `{"format":"ppr", "projections":[], "count":0, "last_updated":null, "upstream_healthy":false}`.
+Runs in **stub mode** when `PROJECTIONS_SNAPSHOT_URL` is empty (no upstream yet). Returns `{"format":"ppr", "projections":[], "count":0, "last_updated":null, "upstream_healthy":false}`.
 
 **The API — `GET /projections`:**
 
@@ -61,27 +81,27 @@ so a client bug surfaces instead of looking like a quiet week.
 The filter is a convenience, not a boundary: a whole format document is ~350
 rows (~45 KB), so a client may omit `pos` entirely and slice client-side.
 
-**Upstream architecture:** `player-data` aggregates data from internal sources —
+**Upstream architecture:** the projections generator (out of repo) aggregates internal sources —
 weather, injury reports, betting lines, news, field type — and writes one
 curated projections JSON document per scoring format (standard, half-PPR, PPR)
 to S3. `player-projections` polls **all three** documents each interval and
 caches them independently, so one corrupt document does not affect the other
-two. The document shape is contracted in `contracts/player-data/` — see
+two. The document shape is contracted in `contracts/projections-snapshot/` — see
 `docs/testing-strategy.md`.
 
-Once `player-data` begins publishing:
-1. Set `PLAYER_DATA_URL` in the ConfigMap to the S3 URL **template**, containing
+Once the generator begins publishing:
+1. Set `PROJECTIONS_SNAPSHOT_URL` in the ConfigMap to the S3 URL **template**, containing
    a `{format}` placeholder — e.g. `https://bucket.s3.amazonaws.com/{format}.json`.
    The service substitutes each scoring mode in turn.
 2. Service begins polling every 15 minutes (configurable via `POLL_INTERVAL_SECONDS`)
 
 Each fetch asserts the document's own `format` field matches the one being
-polled. A `PLAYER_DATA_URL` missing its `{format}` placeholder therefore fails
+polled. A `PROJECTIONS_SNAPSHOT_URL` missing its `{format}` placeholder therefore fails
 two of the three formats loudly instead of serving one document as all three.
 
-No API key or Kubernetes Secret needed — S3 auth is handled at the infrastructure level (IAM role on the pod, or a presigned URL baked into `PLAYER_DATA_URL`).
+No API key or Kubernetes Secret needed — S3 auth is handled at the infrastructure level (IAM role on the pod, or a presigned URL baked into `PROJECTIONS_SNAPSHOT_URL`).
 
-Each document's shape is defined by the schema in `contracts/player-data/` (see
+Each document's shape is defined by the schema in `contracts/projections-snapshot/` (see
 `docs/testing-strategy.md`). Each format's cache is a flat list in upstream
 order — not keyed by `id` — and the frontend does the grouping.
 
@@ -103,10 +123,12 @@ tests/                  Platform tests — things no single service can see: scr
                         (rollback, argocd-deploy) and Helm chart render assertions.
                         Per-service tests live in services/<name>/tests/, not here.
                         Run by the `platform-tests` CI job.
-contracts/              Committed contracts. player-data/ = JSON Schema for the
-                        upstream snapshot documents; openapi/ = per-service API
-                        snapshots; responses/ = response-shape contracts.
-                        Regenerate deliberately — CI fails on undeclared drift.
+contracts/              Committed contracts — see contracts/README.md.
+                        projections-snapshot/ = inbound S3 doc schema (hand-written)
+                        projections-api/      = outbound response schema (hand-written)
+                        openapi/              = API surface snapshots (generated)
+                        responses/            = response field-name snapshots (generated)
+                        Regenerate the generated two deliberately — CI fails on drift.
 ```
 
 ---
@@ -214,7 +236,7 @@ extraEnv:
         optional: true   # allows pod to start before secret exists
 ```
 
-The `optional: true` flag means a pod deploys even when the Secret hasn't been created yet — important for stub-mode services like `player-projections` before `player-data` is live.
+The `optional: true` flag means a pod deploys even when the Secret hasn't been created yet — important for stub-mode services like `player-projections` before its upstream is live.
 
 ---
 
@@ -283,5 +305,5 @@ If you need to verify a fix that isn't merged yet, work from inside the cluster 
 - **`--no-editable` Docker** — canonical uv pattern for packages; package dir copied directly into the build stage, wheels go into venv, no PYTHONPATH needed in runtime.
 - **Per-service workflow files** — one file to copy per onboard, no reusable workflow indirection.
 - **OTel guard on env var** — no collector needed for local dev or tests; Kubernetes injects it.
-- **`player-data` internal-only** — proprietary data pipeline never exposed publicly; it publishes to S3 for `player-projections` (and future internal consumers) to poll, with S3 auth handled at the infrastructure level (see ADR 0002).
-- **Stub mode for not-yet-built upstreams** — `PLAYER_DATA_URL` empty = service runs, returns empty data, no crashes. Lets the service be deployed and observed before its dependency exists.
+- **The projections generator lives outside this repo** — the ML/ranking methodology is the product's value and stays out of version control. It publishes snapshots to S3 for `player-projections` to poll, with S3 auth handled at the infrastructure level (see ADR 0002). Foundry never deploys or calls it; a file in a bucket is the whole interface.
+- **Stub mode for not-yet-built upstreams** — `PROJECTIONS_SNAPSHOT_URL` empty = service runs, returns empty data, no crashes. Lets the service be deployed and observed before its dependency exists.

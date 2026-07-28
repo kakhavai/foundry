@@ -32,7 +32,7 @@ _state: dict = {fmt: _empty_cache() for fmt in FORMATS}
 def _url_for(template: str, fmt: str) -> str:
     """Resolve the per-format document URL.
 
-    `PLAYER_DATA_URL` carries a `{format}` placeholder — one config value for
+    `PROJECTIONS_SNAPSHOT_URL` carries a `{format}` placeholder — one config value for
     all three documents. A template without the placeholder resolves to the
     same URL for every format; that is caught by the `expect_format` check in
     `fetch_projections`, which fails the two formats it does not match rather
@@ -42,7 +42,7 @@ def _url_for(template: str, fmt: str) -> str:
 
 
 async def _poll_loop() -> None:
-    template = os.getenv("PLAYER_DATA_URL", "")
+    template = os.getenv("PROJECTIONS_SNAPSHOT_URL", "")
     interval = int(os.getenv("POLL_INTERVAL_SECONDS", "900"))
 
     if not template:

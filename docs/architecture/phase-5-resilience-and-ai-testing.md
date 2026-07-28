@@ -24,7 +24,7 @@ The three stages build on each other:
 
 **Coverage enforcement.** `pyproject.toml` gains `[tool.pytest.ini_options]` with `--cov`, `--cov-fail-under=80`, and `--cov-branch`. PRs that drop coverage below threshold fail CI. Coverage is reported to the GitHub Actions job summary on every run, including failed ones — not a per-PR comment bot (see Deliverables below for why).
 
-**Contract testing (schema-first).** Rather than Pact's consumer-driven approach, contracts are enforced provider-side with committed schemas: JSON Schema for the `player-data` snapshot documents (`contracts/player-data/`), and committed OpenAPI snapshots for `weather` and `player-projections` (`contracts/openapi/`) with CI failing on undeclared divergence. See [ADR 0002](../adr/0002-provider-driven-contracts.md) for why.
+**Contract testing (schema-first).** Rather than Pact's consumer-driven approach, contracts are enforced provider-side with committed schemas: JSON Schema for the projections snapshot documents (`contracts/projections-snapshot/`), and committed OpenAPI snapshots for `weather` and `player-projections` (`contracts/openapi/`) with CI failing on undeclared divergence. See [ADR 0002](../adr/0002-provider-driven-contracts.md) for why.
 
 **Property-based testing (Hypothesis).** Services that parse external data (S3 projection payloads, weather API responses) gain Hypothesis tests that generate structurally valid but adversarial inputs: missing fields, wrong types, empty arrays, extremely large payloads. These tests are added to the standard `pytest` suite and run on every PR.
 
@@ -33,7 +33,7 @@ The three stages build on each other:
 ### Deliverables
 
 - Updated `pyproject.toml` per service with coverage thresholds and branch coverage
-- `contracts/player-data/` — one JSON Schema covering the snapshot documents for all three scoring formats
+- `contracts/projections-snapshot/` — one JSON Schema covering the snapshot documents for all three scoring formats
 - `contracts/openapi/` — committed OpenAPI snapshots with CI divergence detection
 - `services/*/tests/test_properties.py` — Hypothesis suites for all external data parsers
 - `services/*/tests/integration/` — real HTTP integration tests per service
@@ -115,7 +115,7 @@ The agent does not know it is introducing a fault. It is given a feature request
 **Designer/Product Agent.** The designer agent does not write code — it drives the platform by generating load patterns that simulate realistic product usage:
 - Gradual traffic growth simulating a product launch
 - Bursty access patterns simulating viral content
-- Repeated calls to stub endpoints that will be populated by `player-data`
+- Repeated calls to stub endpoints that will be populated by the projections generator
 - Requests for new endpoints that do not exist yet (404 rate increase)
 
 The designer agent's pressure is continuous throughout the adversarial test run, not isolated to individual scenarios.

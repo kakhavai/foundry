@@ -80,14 +80,24 @@ are not — those are asserted directly in the integration suite instead. A `nul
 value or an empty list or dict also collapses its subtree to a bare path, which
 is why fixtures must be generated against a populated, successful response.
 
+**Neither generated contract carries types — that is what `projections-api/` is
+for.** A row whose `rank` arrives as `"three"` rather than `3` passes both the
+OpenAPI snapshot and the response-shape contract, since the field names are
+unchanged. `contracts/projections-api/response.v1.schema.json` closes that,
+`$ref`ing the player definition out of the snapshot schema so a row has one
+definition in both directions. It is still a **test-time** check only: nothing
+validates at runtime, so a real upstream sending wrongly-typed rows would still
+reach the frontend. Making the schema load-bearing in `_poll_loop` is a Phase 5B
+decision, because it needs a policy for what to do with a bad row.
+
 **The `pos` filter is contracted for shape, not for selection.** The committed
 response shapes include a filtered read, which proves filtering does not alter
 the body's structure. That a filter returns the *right rows* is asserted in
 `test_endpoints.py` — the shape contract would pass just as happily if the
 filter returned everything.
 
-**The `player-data` schema encodes an intended shape, not an observed one.**
-No provider exists yet. It becomes genuinely enforcing when `player-data`
+**The projections snapshot schema encodes an intended shape, not an observed one.**
+No provider exists yet. It becomes genuinely enforcing when the generator
 validates its own output against the same file in its CI. One schema gap
 remains, not three: `floor <= expected <= ceiling` cannot be expressed in JSON
 Schema 2020-12 — there is no portable way to compare sibling properties — so it

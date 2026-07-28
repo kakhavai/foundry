@@ -9,7 +9,7 @@ from player_projections.main import app
 def test_telemetry_not_imported_without_endpoint(monkeypatch):
     """The OTel guard: no endpoint set means telemetry is never even imported."""
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-    monkeypatch.setenv("PLAYER_DATA_URL", "")
+    monkeypatch.setenv("PROJECTIONS_SNAPSHOT_URL", "")
     sys.modules.pop("player_projections.telemetry", None)
 
     with TestClient(app) as client:
@@ -20,7 +20,7 @@ def test_telemetry_not_imported_without_endpoint(monkeypatch):
 
 def test_setup_telemetry_called_when_endpoint_set(monkeypatch):
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317")
-    monkeypatch.setenv("PLAYER_DATA_URL", "")
+    monkeypatch.setenv("PROJECTIONS_SNAPSHOT_URL", "")
     calls = []
     monkeypatch.setattr(
         "player_projections.telemetry.setup_telemetry", lambda app: calls.append(app)

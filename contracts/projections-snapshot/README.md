@@ -1,6 +1,7 @@
-# player-data snapshot contracts
+# Projections snapshot contracts
 
-`player-data` publishes one JSON document per scoring format per week to S3.
+The projections generator — which runs outside this repository — publishes one
+JSON document per scoring format per week to S3.
 `player-projections` polls the document matching the requested format.
 
 **One schema — `snapshot.v1.schema.json` — covers all three formats.** Scoring
@@ -54,7 +55,7 @@ sides conform to it. See [ADR 0002](../../docs/adr/0002-provider-driven-contract
 for why this project does not use consumer-driven contract testing (Pact), and
 the condition under which that decision should be revisited.
 
-## When `player-data` is built
+## When the generator is built
 
 It must validate its output against these files in its own CI before
 publishing. Until then the schemas are validated against the fixtures in

@@ -36,7 +36,7 @@ graph TD
 ## What Gets Built
 
 ### Second Service
-The second service onboarded through the same path as `weather`. For Foundry this is `player-projections` — a polling service that will consume the internal `player-data` backend for fantasy football projections. It runs in stub mode (returning empty projections) until `player-data` is built, which lets the CI/CD and observability patterns be validated against a real service before its upstream exists.
+The second service onboarded through the same path as `weather`. For Foundry this is `player-projections` — a polling service that consumes projections snapshots from S3, written by a generator that runs outside this repo. It runs in stub mode (returning empty projections) until that generator publishes, which lets the CI/CD and observability patterns be validated against a real service before its upstream exists.
 
 ### CI Caller Pattern
 The composite actions were established in Phase 1. Onboarding the second service requires one new file: `.github/workflows/<second-service>.yml`, a thin caller that directly invokes the shared composite actions. No CI logic is duplicated.
