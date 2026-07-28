@@ -99,6 +99,14 @@ infra/grafana-stack/    Helmfile: OTel Collector, Prometheus, Loki, Tempo, Grafa
 infra/kind/             Kind cluster config for local dev
 scripts/                deploy-local.py, stack-up.py
 docs/                   Architecture, onboarding, service contract
+tests/                  Platform tests — things no single service can see: scripts/
+                        (rollback, argocd-deploy) and Helm chart render assertions.
+                        Per-service tests live in services/<name>/tests/, not here.
+                        Run by the `platform-tests` CI job.
+contracts/              Committed contracts. player-data/ = JSON Schema for the
+                        upstream snapshot documents; openapi/ = per-service API
+                        snapshots; responses/ = response-shape contracts.
+                        Regenerate deliberately — CI fails on undeclared drift.
 ```
 
 ---
