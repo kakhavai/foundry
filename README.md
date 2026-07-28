@@ -73,6 +73,7 @@ foundry/
 | 5 | Resilience testing + AI agent adversarial layer | 🚧 In progress | Stage 1 delivered; no tag until all stages land |
 | 6 | AWS deployment — EKS via Terraform, ECR, ALB ingress, IRSA + OIDC | 📋 Planned | — |
 | 7 | AI observability & governance — instrument runtime AI (triage narrator) + developer AI (Claude Code) into the OTel/Grafana stack | 📋 Planned | — |
+| 8 | Data source collectors — the 26-collector catalog feeding the projections generator, on a uniform contract + signal lake (8A–8F) | 📋 Planned | — |
 
 ---
 
@@ -270,3 +271,4 @@ See [docs/deployment-lifecycle.md](docs/deployment-lifecycle.md) for the full de
 - [Phase 5 — Resilience Testing & AI Adversarial Layer](docs/architecture/phase-5-resilience-and-ai-testing.md)
 - [Phase 6 — AWS Deployment](docs/architecture/phase-6-aws-deployment.md)
 - [Phase 7 — AI Observability & Governance](docs/architecture/phase-7-ai-observability.md)
+- [Phase 8 — Data Source Collectors](docs/architecture/phase-8-data-source-collectors.md)
