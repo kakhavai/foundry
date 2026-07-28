@@ -72,12 +72,19 @@ and operationId renames — not a renamed field inside a body. That is what the
 response-shape contracts exist for.
 
 **Response-shape contracts pin a list by its first element only.** `player-projections`
-is a bulk-only API — `GET /projections` returns the full in-memory list, there
-is no per-player lookup route. The seed leads with a skill player, so `rank`,
+serves whole scoring-format documents — `GET /projections?format=…` returns the
+full cached list, narrowable to a display lane with `?pos=…`. There is no
+per-player lookup route. The seed leads with a skill player, so `rank`,
 `proj_points.*`, and `blurb` are contracted while DST's `yahoo_rank`/`espn_rank`
 are not — those are asserted directly in the integration suite instead. A `null`
 value or an empty list or dict also collapses its subtree to a bare path, which
 is why fixtures must be generated against a populated, successful response.
+
+**The `pos` filter is contracted for shape, not for selection.** The committed
+response shapes include a filtered read, which proves filtering does not alter
+the body's structure. That a filter returns the *right rows* is asserted in
+`test_endpoints.py` — the shape contract would pass just as happily if the
+filter returned everything.
 
 **The `player-data` schema encodes an intended shape, not an observed one.**
 No provider exists yet. It becomes genuinely enforcing when `player-data`

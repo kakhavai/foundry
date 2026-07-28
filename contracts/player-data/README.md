@@ -18,8 +18,9 @@ This started as three near-identical files whose shapes were kept in sync by a
 test. Collapsing them makes that invariant structural rather than asserted.
 The tradeoff: a per-file `format: {"const": "ppr"}` could catch the PPR
 document being published at the standard URL, and an enum cannot. That check
-belongs at read time in the consumer, against the format it was configured to
-expect — it catches the real misconfiguration in production rather than only
+now lives at read time in the consumer instead — `fetch_projections(url,
+expect_format=...)` rejects a document whose `format` is not the one being
+polled. It catches the real misconfiguration in production rather than only
 in CI.
 
 Each player row is one of two shapes, selected by `pos`:

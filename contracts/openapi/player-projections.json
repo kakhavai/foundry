@@ -1,4 +1,61 @@
 {
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
   "info": {
     "title": "FastAPI",
     "version": "0.1.0"
@@ -39,7 +96,45 @@
     },
     "/projections": {
       "get": {
+        "description": "Serve one scoring format's projections, optionally filtered by position.\n\nThe filter is a convenience, not a boundary \u2014 the whole document is ~350\nrows, so a client is free to omit `pos` and slice client-side.",
         "operationId": "list_projections_projections_get",
+        "parameters": [
+          {
+            "description": "Scoring mode. Selects which cached document to serve.",
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "ppr",
+              "description": "Scoring mode. Selects which cached document to serve.",
+              "enum": [
+                "standard",
+                "half-ppr",
+                "ppr"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional comma-separated position filter, e.g. `WR` or `RB,WR,TE` for the frontend's FLEX lane. Omitted returns every position.",
+            "in": "query",
+            "name": "pos",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated position filter, e.g. `WR` or `RB,WR,TE` for the frontend's FLEX lane. Omitted returns every position.",
+              "title": "Pos"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -48,6 +143,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "List Projections"

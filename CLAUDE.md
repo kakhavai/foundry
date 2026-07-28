@@ -45,24 +45,45 @@ The data collection services (injury, weather, news, betting lines, field type, 
 
 ### player-projections — How It Works
 
-Runs in **stub mode** when `PLAYER_DATA_URL` is empty (no upstream yet). Returns `{"projections":[], "count":0, "last_updated":null, "upstream_healthy":false}`.
+Runs in **stub mode** when `PLAYER_DATA_URL` is empty (no upstream yet). Returns `{"format":"ppr", "projections":[], "count":0, "last_updated":null, "upstream_healthy":false}`.
+
+**The API — `GET /projections`:**
+
+| Param | Default | Meaning |
+|---|---|---|
+| `format` | `ppr` | Scoring mode: `standard`, `half-ppr`, or `ppr`. Anything else → 422 |
+| `pos` | *(all)* | Optional comma-separated position filter, e.g. `WR` or `RB,WR,TE`. Unknown position → 422 |
+
+`FLEX` is **not** a valid `pos` value — it is a frontend display lane, requested
+as `pos=RB,WR,TE`. Asking for `pos=FLEX` returns 422 rather than an empty list,
+so a client bug surfaces instead of looking like a quiet week.
+
+The filter is a convenience, not a boundary: a whole format document is ~350
+rows (~45 KB), so a client may omit `pos` entirely and slice client-side.
 
 **Upstream architecture:** `player-data` aggregates data from internal sources —
 weather, injury reports, betting lines, news, field type — and writes one
 curated projections JSON document per scoring format (standard, half-PPR, PPR)
-to S3. `player-projections` polls the document matching the requested format on
-an interval and caches the result in memory. The document shape is contracted in
-`contracts/player-data/` — see `docs/testing-strategy.md`.
+to S3. `player-projections` polls **all three** documents each interval and
+caches them independently, so one corrupt document does not affect the other
+two. The document shape is contracted in `contracts/player-data/` — see
+`docs/testing-strategy.md`.
 
 Once `player-data` begins publishing:
-1. Set `PLAYER_DATA_URL` in the ConfigMap to the S3 file URL
+1. Set `PLAYER_DATA_URL` in the ConfigMap to the S3 URL **template**, containing
+   a `{format}` placeholder — e.g. `https://bucket.s3.amazonaws.com/{format}.json`.
+   The service substitutes each scoring mode in turn.
 2. Service begins polling every 15 minutes (configurable via `POLL_INTERVAL_SECONDS`)
+
+Each fetch asserts the document's own `format` field matches the one being
+polled. A `PLAYER_DATA_URL` missing its `{format}` placeholder therefore fails
+two of the three formats loudly instead of serving one document as all three.
 
 No API key or Kubernetes Secret needed — S3 auth is handled at the infrastructure level (IAM role on the pod, or a presigned URL baked into `PLAYER_DATA_URL`).
 
 Each document's shape is defined by the schema in `contracts/player-data/` (see
-`docs/testing-strategy.md`). The in-memory cache is a flat list in upstream
-order — not keyed by `id` — and the frontend does all slicing and grouping.
+`docs/testing-strategy.md`). Each format's cache is a flat list in upstream
+order — not keyed by `id` — and the frontend does the grouping.
 
 ---
 

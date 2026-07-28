@@ -4,6 +4,22 @@
   ],
   "/projections": [
     "count",
+    "format",
+    "last_updated",
+    "projections[].blurb",
+    "projections[].id",
+    "projections[].name",
+    "projections[].pos",
+    "projections[].proj_points.ceiling",
+    "projections[].proj_points.expected",
+    "projections[].proj_points.floor",
+    "projections[].rank",
+    "projections[].team",
+    "upstream_healthy"
+  ],
+  "/projections?pos=WR": [
+    "count",
+    "format",
     "last_updated",
     "projections[].blurb",
     "projections[].id",

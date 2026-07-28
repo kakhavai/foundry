@@ -12,13 +12,11 @@ from player_projections.main import app
 def stub_mode(monkeypatch):
     """No upstream configured — the deployed default today."""
     monkeypatch.setenv("PLAYER_DATA_URL", "")
-    main._state["projections"] = []
-    main._state["last_updated"] = None
-    main._state["upstream_healthy"] = False
+    for fmt in main.FORMATS:
+        main._state[fmt] = main._empty_cache()
     yield
-    main._state["projections"] = []
-    main._state["last_updated"] = None
-    main._state["upstream_healthy"] = False
+    for fmt in main.FORMATS:
+        main._state[fmt] = main._empty_cache()
 
 
 @pytest.fixture
@@ -47,7 +45,7 @@ def test_per_player_lookup_route_does_not_exist(client):
 
 
 def test_populated_cache_is_served(client):
-    main._state["projections"] = [
+    main._state["ppr"]["projections"] = [
         {
             "id": "p_8f3a21",
             "name": "Deebo Samuel",
@@ -64,7 +62,7 @@ def test_populated_cache_is_served(client):
             "espn_rank": 3,
         },
     ]
-    main._state["upstream_healthy"] = True
+    main._state["ppr"]["upstream_healthy"] = True
 
     listing = client.get("/projections").json()
 
@@ -83,7 +81,9 @@ def test_upstream_order_is_preserved(client):
     by rank would reverse the output and fail this test. With rank ascending in
     list order, such a bug would be invisible.
     """
-    main._state["projections"] = [{"id": f"p_{i}", "rank": 50 - i} for i in range(50)]
+    main._state["ppr"]["projections"] = [
+        {"id": f"p_{i}", "rank": 50 - i} for i in range(50)
+    ]
 
     body = client.get("/projections").json()
 
@@ -100,7 +100,9 @@ def test_concurrent_reads_are_consistent():
     and if a writer is ever exercised alongside them this starts doing real
     work. Treat a failure here as a genuine concurrency bug.
     """
-    main._state["projections"] = [{"id": f"p_{i}", "rank": i + 1} for i in range(100)]
+    main._state["ppr"]["projections"] = [
+        {"id": f"p_{i}", "rank": i + 1} for i in range(100)
+    ]
 
     async def hammer():
         transport = httpx.ASGITransport(app=app)
@@ -112,6 +114,32 @@ def test_concurrent_reads_are_consistent():
     assert all(r.status_code == 200 for r in responses)
     assert all(r.json()["count"] == 100 for r in responses)
     assert len({r.text for r in responses}) == 1
+
+
+def test_stub_mode_is_empty_for_every_scoring_format(client):
+    """All three caches start empty, not just the default one."""
+    for fmt in main.FORMATS:
+        body = client.get("/projections", params={"format": fmt}).json()
+        assert body["format"] == fmt
+        assert body["projections"] == []
+        assert body["upstream_healthy"] is False
+
+
+def test_filtered_and_unfiltered_reads_agree(client):
+    """Filtering is a view over the same cache — the per-position counts must
+    add back up to the unfiltered total."""
+    main._state["ppr"]["projections"] = [
+        {"id": f"p_{i}", "pos": pos, "rank": i + 1}
+        for i, pos in enumerate(["QB", "WR", "WR", "RB", "TE", "K", "DST"])
+    ]
+
+    total = client.get("/projections").json()["count"]
+    per_position = sum(
+        client.get("/projections", params={"pos": pos}).json()["count"]
+        for pos in main.POSITIONS
+    )
+
+    assert total == per_position == 7
 
 
 def test_health_and_metrics_are_live(client):

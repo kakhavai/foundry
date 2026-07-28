@@ -8,18 +8,20 @@ S3_URL = "https://foundry-player-data.s3.amazonaws.com/projections/latest.json"
 
 MOCK_PLAYERS = [
     {
-        "id": "allen-josh",
+        "id": "p_allenjosh",
         "name": "Josh Allen",
         "team": "BUF",
-        "position": "QB",
-        "projected_points": 32.1,
+        "pos": "QB",
+        "rank": 1,
+        "proj_points": {"floor": 18.4, "expected": 32.1, "ceiling": 41.7},
     },
     {
-        "id": "jefferson-justin",
+        "id": "p_jeffersonjustin",
         "name": "Justin Jefferson",
         "team": "MIN",
-        "position": "WR",
-        "projected_points": 26.4,
+        "pos": "WR",
+        "rank": 1,
+        "proj_points": {"floor": 12.0, "expected": 26.4, "ceiling": 38.9},
     },
 ]
 
@@ -31,7 +33,7 @@ async def test_fetch_projections_returns_players():
     )
     players = await fetch_projections(S3_URL)
     assert len(players) == 2
-    assert players[0]["id"] == "allen-josh"
+    assert players[0]["id"] == "p_allenjosh"
 
 
 @respx.mock
@@ -82,3 +84,57 @@ async def test_fetch_projections_wraps_invalid_encoding():
     )
     with pytest.raises(MalformedSnapshotError):
         await fetch_projections(S3_URL)
+
+
+@respx.mock
+async def test_wrong_format_snapshot_is_rejected():
+    """The schema's `format` is an enum across all three modes, so it cannot
+    pin a document to its own URL. This check does — it catches a PPR document
+    served at the standard URL, which is what a `PLAYER_DATA_URL` missing its
+    `{format}` placeholder produces.
+    """
+    respx.get(S3_URL).mock(
+        return_value=httpx.Response(
+            200, json={"format": "ppr", "players": MOCK_PLAYERS}
+        )
+    )
+
+    with pytest.raises(MalformedSnapshotError, match="standard"):
+        await fetch_projections(S3_URL, expect_format="standard")
+
+
+@respx.mock
+async def test_matching_format_snapshot_is_accepted():
+    respx.get(S3_URL).mock(
+        return_value=httpx.Response(
+            200, json={"format": "ppr", "players": MOCK_PLAYERS}
+        )
+    )
+
+    players = await fetch_projections(S3_URL, expect_format="ppr")
+
+    assert players == MOCK_PLAYERS
+
+
+@respx.mock
+async def test_missing_format_field_is_rejected_when_one_is_expected():
+    """A document with no `format` at all cannot be confirmed as the right one."""
+    respx.get(S3_URL).mock(
+        return_value=httpx.Response(200, json={"players": MOCK_PLAYERS})
+    )
+
+    with pytest.raises(MalformedSnapshotError):
+        await fetch_projections(S3_URL, expect_format="ppr")
+
+
+@respx.mock
+async def test_format_check_is_skipped_when_not_requested():
+    """expect_format=None preserves the original behaviour for callers that
+    do not know or care which document they are reading."""
+    respx.get(S3_URL).mock(
+        return_value=httpx.Response(
+            200, json={"format": "half-ppr", "players": MOCK_PLAYERS}
+        )
+    )
+
+    assert await fetch_projections(S3_URL) == MOCK_PLAYERS

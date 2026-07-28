@@ -204,8 +204,8 @@ async def test_response_shapes_match_committed_contract(monkeypatch):
     tests/integration/test_app.py::test_populated_cache_is_served.
     """
     fixture = json.loads((CONTRACTS / "fixtures" / "ppr-valid.json").read_text())
-    url = "https://example.test/ppr.json"
-    monkeypatch.setenv("PLAYER_DATA_URL", url)
+    template = "https://example.test/{format}.json"
+    monkeypatch.setenv("PLAYER_DATA_URL", template)
 
     async def stop_after_first(_seconds):
         raise asyncio.CancelledError
@@ -216,7 +216,12 @@ async def test_response_shapes_match_committed_contract(monkeypatch):
 
     try:
         with respx.mock:
-            respx.get(url).mock(return_value=httpx.Response(200, json=fixture))
+            # Each format's document declares its own `format`, so the poll
+            # loop's expect_format check passes for all three.
+            for fmt in main.FORMATS:
+                respx.get(main._url_for(template, fmt)).mock(
+                    return_value=httpx.Response(200, json={**fixture, "format": fmt})
+                )
             with pytest.raises(asyncio.CancelledError):
                 await main._poll_loop()
 
@@ -224,10 +229,12 @@ async def test_response_shapes_match_committed_contract(monkeypatch):
             actual = {
                 "/health": response_shape(client.get("/health").json()),
                 "/projections": response_shape(client.get("/projections").json()),
+                "/projections?pos=WR": response_shape(
+                    client.get("/projections", params={"pos": "WR"}).json()
+                ),
             }
     finally:
-        main._state["projections"] = []
-        main._state["upstream_healthy"] = False
-        main._state["last_updated"] = None
+        for fmt in main.FORMATS:
+            main._state[fmt] = main._empty_cache()
 
     assert actual == committed, SHAPE_HINT

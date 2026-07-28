@@ -21,7 +21,18 @@ otel:
 grafanaAnnotations:
   enabled: true
 
-# PLAYER_DATA_URL is the S3 URL of the projections file written by the player-data backend.
+# PLAYER_DATA_URL is the S3 URL template for the projections documents written
+# by the player-data backend. It must contain a `{format}` placeholder — the
+# service substitutes each scoring mode in turn and polls all three documents:
+#
+#   PLAYER_DATA_URL: "https://foundry-player-data.s3.amazonaws.com/{format}.json"
+#     -> .../standard.json, .../half-ppr.json, .../ppr.json
+#
+# A URL without the placeholder resolves to the same document for all three
+# formats. That is not silently accepted: each fetch asserts the document's own
+# `format` field matches the one being polled, so two of the three fail and
+# report upstream_healthy=false rather than serving one document as all three.
+#
 # Set this in the ConfigMap when player-data begins publishing.
-# POLL_INTERVAL_SECONDS controls how often the file is re-fetched (default 900 = 15 min).
+# POLL_INTERVAL_SECONDS controls how often the files are re-fetched (default 900 = 15 min).
 # No secret needed — S3 auth is handled at the infrastructure level (IAM role or presigned URL).
