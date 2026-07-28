@@ -48,9 +48,37 @@ The three stages build on each other:
 
 ---
 
-## Stage 2 — Chaos Engineering and Scale Testing
+## Stage 2 — Collector Platform, Chaos Engineering and Scale Testing
 
-### What Gets Built
+Stage 2 carries two bodies of work. Chaos testing was specified first, but the
+platform had almost nothing to disrupt: `player-projections` polls an S3 URL
+that does not exist yet, and `weather` feeds nothing. Building the collector
+platform first gives the chaos scenarios real credentialed service-to-service
+traffic to break, rather than partitioning a service from an upstream that was
+never reachable.
+
+### What Gets Built — collector platform
+
+**One gateway, path-routed.** A single ingress hostname and TLS certificate;
+each collector is served under `/collectors/<name>/`. Adding a collector is one
+path rule plus one Secret — not a new hostname, DNS record, or certificate. See
+CLAUDE.md for why this over per-service hostnames or a registry service.
+
+**Bearer-token auth per collector.** The projections generator runs outside the
+cluster and calls in. Each collector reads a token from a Kubernetes Secret via
+the existing `extraEnv` + `secretKeyRef` pattern and rejects unauthenticated
+requests. Chosen over mTLS and OIDC because the generator is a single external
+client on a known machine; the tradeoff is recorded in CLAUDE.md.
+
+**`weather` becomes the first collector.** It keeps its current API and gains
+the gateway path plus token enforcement, proving the pattern end to end before a
+second collector exists.
+
+Auth is a new failure surface, so it needs its own tests: a missing token, a
+wrong token, and an expired/rotated token must all be rejected with the right
+status, and the rejection must be observable — not a silent 500.
+
+### What Gets Built — chaos and scale
 
 **Chaos engineering with Chaos Mesh.** Chaos Mesh is deployed to the Kind cluster. A `chaos/` directory contains scenario manifests:
 - `pod-kill.yaml` — kills a random service pod, validates auto-recovery within N seconds
@@ -71,12 +99,36 @@ Load test results are published as artifacts and compared against a documented b
 
 **Chaos + scale CI job.** A new workflow `chaos-test.yml` runs on the `ready-for-chaos` label (separate from `ready-for-merge`). Spins up the Kind cluster, runs the full chaos suite, then runs load tests. Results published to PR as a structured report: scenario name, hypothesis, observed behavior, pass/fail.
 
+**Failure-path metrics come first.** `_poll_loop`'s bare `except Exception`
+emits nothing today — no log, no metric, no exception detail, no staleness bound
+(see `docs/testing-strategy.md`). That **blocks the chaos work**: a scenario's
+pass/fail criterion is a Prometheus query, and a failure mode that emits no
+metric cannot supply one. Add counters and gauges before writing any scenario:
+
+```
+upstream_poll_failures_total{format, reason}
+upstream_cache_age_seconds{format}
+upstream_healthy{format}
+```
+
+Metrics only, deliberately. Structured logging is a separate platform-wide
+decision (plain vs JSON, OTel log bridge or not) that nothing forces yet — no
+service logs anything today — and chaos criteria need metrics, not prose.
+
 ### Deliverables
 
+- Gateway ingress with path routing for collectors, plus per-collector bearer-token auth
+- `weather` exposed as the first collector, with auth-rejection tests
+- Failure-path metrics on `player-projections`' poll loop
 - `infra/chaos-mesh/` — Chaos Mesh helmfile installation
 - `chaos/scenarios/` — Chaos Mesh scenario manifests with documented hypotheses
 - `tests/load/` — k6 scripts per service
-- `.github/workflows/chaos-test.yml` — label-triggered chaos + load test job
+- `.github/workflows/chaos-test.yml` — chaos + load test job. **Note:** the
+  original design specified a `ready-for-chaos` label, which contradicts the CI
+  philosophy settled in 5A ("no label or manual gate" — see CLAUDE.md). Chaos and
+  30-minute soak runs are genuinely expensive in a way `integration-test` is not,
+  so a manual trigger may be the right exception — but decide it explicitly and
+  record the reasoning. `workflow_dispatch` is worth considering over a label.
 - `docs/chaos-runbook.md` — how to run scenarios manually, how to read results, known failure modes
 - `docs/scale-baselines.md` — documented performance baselines per service, updated after each phase
 
@@ -166,7 +218,7 @@ The catalog is updated after every adversarial test session. It becomes the livi
 ## Milestones
 
 - [x] Stage 1: Coverage thresholds enforced, schema contract tests in CI, Hypothesis suites for all external data parsers
-- [ ] Stage 2: Chaos Mesh running, all 5 chaos scenarios documented and passing, k6 baselines established for all services
+- [ ] Stage 2: Collector gateway + bearer auth live with `weather` as the first collector, failure-path metrics emitting, Chaos Mesh running, all 5 chaos scenarios documented and passing, k6 baselines established for all services
 - [ ] Stage 3: Agent scaffolding built, first adversarial session run against weather and player-projections, fault catalog seeded with results
 
 ---

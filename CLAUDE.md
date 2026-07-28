@@ -16,17 +16,24 @@ The end-state is a fully managed fantasy football product running on Foundry:
 
 ```
 collectors — IN this repo
-  └── weather, betting lines, social/news feeds, injury + health reports,
-      field type, and others; each gathers one kind of raw signal
+  └── weather (the first), betting lines, social/news feeds, injury + health
+      reports, field type, and others; each gathers one kind of raw signal
+  └── each exposes an HTTP API behind ONE gateway, routed by path:
+        https://<gateway-host>/collectors/weather/...
+        https://<gateway-host>/collectors/betting-lines/...
+
+        ↑  IN: the generator CALLS the collector APIs, authenticating with a
+           bearer token per collector. Adding a collector = one ingress path
+           rule + one Secret, not a new hostname or certificate.
 
 projections generator — NOT in this repo, runs privately
-  └── consumes the collectors' output plus proprietary sources
+  └── calls the collector APIs, combines them with proprietary sources
   └── the ML / ranking methodology is the product's value and stays out of
       version control entirely
   └── writes one projections snapshot per scoring format to S3, on a cadence
       or dispatched by hand
 
-        ↓  S3 — the ENTIRE integration surface between the two halves.
+        ↓  OUT: S3 is how results come BACK to the platform.
            Contract: contracts/projections-snapshot/
 
 player-projections — IN this repo
@@ -36,23 +43,40 @@ fantasy-frontend (future) — IN this repo
   └── user-facing web UI consuming the projections API
 ```
 
+Two integration surfaces, not one, and they run in opposite directions. The
+generator reaches **in** over authenticated HTTP; results come **back** as a
+file in S3. Foundry itself never calls out to the generator.
+
 **There is no `player-data` service, and there is not going to be one.** Earlier
 revisions of this document described an auth-gated internal backend by that
 name. That was wrong. The producer is an **offline generator that runs outside
-this repository** — nothing in Foundry deploys it, calls it, or can observe it.
-The platform's only contact with it is a file appearing in an S3 bucket. If you
-find yourself looking for `services/player-data/`, it does not exist by design.
+this repository** — Foundry does not deploy it, does not call it, and cannot
+observe it. If you find yourself looking for `services/player-data/`, it does
+not exist by design.
 
 That is also why the contract lives in `contracts/projections-snapshot/` and is
 named for the **artifact** rather than a producer: the artifact is the only part
-of the producer that Foundry can see.
+of the producer Foundry ever sees.
 
-The collectors are internal inputs, not user-facing products. **How they reach
-the generator is not yet decided** — either they publish to S3 as well and the
-generator reads files, or they expose APIs it calls with credentials. Worth
-settling before the second collector is built, since it determines whether
-"collector" means "service with an API" or "job that writes a file." Today
-`weather` is a standalone API that feeds nothing, so the question is still open.
+### How the generator reaches the collectors — decided
+
+Collectors are **services with HTTP APIs**, not jobs that drop files. Three
+decisions, settled together:
+
+| Question | Decision |
+|---|---|
+| Discovery | **One gateway, path-routed.** A single hostname and TLS certificate; each collector is a path under `/collectors/<name>/`. "Centralized" means one front door, not a registry service. |
+| Auth | **Bearer token per collector.** Stored as a Kubernetes Secret, injected via the `extraEnv` + `secretKeyRef` pattern documented below. The generator sends `Authorization: Bearer <token>`. |
+| Rotation / Phase 6 | Tokens rotate by updating the Secret. On EKS the Secret is backed by AWS Secrets Manager — the service-side code path does not change. |
+
+Chosen over mTLS and OIDC deliberately: the generator is a single external
+client on a known machine, so a rotatable shared secret is the simplest thing
+that works. Revisit if the generator ever becomes multi-tenant, or if a token
+leaking into a log becomes a realistic concern — mTLS removes the bearer secret
+entirely, and OIDC removes the long-lived one.
+
+`weather` is the first collector and today feeds nothing; it gets the gateway
+path and token treatment in Phase 5B.
 
 ---
 
