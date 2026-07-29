@@ -3,13 +3,42 @@ name: chaos-test
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
-# workflow_dispatch only. No ready-for-chaos label — CLAUDE.md's no-manual-gate
-# rule governs required merge checks, and a label additionally needs a human to
-# remember it. No nightly schedule either: chaos coverage therefore exists only
-# when somebody runs it, and will decay silently between sessions. Accepted, not
-# overlooked — see docs/chaos-runbook.md.
+# Two triggers, and neither is a schedule.
+#
+# `workflow_dispatch` runs the suite against a clean cluster on demand. That is
+# the one thing a local run can never do: this repo's dev cluster accumulates
+# state — Argo CD, Chaos Mesh, kube-state-metrics, a weather Deployment dozens of
+# revisions deep — and PR #46 hit real cross-run contamination because of it.
+#
+# `pull_request` on the paths below closes a narrower gap. `platform-tests`
+# validates scenario files structurally — schema, naming, the cannot-fail guard,
+# matching durations — but never *executes* them, so a scenario whose PromQL is
+# schema-valid and wrong merges green. That is precisely the defect class PR #46
+# hit three times, and every instance was caught by running the scenario, not by
+# review. These paths are the only ones that can introduce it, and they change
+# rarely, so the cost is a slow check on an uncommon PR.
+#
+# Still no ready-for-chaos label: CLAUDE.md's no-manual-gate rule governs
+# required merge checks, and a label needs a human to remember it. Still no
+# nightly schedule: a scheduled run spends a cluster every night on a repo that
+# changes in bursts. Between manual runs and PRs that touch these paths, chaos
+# coverage remains discontinuous — accepted, not overlooked. See
+# docs/chaos-runbook.md.
+#
+# This is deliberately NOT a required status check. Chaos scenarios are
+# timing-sensitive, so let it earn trust over several runs before anyone makes it
+# blocking.
 on:
   workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'chaos/**'
+      - 'infra/chaos-mesh/**'
+      - 'scripts/run-chaos.py'
+      # Changes to this workflow trigger it, so a change to how chaos runs is
+      # tested by running chaos.
+      - '.github/workflows/chaos-test.yml'
 
 concurrency:
   group: chaos-test-${{ github.ref }}
