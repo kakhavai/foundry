@@ -23,7 +23,6 @@ SERVICES = {
         "local_port": 8000,
         "remote_port": 8000,
         "url": "http://localhost:8000",
-        "pod_label": "app.kubernetes.io/name=weather",
     },
     "player-projections": {
         "svc": "player-projections",
@@ -31,7 +30,6 @@ SERVICES = {
         "local_port": 8001,
         "remote_port": 8001,
         "url": "http://localhost:8001",
-        "pod_label": "app.kubernetes.io/name=player-projections",
     },
 }
 
@@ -128,11 +126,15 @@ def main() -> None:
             "kubectl", "wait", "--for=condition=ready", "pod",
             "--all", "-n", "monitoring", "--timeout=180s",
         ])
+        # `rollout status`, not `wait --for=condition=ready pod -l <label>`: the
+        # label selector also matches pods left Terminating by a rollout, which
+        # never reach Ready, so the wait times out on a healthy Deployment.
+        # deploy-local.py already waits per service; this re-checks cheaply
+        # after all of them are deployed.
         for service in requested:
-            label = SERVICES[service]["pod_label"]
             run([
-                "kubectl", "wait", "--for=condition=ready", "pod",
-                "-l", label, "--timeout=120s",
+                "kubectl", "rollout", "status", f"deployment/{service}",
+                "--timeout=120s",
             ])
     else:
         print("\nSkipping deploy — starting port-forwards only.")
