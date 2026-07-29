@@ -5,13 +5,26 @@ import subprocess
 import sys
 
 SERVICES = {
-    "weather": {"port": 8000, "secret": "weather-collector-token"},
+    "weather": {
+        "port": 8000,
+        "secret": "weather-collector-token",
+        "lake_secret": "weather-lake-credentials",
+        # weather is a uv workspace member depending on libs/collector-core/
+        # by path, so the build needs the repo root in its context. Future
+        # collectors that consume collector-core inherit this same value.
+        "build_context_root": True,
+    },
     "player-projections": {"port": 8001},
 }
 
 # Kind-only. A real token is created out of band and never enters Git; on EKS
 # the Secret is backed by AWS Secrets Manager.
 LOCAL_DEV_TOKEN = "local-dev-token"
+
+# Matches infra/grafana-stack/values/minio.yaml. Kind-only, committed
+# deliberately — real credentials are created out of band and never enter Git.
+LOCAL_LAKE_ACCESS_KEY = "foundry"
+LOCAL_LAKE_SECRET_KEY = "foundry-local-dev"
 
 
 _BUILD_ENV = {**os.environ, "DOCKER_BUILDKIT": "1"}
@@ -33,31 +46,48 @@ def deployment_exists(service: str) -> bool:
     return result.returncode == 0
 
 
-def ensure_collector_secret(name: str) -> None:
-    """Create or update the collector's bearer-token Secret.
+def run_piped(render_cmd: list[str], apply_cmd: list[str]) -> None:
+    """Run `render_cmd`, piping its stdout into `apply_cmd`.
 
-    Rendered then applied rather than `kubectl create secret` alone, which
-    fails on every deploy after the first.
+    Used for `kubectl create secret ... --dry-run=client -o yaml | kubectl
+    apply -f -`, which is idempotent across every deploy after the first,
+    unlike `kubectl create secret` alone.
     """
+    rendered = subprocess.run(render_cmd, capture_output=True, text=True)
+    if rendered.returncode != 0:
+        print(rendered.stderr)
+        sys.exit(rendered.returncode)
+
+    applied = subprocess.run(apply_cmd, input=rendered.stdout, text=True)
+    if applied.returncode != 0:
+        sys.exit(applied.returncode)
+
+
+def ensure_collector_secret(name: str) -> None:
+    """Create or update the collector's bearer-token Secret."""
     print(f"\n$ kubectl create secret generic {name} | kubectl apply -f -")
-    rendered = subprocess.run(
+    run_piped(
         [
             "kubectl", "create", "secret", "generic", name,
             f"--from-literal=token={LOCAL_DEV_TOKEN}",
             "--dry-run=client", "-o", "yaml",
         ],
-        capture_output=True,
-        text=True,
+        ["kubectl", "apply", "-f", "-"],
     )
-    if rendered.returncode != 0:
-        print(rendered.stderr)
-        sys.exit(rendered.returncode)
 
-    applied = subprocess.run(
-        ["kubectl", "apply", "-f", "-"], input=rendered.stdout, text=True
+
+def ensure_lake_secret(name: str) -> None:
+    """Create or update the collector's object-store credentials Secret."""
+    print(f"\n$ kubectl create secret generic {name} | kubectl apply -f -")
+    run_piped(
+        [
+            "kubectl", "create", "secret", "generic", name,
+            f"--from-literal=access-key-id={LOCAL_LAKE_ACCESS_KEY}",
+            f"--from-literal=secret-access-key={LOCAL_LAKE_SECRET_KEY}",
+            "--dry-run=client", "-o", "yaml",
+        ],
+        ["kubectl", "apply", "-f", "-"],
     )
-    if applied.returncode != 0:
-        sys.exit(applied.returncode)
 
 
 def main() -> None:
@@ -77,12 +107,26 @@ def main() -> None:
     # Checked before the upgrade, because the upgrade is what creates it.
     already_deployed = deployment_exists(service)
 
-    run(["docker", "build", "-t", f"{service}:local", f"services/{service}/"], env=_BUILD_ENV)
+    if SERVICES[service].get("build_context_root"):
+        run(
+            ["docker", "build", "-f", f"services/{service}/Dockerfile",
+             "-t", f"{service}:local", "."],
+            env=_BUILD_ENV,
+        )
+    else:
+        run(
+            ["docker", "build", "-t", f"{service}:local", f"services/{service}/"],
+            env=_BUILD_ENV,
+        )
     run(["kind", "load", "docker-image", f"{service}:local", "--name", "foundry"])
 
     secret = SERVICES[service].get("secret")
     if secret:
         ensure_collector_secret(secret)
+
+    lake_secret = SERVICES[service].get("lake_secret")
+    if lake_secret:
+        ensure_lake_secret(lake_secret)
 
     run([
         "helm", "upgrade", "--install", service,

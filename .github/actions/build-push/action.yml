@@ -11,6 +11,17 @@ inputs:
   tag:
     required: true
     description: Image tag (e.g. the Git SHA)
+  context:
+    required: false
+    default: ''
+    description: >-
+      Docker build context. Defaults to services/<service>. Collectors that
+      depend on the libs/collector-core workspace member must pass '.' so the
+      library is inside the context.
+  dockerfile:
+    required: false
+    default: ''
+    description: Dockerfile path. Defaults to <context>/Dockerfile.
 
 runs:
   using: composite
@@ -23,7 +34,8 @@ runs:
         password: ${{ github.token }}
     - uses: docker/build-push-action@v6
       with:
-        context: services/${{ inputs.service }}
+        context: ${{ inputs.context || format('services/{0}', inputs.service) }}
+        file: ${{ inputs.dockerfile || format('services/{0}/Dockerfile', inputs.service) }}
         push: true
         tags: ${{ inputs.image-name }}:${{ inputs.tag }}
         cache-from: type=gha

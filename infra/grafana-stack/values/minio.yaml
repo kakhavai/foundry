@@ -1,0 +1,16 @@
+# Local-only object store standing in for S3. On EKS (Phase 6) the same code
+# path talks to real S3 with an IRSA role; only LAKE_ENDPOINT_URL differs.
+mode: standalone
+replicas: 1
+persistence:
+  enabled: false          # Kind clusters are disposable; the lake is not
+                          # durable locally by design.
+resources:
+  requests:
+    memory: 256Mi
+rootUser: foundry
+rootPassword: foundry-local-dev
+buckets:
+  - name: foundry-signals
+    policy: none
+    purge: false
