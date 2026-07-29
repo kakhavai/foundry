@@ -109,11 +109,20 @@ def main() -> None:
         run(["helmfile", "repos"], cwd=grafana_stack)
         run(["helmfile", "apply"], cwd=grafana_stack)
 
-        # 3. Services
+        # 3. Collector gateway
+        gateway = ROOT / "infra/gateway"
+        run(["helmfile", "apply"], cwd=gateway)
+        run(["kubectl", "apply", "-f", str(gateway / "manifests")])
+        run([
+            "kubectl", "wait", "--for=condition=Programmed",
+            "gateway/foundry", "-n", "envoy-gateway-system", "--timeout=180s",
+        ])
+
+        # 4. Services
         for service in requested:
             run([sys.executable, ROOT / "scripts/deploy-local.py", service])
 
-        # 4. Wait for pods to be ready
+        # 5. Wait for pods to be ready
         print("\nWaiting for pods to be ready...")
         run([
             "kubectl", "wait", "--for=condition=ready", "pod",
@@ -128,7 +137,7 @@ def main() -> None:
     else:
         print("\nSkipping deploy — starting port-forwards only.")
 
-    # 5. Start port-forwards in background
+    # 6. Start port-forwards in background
     print("\nStarting port-forwards...")
     procs = []
 
@@ -154,7 +163,7 @@ def main() -> None:
     # Give forwards a moment to bind
     time.sleep(2)
 
-    # 6. Print access URLs
+    # 7. Print access URLs
     print("\n" + "=" * 50)
     print("Stack is up. Access your services at:\n")
     for service in requested:
@@ -162,11 +171,12 @@ def main() -> None:
         print(f"  {service:<20} {cfg['url']}")
     for fwd in OBS_FORWARDS:
         print(f"  {fwd['name']:<20} {fwd['url']}")
+    print(f"  {'Collector gateway':<20} http://localhost:8080/collectors/<name>/")
     print("\n" + "=" * 50)
     print("Press Ctrl+C to stop port-forwards (cluster stays running).")
     print("To tear everything down: kind delete cluster --name foundry")
 
-    # 7. Wait for Ctrl+C
+    # 8. Wait for Ctrl+C
     try:
         while True:
             time.sleep(1)
