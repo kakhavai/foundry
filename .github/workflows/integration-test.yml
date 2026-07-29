@@ -58,7 +58,7 @@ jobs:
         run: helm version
       - uses: astral-sh/setup-uv@v5
       - name: Run platform tests
-        run: uv run --with pyyaml==6.0.3 --with pytest==9.0.3 pytest tests/ -q
+        run: uv run --with pyyaml==6.0.3 --with pytest==9.0.3 --with jsonschema==4.26.0 pytest tests/ -q
 
   integration-test:
     needs: changes

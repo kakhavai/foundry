@@ -19,9 +19,7 @@ REGENERATE_HINT = (
     '"import json,pathlib; from weather.main import app; '
     "pathlib.Path('../../contracts/openapi/weather.json').write_text("
     "json.dumps(app.openapi(), indent=2, sort_keys=True) + '\\n')\"\n"
-    "and include it in the same PR so the surface change is explicit in review.\n"
-    "As of Task 13 this snapshot still describes the pre-collector surface "
-    "(/weather/stadiums); regenerating it is Task 15's job — see CLAUDE.md."
+    "and include it in the same PR so the surface change is explicit in review."
 )
 
 
@@ -75,9 +73,7 @@ def response_shape(obj, prefix: str = "") -> list[str]:
 SHAPE_HINT = (
     "A response body's field names changed.\n"
     "If intentional, regenerate contracts/responses/weather.json and include it "
-    "in the same PR so the change is explicit in review.\n"
-    "As of Task 13 this snapshot still describes the pre-collector surface; "
-    "regenerating it is Task 15's job — see CLAUDE.md."
+    "in the same PR so the change is explicit in review."
 )
 
 SCHEDULE_HEADER = (
@@ -114,12 +110,8 @@ def _hourly_payload() -> dict:
 def test_response_shapes_match_committed_contract(client, seeded_state):
     """Catches renamed or dropped response fields at any nesting depth.
 
-    `contracts/responses/weather.json` still describes the pre-Task-13 surface
-    (`/weather/stadiums`) — regenerating it is Task 15's job, per CLAUDE.md.
-    This test is therefore expected to fail on `assert actual == committed`
-    until that regeneration lands; what it must not do is crash, so `/refresh`'s
-    upstream calls are mocked the same way `capture_week` is mocked everywhere
-    else in this suite.
+    `/refresh`'s upstream calls are mocked the same way `capture_week` is
+    mocked everywhere else in this suite.
     """
     respx.get(SCHEDULE_URL).mock(
         return_value=httpx.Response(200, text=f"{SCHEDULE_HEADER}\n{SCHEDULE_ROW}\n")
