@@ -81,6 +81,13 @@ def main() -> None:
         "--set", "image.pullPolicy=Never",
     ])
 
+    # image.tag is pinned to "local" on every deploy, so a rebuilt image (or a
+    # just-updated token Secret) produces a byte-identical PodSpec and
+    # Kubernetes never restarts the pod on its own. Force it unconditionally
+    # rather than trying to detect "did anything actually change".
+    run(["kubectl", "rollout", "restart", f"deployment/{service}"])
+    run(["kubectl", "rollout", "status", f"deployment/{service}", "--timeout=180s"])
+
     print(f"\n{'=' * 50}")
     print(f"Deployed {service}. To access it:\n")
     print(f"  kubectl port-forward svc/{service} {port}:{port}")

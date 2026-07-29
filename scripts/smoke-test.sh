@@ -2,7 +2,11 @@
 set -euo pipefail
 
 cleanup() {
-  kill "$WEATHER_PF" "$PP_PF" "$GW_PF" 2>/dev/null || true
+  # Expand each as "possibly-unset" (":-") — the trap is armed before the
+  # Envoy Service lookup below, and if that lookup fails under set -e, these
+  # three are never assigned; without the default, set -u would throw its own
+  # "unbound variable" error on top of the real failure.
+  kill "${WEATHER_PF:-}" "${PP_PF:-}" "${GW_PF:-}" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -53,6 +57,10 @@ STATUS=$(curl -o /dev/null -sw '%{http_code}' "$GATEWAY/weather/stadiums")
 [ "$STATUS" = "401" ] || (echo "gateway without token should be 401, got $STATUS" && exit 1)
 STATUS=$(curl -o /dev/null -sw '%{http_code}' http://localhost:8000/weather/stadiums)
 [ "$STATUS" = "401" ] || (echo "direct Service call without token should be 401, got $STATUS" && exit 1)
+# A wrong (non-empty) token must be rejected too, not just a missing one — this
+# is the deployed-path check for what test_wrong_token_is_rejected covers in-process.
+STATUS=$(curl -o /dev/null -sw '%{http_code}' -H "Authorization: Bearer wrong-token" "$GATEWAY/weather/stadiums")
+[ "$STATUS" = "401" ] || (echo "gateway with wrong token should be 401, got $STATUS" && exit 1)
 echo "collector auth OK"
 echo "weather: OK"
 

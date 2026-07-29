@@ -101,6 +101,22 @@ def test_enabling_the_gateway_without_a_path_prefix_fails_the_render():
     assert "gateway.pathPrefix" in exc.value.stderr
 
 
+def _value_layers(values_file: Path) -> list[Path]:
+    """The value-file stack ArgoCD actually applies for this service.
+
+    `infra/gitops/argo/<name>.yaml` layers the base `helm/values/<name>/values.yaml`
+    with an env overlay at `infra/gitops/envs/local/<name>/values.yaml`. A service
+    could enable the gateway in either layer, so both must be rendered together —
+    reading just the base file (as this test used to) misses a `gateway.enabled`
+    set only in the overlay.
+    """
+    layers = [values_file]
+    overlay = ROOT / "infra" / "gitops" / "envs" / "local" / values_file.parent.name / "values.yaml"
+    if overlay.exists():
+        layers.append(overlay)
+    return layers
+
+
 @pytest.mark.parametrize(
     "values_file", sorted(VALUES_DIR.glob("*/values.yaml")), ids=lambda p: p.parent.name
 )
@@ -109,22 +125,48 @@ def test_gateway_enabled_services_require_a_collector_token(values_file):
     the cluster whose values file never wires up the token it authenticates
     with. Auth is enforced in-process, so the pod would answer 503 to everyone
     — but an author who then "fixed" it by relaxing the service would have
-    published an open collector. Catch the missing Secret at render time.
+    published an open collector. Catch the missing Secret at render time,
+    using the exact value-file stack ArgoCD applies (base + env overlay), not
+    a parse of the base file alone — a service can flip `gateway.enabled` in
+    either layer.
     """
-    values = yaml.safe_load(values_file.read_text())
-    if not (values.get("gateway") or {}).get("enabled"):
+    docs = render(*_value_layers(values_file))
+    found = routes(docs)
+    if not found:
         pytest.skip("gateway not enabled for this service")
 
-    tokens = [
-        env
-        for env in values.get("extraEnv") or []
-        if env.get("name") == "COLLECTOR_TOKEN"
-    ]
+    deployments = [d for d in docs if d.get("kind") == "Deployment"]
+    assert deployments, f"{values_file.parent.name} rendered an HTTPRoute but no Deployment"
+    containers = deployments[0]["spec"]["template"]["spec"]["containers"]
+    env_vars = [env for c in containers for env in (c.get("env") or [])]
+
+    tokens = [env for env in env_vars if env.get("name") == "COLLECTOR_TOKEN"]
     assert len(tokens) == 1, (
         f"{values_file.parent.name} enables the collector gateway but does not "
-        "declare a COLLECTOR_TOKEN env var"
+        "declare a COLLECTOR_TOKEN env var on the rendered Deployment"
     )
     assert "secretKeyRef" in (tokens[0].get("valueFrom") or {}), (
         f"{values_file.parent.name}'s COLLECTOR_TOKEN must come from a "
         "secretKeyRef, never a literal value"
     )
+
+
+def test_gateway_path_prefixes_are_unique_across_collectors():
+    """26 collectors are expected to copy this values file. A forgotten
+    `pathPrefix` edit produces two HTTPRoutes claiming the same path; Gateway
+    API resolves the conflict by creation timestamp, so the loser is silently
+    unreachable through the gateway rather than failing loudly.
+    """
+    prefixes: dict[str, str] = {}
+    for values_file in sorted(VALUES_DIR.glob("*/values.yaml")):
+        docs = render(*_value_layers(values_file))
+        for route in routes(docs):
+            for rule in route["spec"]["rules"]:
+                for match in rule["matches"]:
+                    prefix = match["path"]["value"]
+                    owner = values_file.parent.name
+                    assert prefix not in prefixes, (
+                        f"{owner!r} and {prefixes.get(prefix)!r} both claim "
+                        f"gateway.pathPrefix {prefix!r}"
+                    )
+                    prefixes[prefix] = owner

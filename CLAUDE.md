@@ -110,6 +110,15 @@ captured at pod start, so updating the Secret takes effect only after
 literal `local-dev-token`. That value is Kind-only and committed deliberately;
 real tokens are created out of band and never enter Git.
 
+**The Secret is not managed by GitOps — nothing in `infra/gitops/` creates it.**
+On a local Kind cluster, `scripts/deploy-local.py` creates it, as above. On an
+ArgoCD-managed cluster (or Phase 6's EKS, where it is backed by AWS Secrets
+Manager) it must be created before or alongside the first sync — `argocd-deploy.py`
+does not do this. Because `optional: true` lets the pod start without it, and
+`/health` doesn't check for it, the symptom is not a failed deploy: the ArgoCD
+Application reports **Healthy** while every data route 503s. Recognize that
+combination for what it is before assuming the deploy itself is broken.
+
 ---
 
 ## Current Services

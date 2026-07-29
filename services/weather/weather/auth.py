@@ -7,9 +7,12 @@ auth protects nothing in-cluster; and `scripts/smoke-test.sh` port-forwards the
 Service directly, so gateway-only auth would leave a required merge check green
 over an unprotected path.
 
-Middleware rather than per-route dependencies, because middleware fails safe: a
-route added later is protected by default. This pattern gets copied across the
-Phase 8 collector fleet, so the default matters more than the convenience.
+Middleware rather than per-route dependencies, because middleware fails safe: an
+HTTP route added later is protected by default. This pattern gets copied across
+the Phase 8 collector fleet, so the default matters more than the convenience.
+The guarantee is scoped to HTTP, though: `app.middleware("http")` only wraps
+`http`-scope ASGI requests, so a future `@app.websocket(...)` route would
+bypass this check entirely and need its own. No WebSocket routes exist today.
 """
 
 import os
