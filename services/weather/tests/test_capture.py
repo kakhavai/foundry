@@ -30,13 +30,13 @@ def schedule_csv(*rows: str) -> str:
 
 
 def hourly_payload() -> dict:
-    # `fetch_current_conditions` (weather/adapters/forecast.py) asks for the
-    # real wall-clock hour, not the injected `now` — that's correct production
-    # behaviour (current conditions means *right now*), but it means a test
-    # fixture pinned to a single calendar date is only deterministic on that
-    # date. Covering both the fixed game date and whatever "today" the suite
-    # actually runs on keeps every test passing regardless of the real date.
-    dates = sorted({"2026-09-13", datetime.now(tz=UTC).strftime("%Y-%m-%d")})
+    # `fetch_current_conditions` (weather/adapters/forecast.py) takes its
+    # reference time as the `now` capture_week hands it, truncated to the
+    # hour — it no longer reads the wall clock (Task 13, Step 3b). A payload
+    # keyed on the fixed test NOW and the fixed kickoff date is therefore
+    # deterministic on any calendar date; that determinism is the proof the
+    # clock injection landed.
+    dates = sorted({"2026-09-13", NOW.strftime("%Y-%m-%d")})
     times = [f"{d}T{h:02d}:00" for d in dates for h in range(0, 24)]
     n = len(times)
     return {

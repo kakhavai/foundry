@@ -10,9 +10,9 @@ Three requirements the previous stateless-proxy client did not have:
 3. Carry the model's **spread** into `bands` rather than publishing a bare point
    estimate. Band width is what makes a republished nowcast detectable.
 
-`_maybe_inject_fault` is duplicated verbatim from `weather/client.py` rather
-than imported from it — the two modules coexist deliberately until Task 13
-deletes `client.py` and rewrites the routes that consume it.
+`_maybe_inject_fault` was duplicated verbatim from `weather/client.py` while
+the two modules coexisted; Task 13 deleted `client.py` and rewrote the routes
+that used to consume it, so this copy is now the only one.
 """
 
 import asyncio
@@ -151,14 +151,25 @@ async def fetch_forecast_at(
 
 
 async def fetch_current_conditions(
-    lat: float, lon: float, client: httpx.AsyncClient
+    lat: float, lon: float, client: httpx.AsyncClient, *, now: datetime
 ) -> dict:
     """Conditions right now — the `venue_conditions_current` signal.
 
     Distinct from `fetch_forecast_at` with a zero lead: this asks the upstream
     for observations, so it carries no bands.
+
+    `now` is injected rather than read from the wall clock — every other
+    time-dependent component in this codebase (`collector_core.cadence.next_interval`,
+    `collector_core.refresh.RefreshGate`, `capture_week` itself) takes its
+    reference time as a parameter, and this one used to be the exception. A
+    caller-supplied clock is what makes `capture_week`'s own `now` — used for
+    `captured_at`, `Upstream.fetched_at`, and `forecast_lead_hours` — the single
+    instant a capture pass describes, rather than letting this one signal type
+    silently drift by however long the pass takes. It is also what makes a
+    replay or backfill through `capture_week` with an injected `now` actually
+    replay this signal type instead of hitting the real clock.
     """
-    now = datetime.now(tz=UTC).replace(minute=0, second=0, microsecond=0)
-    result = await fetch_forecast_at(lat, lon, now, client, lead_hours=0.0)
+    valid_at = now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+    result = await fetch_forecast_at(lat, lon, valid_at, client, lead_hours=0.0)
     result.pop("bands", None)
     return result

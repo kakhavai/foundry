@@ -1,15 +1,41 @@
+"""Property-based tests for the adapters that parse untrusted upstream payloads.
+
+Ported from the pre-collector `weather/client.py` fuzz suite when Task 13
+deleted that module. `client.py`'s parser fuzzed a single Open-Meteo "current
+conditions" object and a free-text geocoding response; neither of those
+upstreams, nor the functions that called them (`fetch_weather_for_coords`,
+`fetch_current_weather`, `GEOCODE_URL`), exist anymore.
+
+What survives is the *shape* of coverage that mattered — "an untrusted payload
+with a field missing or wrong-typed must fail loudly, not silently" and "any
+well-formed payload maps cleanly to the documented output" — retargeted at the
+two adapters that now do this job:
+
+- `weather.adapters.forecast` — Open-Meteo's hourly forecast, keyed by hour.
+- `weather.adapters.schedule` — the nflverse schedule CSV.
+
+Dropped outright, not ported: everything that exercised `fetch_current_weather`
+and `GEOCODE_URL`. The schedule adapter replaced geocoding entirely — there is
+no "look up a free-text location string" code path left for a property test to
+target. Fault-injection fuzzing (`FAULT_UPSTREAM_ERROR_RATE` etc.) moved to
+`test_faults.py` alongside the rest of that behaviour's coverage, rather than
+staying split across two files.
+"""
+
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 import respx
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from weather.client import (
-    GEOCODE_URL,
-    WEATHER_URL,
-    fetch_current_weather,
-    fetch_weather_for_coords,
+from weather.adapters.forecast import (
+    FORECAST_URL,
+    fetch_current_conditions,
+    fetch_forecast_at,
 )
+from weather.adapters.schedule import parse_schedule_csv
 
 # Hypothesis drives many examples per test; respx and the event loop are
 # function-scoped, so the function_scoped_fixture health check is suppressed.
@@ -19,37 +45,50 @@ SETTINGS = settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 
-REQUIRED_CURRENT_FIELDS = [
+VALID_AT = datetime(2026, 9, 13, 17, 0, tzinfo=UTC)
+
+REQUIRED_HOURLY_FIELDS = [
+    "time",
     "temperature_2m",
+    "apparent_temperature",
     "relative_humidity_2m",
     "wind_speed_10m",
-    "weather_code",
+    "wind_gusts_10m",
+    "wind_direction_10m",
     "precipitation",
-    "time",
+    "precipitation_probability",
 ]
 
 
-@SETTINGS
-@given(missing=st.sampled_from(REQUIRED_CURRENT_FIELDS))
-@respx.mock
-async def test_missing_current_field_raises_keyerror(missing):
-    """A field dropped by the upstream must fail loudly, not return a partial dict."""
-    payload = {
-        "current": {
-            "temperature_2m": 12.0,
-            "relative_humidity_2m": 55,
-            "wind_speed_10m": 9.0,
-            "weather_code": 3,
-            "precipitation": 0.0,
-            "time": "2026-09-30T14:00",
+def _valid_hourly() -> dict:
+    return {
+        "hourly": {
+            "time": ["2026-09-13T17:00"],
+            "temperature_2m": [68.0],
+            "apparent_temperature": [67.0],
+            "relative_humidity_2m": [62],
+            "wind_speed_10m": [11.0],
+            "wind_gusts_10m": [18.0],
+            "wind_direction_10m": [210],
+            "precipitation": [0.0],
+            "precipitation_probability": [10],
         }
     }
-    del payload["current"][missing]
-    respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json=payload))
+
+
+@SETTINGS
+@given(missing=st.sampled_from(REQUIRED_HOURLY_FIELDS))
+@respx.mock
+async def test_missing_hourly_field_raises_keyerror(missing):
+    """A field dropped from the upstream's hourly block must fail loudly, not
+    silently publish a partial or wrong forecast reading."""
+    payload = _valid_hourly()
+    del payload["hourly"][missing]
+    respx.get(FORECAST_URL).mock(return_value=httpx.Response(200, json=payload))
 
     async with httpx.AsyncClient() as client:
         with pytest.raises(KeyError):
-            await fetch_weather_for_coords(37.7, -122.4, client)
+            await fetch_forecast_at(35.2, -80.8, VALID_AT, client)
 
 
 @SETTINGS
@@ -57,11 +96,11 @@ async def test_missing_current_field_raises_keyerror(missing):
 @respx.mock
 async def test_upstream_error_status_raises(status):
     """Every 4xx/5xx from Open-Meteo surfaces as HTTPStatusError."""
-    respx.get(WEATHER_URL).mock(return_value=httpx.Response(status))
+    respx.get(FORECAST_URL).mock(return_value=httpx.Response(status))
 
     async with httpx.AsyncClient() as client:
         with pytest.raises(httpx.HTTPStatusError):
-            await fetch_weather_for_coords(37.7, -122.4, client)
+            await fetch_forecast_at(35.2, -80.8, VALID_AT, client)
 
 
 @SETTINGS
@@ -73,13 +112,13 @@ async def test_upstream_error_status_raises(status):
     )
 )
 @respx.mock
-async def test_non_object_body_raises_typeerror_or_keyerror(body):
+async def test_non_object_body_raises_typeerror(body):
     """A JSON body that is not an object must not produce a silent success."""
-    respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json=body))
+    respx.get(FORECAST_URL).mock(return_value=httpx.Response(200, json=body))
 
     async with httpx.AsyncClient() as client:
         with pytest.raises((TypeError, KeyError)):
-            await fetch_weather_for_coords(37.7, -122.4, client)
+            await fetch_forecast_at(35.2, -80.8, VALID_AT, client)
 
 
 @respx.mock
@@ -89,229 +128,189 @@ async def test_json_null_body_raises_typeerror():
     Note `content=b"null"`, not `json=None` — httpx treats `json=None` as
     "no payload supplied" and sends an empty body instead.
     """
-    respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, content=b"null"))
+    respx.get(FORECAST_URL).mock(return_value=httpx.Response(200, content=b"null"))
 
     async with httpx.AsyncClient() as client:
         with pytest.raises(TypeError):
-            await fetch_weather_for_coords(37.7, -122.4, client)
+            await fetch_forecast_at(35.2, -80.8, VALID_AT, client)
 
 
 @SETTINGS
 @given(
-    temp=st.floats(min_value=-100, max_value=100, allow_nan=False),
-    humidity=st.integers(min_value=0, max_value=100),
-    wind=st.floats(min_value=0, max_value=500, allow_nan=False),
-    code=st.integers(min_value=0, max_value=99),
-    precip=st.floats(min_value=0, max_value=1000, allow_nan=False),
+    temp=st.floats(min_value=-40, max_value=130, allow_nan=False, allow_infinity=False),
+    feels_like=st.floats(
+        min_value=-40, max_value=130, allow_nan=False, allow_infinity=False
+    ),
+    humidity=st.floats(
+        min_value=0, max_value=100, allow_nan=False, allow_infinity=False
+    ),
+    wind=st.floats(min_value=0, max_value=200, allow_nan=False, allow_infinity=False),
+    gust=st.floats(min_value=0, max_value=250, allow_nan=False, allow_infinity=False),
+    direction=st.integers(min_value=0, max_value=359),
+    precip_rate=st.floats(
+        min_value=0, max_value=5, allow_nan=False, allow_infinity=False
+    ),
+    precip_prob=st.integers(min_value=0, max_value=100),
 )
 @respx.mock
-async def test_wellformed_payload_always_maps_cleanly(
-    temp, humidity, wind, code, precip
+async def test_wellformed_payload_always_maps_to_documented_fields(
+    temp, feels_like, humidity, wind, gust, direction, precip_rate, precip_prob
 ):
-    """Any structurally valid payload maps to the documented output keys."""
-    respx.get(WEATHER_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "current": {
-                    "temperature_2m": temp,
-                    "relative_humidity_2m": humidity,
-                    "wind_speed_10m": wind,
-                    "weather_code": code,
-                    "precipitation": precip,
-                    "time": "2026-09-30T14:00",
-                }
-            },
-        )
-    )
+    """Any structurally valid hourly payload maps to the documented output
+    keys, in the same imperial units the upstream already reports them in —
+    the adapter's job is selecting the right hour, not converting units."""
+    payload = {
+        "hourly": {
+            "time": ["2026-09-13T17:00"],
+            "temperature_2m": [temp],
+            "apparent_temperature": [feels_like],
+            "relative_humidity_2m": [humidity],
+            "wind_speed_10m": [wind],
+            "wind_gusts_10m": [gust],
+            "wind_direction_10m": [direction],
+            "precipitation": [precip_rate],
+            "precipitation_probability": [precip_prob],
+        }
+    }
+    respx.get(FORECAST_URL).mock(return_value=httpx.Response(200, json=payload))
 
     async with httpx.AsyncClient() as client:
-        result = await fetch_weather_for_coords(37.7, -122.4, client)
+        result = await fetch_forecast_at(35.2, -80.8, VALID_AT, client)
 
-    assert result == {
-        "temperature_c": temp,
-        "relative_humidity_pct": humidity,
-        "wind_speed_kmh": wind,
-        "weather_code": code,
-        "precipitation_mm": precip,
-        "time": "2026-09-30T14:00",
+    assert result["temperature_f"] == temp
+    assert result["feels_like_f"] == feels_like
+    assert result["wind_speed_mph"] == wind
+    assert result["wind_gust_mph"] == gust
+    assert result["wind_direction_deg"] == direction
+    assert result["precipitation_rate_in_hr"] == precip_rate
+    assert result["precipitation_probability"] == precip_prob / 100.0
+    assert result["humidity_pct"] == humidity
+    assert result["precipitation_type"] in {
+        "none",
+        "rain",
+        "snow",
+        "sleet",
+        "freezing_rain",
     }
 
 
 @SETTINGS
-@given(location=st.text(min_size=1, max_size=30))
+@given(
+    minute=st.integers(min_value=0, max_value=59),
+    second=st.integers(min_value=0, max_value=59),
+    microsecond=st.integers(min_value=0, max_value=999_999),
+)
 @respx.mock
-async def test_empty_geocode_results_raise_valueerror(location):
-    """An unknown location is a ValueError, never an IndexError."""
-    respx.get(GEOCODE_URL).mock(return_value=httpx.Response(200, json={"results": []}))
-
-    async with httpx.AsyncClient() as client:
-        with pytest.raises(ValueError, match="Location not found"):
-            await fetch_current_weather(location, client)
-
-
-@respx.mock
-async def test_geocode_missing_results_key_raises_valueerror():
-    """A payload with no `results` key at all behaves the same as an empty list."""
-    respx.get(GEOCODE_URL).mock(return_value=httpx.Response(200, json={}))
-
-    async with httpx.AsyncClient() as client:
-        with pytest.raises(ValueError, match="Location not found"):
-            await fetch_current_weather("nowhere", client)
-
-
-@respx.mock
-async def test_fetch_current_weather_success_path():
-    """A valid geocode result triggers the weather fetch and returns enriched data."""
-    respx.get(GEOCODE_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "results": [
-                    {
-                        "name": "San Francisco",
-                        "latitude": 37.7749,
-                        "longitude": -122.4194,
-                    }
-                ]
-            },
-        )
-    )
-    respx.get(WEATHER_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "current": {
-                    "temperature_2m": 16.0,
-                    "relative_humidity_2m": 72,
-                    "wind_speed_10m": 8.5,
-                    "weather_code": 1,
-                    "precipitation": 0.0,
-                    "time": "2026-09-30T14:00",
-                }
-            },
-        )
-    )
-
-    async with httpx.AsyncClient() as client:
-        result = await fetch_current_weather("San Francisco", client)
-
-    assert result == {
-        "location": "San Francisco",
-        "latitude": 37.7749,
-        "longitude": -122.4194,
-        "temperature_c": 16.0,
-        "relative_humidity_pct": 72,
-        "wind_speed_kmh": 8.5,
-        "weather_code": 1,
-        "precipitation_mm": 0.0,
-        "time": "2026-09-30T14:00",
-    }
-
-
-@SETTINGS
-@given(rate=st.floats(min_value=0.01, max_value=1.0))
-@respx.mock
-async def test_fault_error_rate_injects_503(monkeypatch, rate):
-    """Any non-zero FAULT_UPSTREAM_ERROR_RATE raises when the draw falls under it.
-
-    `random.random()` is pinned to 0.0 so the branch is deterministic — asserting
-    on real randomness would make this test flaky at exactly the rate it claims
-    to verify.
+async def test_current_conditions_always_requests_the_truncated_hour(
+    minute, second, microsecond
+):
+    """New in Task 13 (Step 3b): `fetch_current_conditions` takes its reference
+    time as a parameter instead of reading the wall clock. Whatever minute or
+    second `now` lands on, the request must land on the top of that hour — not
+    a neighbouring one — or a caller a few seconds either side of the hour
+    boundary gets the wrong reading. The payload here has exactly one hour on
+    offer, so the call only succeeds if the truncation is exact.
     """
-    monkeypatch.setattr("weather.client.random.random", lambda: 0.0)
-    monkeypatch.setenv("FAULT_UPSTREAM_ERROR_RATE", str(rate))
-    route = respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json={}))
+    now = datetime(2026, 9, 13, 17, minute, second, microsecond, tzinfo=UTC)
+    respx.get(FORECAST_URL).mock(return_value=httpx.Response(200, json=_valid_hourly()))
 
     async with httpx.AsyncClient() as client:
-        with pytest.raises(httpx.HTTPStatusError) as exc:
-            await fetch_weather_for_coords(37.7, -122.4, client)
+        result = await fetch_current_conditions(35.2, -80.8, client, now=now)
 
-    assert exc.value.response.status_code == 503
-    assert not route.called  # fault short-circuits before the upstream request
+    assert result["temperature_f"] == 68.0
+    assert "bands" not in result
 
 
-@respx.mock
-async def test_fault_error_rate_not_drawn_lets_request_through(monkeypatch):
-    """The other side of the branch: draw above the rate means no fault."""
-    monkeypatch.setattr("weather.client.random.random", lambda: 0.99)
-    monkeypatch.setenv("FAULT_UPSTREAM_ERROR_RATE", "0.5")
-    route = respx.get(WEATHER_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "current": {
-                    "temperature_2m": 1.0,
-                    "relative_humidity_2m": 1,
-                    "wind_speed_10m": 1.0,
-                    "weather_code": 1,
-                    "precipitation": 0.0,
-                    "time": "t",
-                }
-            },
-        )
+# --- weather.adapters.schedule -----------------------------------------
+
+SCHEDULE_HEADER = (
+    "game_id,season,game_type,week,gameday,gametime,away_team,home_team,"
+    "location,roof,surface,stadium_id,stadium"
+)
+
+# CSV-safe free text: no field separator, no quoting, no bare newlines, no
+# surrogate halves that would fail to encode.
+_SAFE_TEXT = (
+    st.text(
+        alphabet=st.characters(
+            blacklist_categories=("Cs",), blacklist_characters=',"\r\n'
+        ),
+        min_size=1,
+        max_size=12,
+    )
+    .map(lambda s: s.strip())
+    .filter(lambda s: s != "")
+)
+
+
+def _schedule_row(
+    game_id: str,
+    home_team: str,
+    away_team: str,
+    stadium_id: str,
+    stadium_name: str,
+    roof: str,
+    location: str,
+) -> str:
+    return (
+        f"{game_id},2026,REG,1,2026-09-13,13:00,{away_team},{home_team},"
+        f"{location},{roof},grass,{stadium_id},{stadium_name}"
     )
 
-    async with httpx.AsyncClient() as client:
-        await fetch_weather_for_coords(37.7, -122.4, client)
 
-    assert route.called
-
-
-async def test_fault_latency_delays_call(monkeypatch):
-    """FAULT_UPSTREAM_LATENCY_MS sleeps for the configured duration."""
-    slept = []
-    monkeypatch.setenv("FAULT_UPSTREAM_LATENCY_MS", "250")
-
-    async def fake_sleep(seconds):
-        slept.append(seconds)
-
-    monkeypatch.setattr("weather.client.asyncio.sleep", fake_sleep)
-
-    with respx.mock:
-        respx.get(WEATHER_URL).mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "current": {
-                        "temperature_2m": 1.0,
-                        "relative_humidity_2m": 1,
-                        "wind_speed_10m": 1.0,
-                        "weather_code": 1,
-                        "precipitation": 0.0,
-                        "time": "t",
-                    }
-                },
-            )
+@SETTINGS
+@given(
+    game_id=_SAFE_TEXT,
+    home_team=_SAFE_TEXT,
+    away_team=_SAFE_TEXT,
+    stadium_id=_SAFE_TEXT,
+    stadium_name=_SAFE_TEXT,
+    roof=st.sampled_from(["outdoors", "dome", "closed", "open"]),
+)
+def test_non_neutral_rows_keep_stadium_id_and_roof(
+    game_id, home_team, away_team, stadium_id, stadium_name, roof
+):
+    text = (
+        SCHEDULE_HEADER
+        + "\n"
+        + _schedule_row(
+            game_id, home_team, away_team, stadium_id, stadium_name, roof, "Home"
         )
-        async with httpx.AsyncClient() as client:
-            await fetch_weather_for_coords(37.7, -122.4, client)
+        + "\n"
+    )
+    (game,) = parse_schedule_csv(text, season=2026, week=1)
+    assert game.game_id == game_id
+    assert game.stadium_id == stadium_id
+    assert game.roof_raw == roof
+    assert game.is_neutral_site is False
 
-    assert slept == [0.25]
 
-
-async def test_no_fault_env_vars_is_inert(monkeypatch):
-    """With no FAULT_* vars set, the injector must not sleep or raise."""
-    monkeypatch.delenv("FAULT_UPSTREAM_LATENCY_MS", raising=False)
-    monkeypatch.delenv("FAULT_UPSTREAM_ERROR_RATE", raising=False)
-
-    with respx.mock:
-        route = respx.get(WEATHER_URL).mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "current": {
-                        "temperature_2m": 1.0,
-                        "relative_humidity_2m": 1,
-                        "wind_speed_10m": 1.0,
-                        "weather_code": 1,
-                        "precipitation": 0.0,
-                        "time": "t",
-                    }
-                },
-            )
+@SETTINGS
+@given(
+    game_id=_SAFE_TEXT,
+    home_team=_SAFE_TEXT,
+    away_team=_SAFE_TEXT,
+    stadium_id=_SAFE_TEXT,
+    stadium_name=_SAFE_TEXT,
+    roof=st.sampled_from(["outdoors", "dome", "closed", "open", ""]),
+    location=st.sampled_from(["Neutral", "neutral", " NEUTRAL ", "NeUtRaL"]),
+)
+def test_neutral_rows_always_discard_stadium_id_and_roof(
+    game_id, home_team, away_team, stadium_id, stadium_name, roof, location
+):
+    """However the feed spells "neutral" and whatever venue/roof it reports for
+    the designated home team, a neutral-site row must never let them through —
+    trusting them fetches the wrong city's weather by thousands of miles."""
+    text = (
+        SCHEDULE_HEADER
+        + "\n"
+        + _schedule_row(
+            game_id, home_team, away_team, stadium_id, stadium_name, roof, location
         )
-        async with httpx.AsyncClient() as client:
-            await fetch_weather_for_coords(37.7, -122.4, client)
-
-    assert route.called
+        + "\n"
+    )
+    (game,) = parse_schedule_csv(text, season=2026, week=1)
+    assert game.is_neutral_site is True
+    assert game.stadium_id is None
+    assert game.roof_raw is None
+    assert game.stadium_name == stadium_name

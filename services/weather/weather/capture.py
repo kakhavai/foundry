@@ -111,7 +111,7 @@ async def capture_week(
         metrics.record_upstream_attempt()
         try:
             conditions = await fetch_current_conditions(
-                venue["latitude"], venue["longitude"], client
+                venue["latitude"], venue["longitude"], client, now=now
             )
         except Exception as exc:  # noqa: BLE001
             metrics.record_upstream_failure(exc)
