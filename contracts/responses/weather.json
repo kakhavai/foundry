@@ -5,7 +5,6 @@
   "/weather/stadiums": [
     "count",
     "stadiums[].city",
-    "stadiums[].enclosure_class",
     "stadiums[].id",
     "stadiums[].latitude",
     "stadiums[].longitude",
@@ -22,7 +21,6 @@
   ],
   "/weather/stadiums/{stadium_id}": [
     "city",
-    "enclosure_class",
     "id",
     "latitude",
     "longitude",

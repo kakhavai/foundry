@@ -1,14 +1,12 @@
 from weather.stadiums import BY_STADIUM_ID, RETRACTABLE_STADIUM_IDS, STADIUMS
 
 VALID_ROOF_TYPES = {"open", "fixed_dome", "retractable"}
-VALID_ENCLOSURE = {"exposed", "partial", "enclosed"}
 
 
 def test_every_stadium_has_the_new_fields():
     for slug, stadium in STADIUMS.items():
         assert stadium["stadium_id"], f"{slug} is missing stadium_id"
         assert stadium["roof_type"] in VALID_ROOF_TYPES, slug
-        assert stadium["enclosure_class"] in VALID_ENCLOSURE, slug
 
 
 def test_stadium_ids_are_unique():

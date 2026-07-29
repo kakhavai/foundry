@@ -8,7 +8,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -94.4839,
         "stadium_id": "KAN00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "highmark": {
         "id": "highmark",
@@ -19,7 +18,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -78.7870,
         "stadium_id": "BUF00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "lambeau": {
         "id": "lambeau",
@@ -30,7 +28,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -88.0622,
         "stadium_id": "GNB00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "gillette": {
         "id": "gillette",
@@ -41,7 +38,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -71.2643,
         "stadium_id": "BOS00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "metlife": {
         "id": "metlife",
@@ -52,7 +48,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -74.0745,
         "stadium_id": "NYC01",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "lincoln-financial": {
         "id": "lincoln-financial",
@@ -63,7 +58,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -75.1675,
         "stadium_id": "PHI00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "bank-of-america": {
         "id": "bank-of-america",
@@ -74,7 +68,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -80.8528,
         "stadium_id": "CAR00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "mercedes-benz": {
         "id": "mercedes-benz",
@@ -85,7 +78,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -84.4010,
         "stadium_id": "ATL97",
         "roof_type": "retractable",
-        "enclosure_class": "enclosed",
     },
     "raymond-james": {
         "id": "raymond-james",
@@ -96,7 +88,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -82.5033,
         "stadium_id": "TAM00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "soldier-field": {
         "id": "soldier-field",
@@ -107,7 +98,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -87.6167,
         "stadium_id": "CHI98",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "us-bank": {
         "id": "us-bank",
@@ -118,7 +108,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -93.2577,
         "stadium_id": "MIN01",
         "roof_type": "fixed_dome",
-        "enclosure_class": "enclosed",
     },
     "ford-field": {
         "id": "ford-field",
@@ -129,7 +118,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -83.0456,
         "stadium_id": "DET00",
         "roof_type": "fixed_dome",
-        "enclosure_class": "enclosed",
     },
     "paycor": {
         "id": "paycor",
@@ -140,7 +128,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -84.5160,
         "stadium_id": "CIN00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "huntington-bank": {
         "id": "huntington-bank",
@@ -151,7 +138,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -81.6995,
         "stadium_id": "CLE00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "acrisure": {
         "id": "acrisure",
@@ -162,7 +148,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -80.0158,
         "stadium_id": "PIT00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "mt-bank": {
         "id": "mt-bank",
@@ -173,7 +158,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -76.6227,
         "stadium_id": "BAL00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "northwest": {
         "id": "northwest",
@@ -184,7 +168,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -76.8645,
         "stadium_id": "WAS00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "att": {
         "id": "att",
@@ -195,7 +178,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -97.0945,
         "stadium_id": "DAL00",
         "roof_type": "retractable",
-        "enclosure_class": "enclosed",
     },
     "allegiant": {
         "id": "allegiant",
@@ -206,7 +188,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -115.1833,
         "stadium_id": "VEG00",
         "roof_type": "fixed_dome",
-        "enclosure_class": "enclosed",
     },
     "sofi": {
         "id": "sofi",
@@ -217,7 +198,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -118.3392,
         "stadium_id": "LAX01",
         "roof_type": "fixed_dome",
-        "enclosure_class": "enclosed",
     },
     "lumen-field": {
         "id": "lumen-field",
@@ -228,7 +208,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -122.3316,
         "stadium_id": "SEA00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "levis": {
         "id": "levis",
@@ -239,7 +218,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -121.9694,
         "stadium_id": "SFO01",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "state-farm": {
         "id": "state-farm",
@@ -250,7 +228,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -112.2626,
         "stadium_id": "PHO00",
         "roof_type": "retractable",
-        "enclosure_class": "enclosed",
     },
     "empower-field": {
         "id": "empower-field",
@@ -261,7 +238,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -105.0201,
         "stadium_id": "DEN00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "nissan": {
         "id": "nissan",
@@ -272,7 +248,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -86.7713,
         "stadium_id": "NAS00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "lucas-oil": {
         "id": "lucas-oil",
@@ -283,7 +258,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -86.1639,
         "stadium_id": "IND00",
         "roof_type": "retractable",
-        "enclosure_class": "enclosed",
     },
     "evo": {
         "id": "evo",
@@ -294,7 +268,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -81.6373,
         "stadium_id": "JAX00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "hard-rock": {
         "id": "hard-rock",
@@ -305,7 +278,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -80.2388,
         "stadium_id": "MIA00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
     "caesars-superdome": {
         "id": "caesars-superdome",
@@ -316,7 +288,6 @@ STADIUMS: dict[str, dict] = {
         "longitude": -90.0812,
         "stadium_id": "NOR00",
         "roof_type": "fixed_dome",
-        "enclosure_class": "enclosed",
     },
     "nrg": {
         "id": "nrg",
@@ -327,15 +298,12 @@ STADIUMS: dict[str, dict] = {
         "longitude": -95.4107,
         "stadium_id": "HOU00",
         "roof_type": "retractable",
-        "enclosure_class": "enclosed",
     },
 }
 
 # This is a proto-`venue` table. It migrates wholesale into the `venue`
-# collector at 8E, at which point `enclosure_class` gets a name that does not
-# collide with venue.crowd_noise_profile.enclosure_class — that field describes
-# acoustics, this one describes how much the bowl shelters the field from wind.
-# Two correlated but distinct properties.
+# collector at 8E, which is also where wind-sheltering (enclosure_class) lands
+# — it needs real per-venue sourcing and a consumer, and 8A has neither.
 
 BY_STADIUM_ID: dict[str, dict] = {s["stadium_id"]: s for s in STADIUMS.values()}
 
