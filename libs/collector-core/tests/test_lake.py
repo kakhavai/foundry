@@ -1,11 +1,17 @@
 from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
 import boto3
 import pytest
 from moto import mock_aws
 
 from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
-from collector_core.lake import NullLakeWriter, S3LakeWriter, lake_key
+from collector_core.lake import (
+    NullLakeWriter,
+    S3LakeWriter,
+    build_lake_writer_from_env,
+    lake_key,
+)
 
 BUCKET = "foundry-signals-test"
 
@@ -77,6 +83,36 @@ def test_list_keys_returns_captured_at_order():
     assert "2026-09-17" in keys[-1]
 
 
+def test_list_keys_sorts_pages_that_arrive_out_of_order():
+    """Regression guard for the `sorted()` call itself.
+
+    Real S3 (and moto) already returns list_objects_v2 pages in lexicographic
+    order for this key layout, so a test built on moto can't distinguish
+    `return sorted(keys)` from `return keys` — replacing the former with the
+    latter still passes a moto-backed test. This fakes the paginator to hand
+    back an out-of-order page so the sort is actually exercised.
+    """
+    prefix = "signals/weather/v1/season=2026/week=03/"
+    unordered_keys = [
+        prefix + "2026-09-17T09:00:00Z.json",
+        prefix + "2026-09-15T09:00:00Z.json",
+        prefix + "2026-09-16T09:00:00Z.json",
+    ]
+    fake_paginator = MagicMock()
+    fake_paginator.paginate.return_value = [
+        {"Contents": [{"Key": key} for key in unordered_keys]}
+    ]
+    fake_client = MagicMock()
+    fake_client.get_paginator.return_value = fake_paginator
+
+    writer = S3LakeWriter(BUCKET, fake_client)
+    keys = writer.list_keys("weather", "venue_forecast_kickoff", 2026, 3)
+
+    assert keys == sorted(unordered_keys)
+    assert keys[0].endswith("2026-09-15T09:00:00Z.json")
+    assert keys[-1].endswith("2026-09-17T09:00:00Z.json")
+
+
 @mock_aws
 def test_list_keys_on_an_empty_partition_returns_empty():
     client = boto3.client("s3", region_name="us-east-1")
@@ -96,3 +132,36 @@ def test_null_writer_satisfies_the_interface_and_discards():
 def test_null_writer_read_raises():
     with pytest.raises(KeyError):
         NullLakeWriter().read("anything")
+
+
+def test_build_lake_writer_from_env_without_bucket_returns_null_writer(monkeypatch):
+    monkeypatch.delenv("LAKE_BUCKET", raising=False)
+
+    writer = build_lake_writer_from_env()
+
+    assert isinstance(writer, NullLakeWriter)
+
+
+def test_build_lake_writer_from_env_with_bucket_returns_bound_s3_writer(monkeypatch):
+    """LAKE_BUCKET set, LAKE_ENDPOINT_URL unset — the production path, where
+    the default endpoint and an instance role apply."""
+    monkeypatch.setenv("LAKE_BUCKET", "foundry-signals")
+    monkeypatch.delenv("LAKE_ENDPOINT_URL", raising=False)
+
+    with patch("collector_core.lake.boto3.client") as mock_client:
+        writer = build_lake_writer_from_env()
+
+    assert isinstance(writer, S3LakeWriter)
+    assert writer._bucket == "foundry-signals"
+    mock_client.assert_called_once_with("s3", endpoint_url=None)
+
+
+def test_build_lake_writer_from_env_passes_endpoint_url_through(monkeypatch):
+    """LAKE_ENDPOINT_URL set — the Kind/MinIO development path."""
+    monkeypatch.setenv("LAKE_BUCKET", "foundry-signals")
+    monkeypatch.setenv("LAKE_ENDPOINT_URL", "http://minio.local:9000")
+
+    with patch("collector_core.lake.boto3.client") as mock_client:
+        build_lake_writer_from_env()
+
+    mock_client.assert_called_once_with("s3", endpoint_url="http://minio.local:9000")
