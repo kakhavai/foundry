@@ -3,6 +3,7 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
+from weather import metrics as weather_metrics
 from weather.main import app
 from weather.stadiums import STADIUMS
 
@@ -86,3 +87,11 @@ def test_successful_calls_count_as_attempts_but_not_failures(metric_value):
     assert response.status_code == 200
     assert attempts_after - attempts_before == 1.0
     assert failures_after - failures_before == 0.0
+
+
+def test_unknown_exception_class_falls_back_to_unknown():
+    """The fallback is unreachable through the routes — every exception type the
+    handlers catch classifies above it — so it is asserted directly. It exists so
+    the classifier can never itself raise inside a failure handler.
+    """
+    assert weather_metrics._reason(RuntimeError("something unforeseen")) == "unknown"

@@ -52,7 +52,7 @@ def register_format(fmt: str) -> None:
 
 
 def record_poll_success(fmt: str) -> None:
-    _last_success[fmt] = time.time()
+    _last_success[fmt] = time.monotonic()
     _healthy[fmt] = True
 
 
@@ -62,7 +62,7 @@ def record_poll_failure(fmt: str, exc: BaseException) -> None:
 
 
 def _cache_age_callback(options: CallbackOptions):
-    now = time.time()
+    now = time.monotonic()
     for fmt, succeeded_at in _last_success.items():
         yield Observation(now - succeeded_at, {"format": fmt})
 

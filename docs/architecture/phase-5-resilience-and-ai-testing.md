@@ -159,7 +159,8 @@ service logs anything today — and chaos criteria need metrics, not prose.
 
 - Gateway ingress with path routing for collectors, plus per-collector bearer-token auth
 - `weather` exposed as the first collector, with auth-rejection tests
-- Failure-path metrics on `player-projections`' poll loop
+- Failure-path metrics on `player-projections`' poll loop and `weather`'s
+  upstream calls, classified by `reason`
 - `infra/chaos-mesh/` — Chaos Mesh helmfile installation
 - `chaos/scenarios/` — Chaos Mesh scenario manifests with documented hypotheses
 - `tests/load/` — k6 scripts per service
