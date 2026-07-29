@@ -124,3 +124,143 @@ def test_multi_series_result_is_rejected():
 def test_failed_query_raises():
     with pytest.raises(ValueError, match="Prometheus query failed"):
         rc.extract_scalar({"status": "error", "error": "parse error"}, allow_empty=False)
+
+
+import textwrap
+
+# ── load_scenario ─────────────────────────────────────────────────────────────
+
+def _write(tmp_path, text):
+    path = tmp_path / "scenario.yaml"
+    path.write_text(textwrap.dedent(text))
+    return path
+
+
+def test_load_scenario_splits_head_from_chaos_docs(tmp_path):
+    path = _write(tmp_path, """
+        apiVersion: foundry.chaos/v1
+        kind: Scenario
+        metadata:
+          name: demo
+        spec:
+          hypothesis: something breaks
+        ---
+        apiVersion: chaos-mesh.org/v1alpha1
+        kind: PodChaos
+        metadata:
+          name: demo-chaos
+    """)
+    head, chaos = rc.load_scenario(path)
+    assert head["metadata"]["name"] == "demo"
+    assert len(chaos) == 1
+    assert chaos[0]["kind"] == "PodChaos"
+
+
+def test_load_scenario_rejects_two_heads(tmp_path):
+    path = _write(tmp_path, """
+        apiVersion: foundry.chaos/v1
+        kind: Scenario
+        metadata:
+          name: one
+        ---
+        apiVersion: foundry.chaos/v1
+        kind: Scenario
+        metadata:
+          name: two
+    """)
+    with pytest.raises(ValueError, match="exactly one"):
+        rc.load_scenario(path)
+
+
+def test_load_scenario_rejects_missing_head(tmp_path):
+    path = _write(tmp_path, """
+        apiVersion: chaos-mesh.org/v1alpha1
+        kind: PodChaos
+        metadata:
+          name: orphan
+    """)
+    with pytest.raises(ValueError, match="exactly one"):
+        rc.load_scenario(path)
+
+
+# ── validate_scenario ─────────────────────────────────────────────────────────
+
+def _valid_head():
+    return {
+        "apiVersion": "foundry.chaos/v1",
+        "kind": "Scenario",
+        "metadata": {"name": "demo"},
+        "spec": {
+            "hypothesis": "the thing recovers",
+            "steadyState": [
+                {"description": "up", "query": 'up{job="weather"}', "expect": "== 1"}
+            ],
+            "criteria": [
+                {"description": "recovered", "query": 'up{job="weather"}', "expect": "== 1"}
+            ],
+        },
+    }
+
+
+def _chaos_docs():
+    return [{"apiVersion": "chaos-mesh.org/v1alpha1", "kind": "PodChaos"}]
+
+
+def test_valid_scenario_has_no_problems():
+    assert rc.validate_scenario(_valid_head(), _chaos_docs()) == []
+
+
+def test_missing_hypothesis_is_a_problem():
+    head = _valid_head()
+    del head["spec"]["hypothesis"]
+    assert any("hypothesis" in p for p in rc.validate_scenario(head, _chaos_docs()))
+
+
+def test_missing_steady_state_is_a_problem():
+    head = _valid_head()
+    head["spec"]["steadyState"] = []
+    assert any("steadyState" in p for p in rc.validate_scenario(head, _chaos_docs()))
+
+
+def test_missing_criteria_is_a_problem():
+    head = _valid_head()
+    head["spec"]["criteria"] = []
+    assert any("criteria" in p for p in rc.validate_scenario(head, _chaos_docs()))
+
+
+def test_scenario_that_injects_nothing_is_a_problem():
+    assert any("inject" in p for p in rc.validate_scenario(_valid_head(), []))
+
+
+def test_fault_commands_count_as_injection():
+    """bad-deploy injects via kubectl, not via a Chaos Mesh resource."""
+    head = _valid_head()
+    head["spec"]["fault"] = [["kubectl", "set", "image", "deployment/weather", "weather=bad"]]
+    assert rc.validate_scenario(head, []) == []
+
+
+def test_trivially_true_criterion_is_rejected():
+    head = _valid_head()
+    head["spec"]["criteria"][0]["expect"] = ">= 0"
+    problems = rc.validate_scenario(head, _chaos_docs())
+    assert any("cannot fail" in p for p in problems)
+
+
+def test_trivially_true_steady_state_is_allowed():
+    """The guard targets criteria. A permissive steady state only makes the
+    runner more willing to start, it does not manufacture false coverage."""
+    head = _valid_head()
+    head["spec"]["steadyState"][0]["expect"] = ">= 0"
+    assert rc.validate_scenario(head, _chaos_docs()) == []
+
+
+def test_check_missing_query_is_a_problem():
+    head = _valid_head()
+    del head["spec"]["criteria"][0]["query"]
+    assert any("query" in p for p in rc.validate_scenario(head, _chaos_docs()))
+
+
+def test_check_with_unparseable_expect_is_a_problem():
+    head = _valid_head()
+    head["spec"]["criteria"][0]["expect"] = "roughly one"
+    assert any("expect" in p for p in rc.validate_scenario(head, _chaos_docs()))
