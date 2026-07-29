@@ -36,6 +36,11 @@ jobs:
               # job that runs them — including the OTel-DNS guard test itself.
               - 'tests/**'
               - 'contracts/**'
+              # chaos/ is a new top-level directory. Without an entry here a
+              # chaos-only PR skips integration-test, and a skipped required
+              # check counts as a pass. contracts/ once triggered no CI at all
+              # for exactly this reason.
+              - 'chaos/**'
 
   # Repo-root tests/ cover platform concerns that no per-service suite can see —
   # rollback, Argo CD deploy manifests, and the OTel collector DNS name rendered

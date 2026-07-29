@@ -1,0 +1,104 @@
+name: chaos-test
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+# workflow_dispatch only. No ready-for-chaos label — CLAUDE.md's no-manual-gate
+# rule governs required merge checks, and a label additionally needs a human to
+# remember it. No nightly schedule either: chaos coverage therefore exists only
+# when somebody runs it, and will decay silently between sessions. Accepted, not
+# overlooked — see docs/chaos-runbook.md.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: chaos-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chaos:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/kakhavai/foundry/ci-runner:latest
+      options: --privileged -v /var/run/docker.sock:/var/run/docker.sock
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Kind cluster
+        run: kind create cluster --config infra/kind/cluster.yaml --name foundry
+
+      - name: Fix kubeconfig for container networking
+        run: |
+          GHA_NETWORK=$(docker network ls --format '{{.Name}}' | grep 'github_network' | head -1)
+          docker network connect "$GHA_NETWORK" foundry-control-plane
+          NODE_IP=$(docker inspect foundry-control-plane \
+            --format="{{(index .NetworkSettings.Networks \"$GHA_NETWORK\").IPAddress}}")
+          kubectl config set-cluster kind-foundry \
+            --server="https://$NODE_IP:6443" \
+            --insecure-skip-tls-verify=true
+
+      - name: Deploy observability stack
+        run: |
+          cd infra/grafana-stack
+          helmfile repos
+          helmfile apply
+
+      - name: Deploy collector gateway
+        run: |
+          cd infra/gateway
+          helmfile apply
+          cd ../..
+          kubectl apply -f infra/gateway/manifests/
+          kubectl wait --for=condition=Programmed gateway/foundry \
+            -n envoy-gateway-system --timeout=180s
+
+      - name: Deploy Chaos Mesh
+        run: |
+          cd infra/chaos-mesh
+          helmfile repos
+          helmfile apply
+          cd ../..
+          kubectl rollout status deployment/chaos-controller-manager \
+            -n chaos-mesh --timeout=180s
+
+      # Must precede Argo. deploy-local.py creates the weather-collector-token
+      # Secret, which is deliberately not GitOps-managed. Because optional: true
+      # lets the pod start without it, a missing Secret does not fail the
+      # deploy — Argo reports Healthy while every data route 503s, and the
+      # scenarios that drive traffic would go red for a reason unrelated to the
+      # injected fault.
+      - name: Deploy services
+        run: |
+          python3 scripts/deploy-local.py weather
+          python3 scripts/deploy-local.py player-projections
+
+      - name: Install Argo CD
+        run: python3 scripts/argocd-deploy.py install --env local
+
+      - name: Wait for workloads
+        run: |
+          kubectl wait --for=condition=ready pod --all -n monitoring --timeout=300s
+          # rollout status, not `wait --for=condition=ready pod -l <label>`:
+          # the label selector also matches Terminating pods, which never reach
+          # Ready. This matters most here, where pods are killed on purpose.
+          kubectl rollout status deployment/weather --timeout=180s
+          kubectl rollout status deployment/player-projections --timeout=180s
+
+      - name: Run chaos scenarios
+        run: |
+          uv run --with pyyaml==6.0.3 python scripts/run-chaos.py --all \
+            2>&1 | tee chaos-report.txt
+
+      - name: Upload chaos report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-report
+          path: chaos-report.txt
+
+      - name: Tear down cluster
+        if: always()
+        run: kind delete cluster --name foundry
