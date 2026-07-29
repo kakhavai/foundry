@@ -79,7 +79,7 @@ open     -> retractable_open     closed -> retractable_closed
 
 | Path | Change |
 |---|---|
-| `services/weather/weather/stadiums.py` | Add `stadium_id`, `roof_type`, `enclosure_class` per venue |
+| `services/weather/weather/stadiums.py` | Add `stadium_id` and `roof_type` per venue |
 | `services/weather/weather/main.py` | Replace stadium routes with the five contract routes + convergence |
 | `services/weather/weather/client.py` | Absorbed into `adapters/forecast.py`; file deleted |
 | `services/weather/pyproject.toml` | Add `collector-core` path dep, `boto3`; uv workspace member |
@@ -1224,7 +1224,7 @@ git commit -m "feat(collector-core): force-refresh gate with minimum-interval fl
 
 ---
 
-## Task 7: Extend the venue table with `stadium_id`, roof, and enclosure
+## Task 7: Extend the venue table with `stadium_id` and roof type
 
 **Files:**
 - Modify: `services/weather/weather/stadiums.py`
@@ -1232,7 +1232,7 @@ git commit -m "feat(collector-core): force-refresh gate with minimum-interval fl
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: `STADIUMS: dict[str, dict]` where each value gains `stadium_id: str`, `roof_type: Literal["open","fixed_dome","retractable"]`, `enclosure_class: Literal["exposed","partial","enclosed"]`; plus `BY_STADIUM_ID: dict[str, dict]` and `RETRACTABLE_STADIUM_IDS: frozenset[str]`
+- Produces: `STADIUMS: dict[str, dict]` where each value gains `stadium_id: str`, `roof_type: Literal["open","fixed_dome","retractable"]`; plus `BY_STADIUM_ID: dict[str, dict]` and `RETRACTABLE_STADIUM_IDS: frozenset[str]`
 
 - [ ] **Step 1: Derive the `stadium_id` crosswalk from live data**
 
@@ -1265,14 +1265,12 @@ home team's `stadium_id` and would poison the crosswalk.
 from weather.stadiums import BY_STADIUM_ID, RETRACTABLE_STADIUM_IDS, STADIUMS
 
 VALID_ROOF_TYPES = {"open", "fixed_dome", "retractable"}
-VALID_ENCLOSURE = {"exposed", "partial", "enclosed"}
 
 
 def test_every_stadium_has_the_new_fields():
     for slug, stadium in STADIUMS.items():
         assert stadium["stadium_id"], f"{slug} is missing stadium_id"
         assert stadium["roof_type"] in VALID_ROOF_TYPES, slug
-        assert stadium["enclosure_class"] in VALID_ENCLOSURE, slug
 
 
 def test_stadium_ids_are_unique():
@@ -1311,7 +1309,7 @@ Expected: FAIL — `ImportError: cannot import name 'BY_STADIUM_ID'`
 
 - [ ] **Step 4: Extend the table**
 
-Add `stadium_id`, `roof_type`, and `enclosure_class` to every entry in
+Add `stadium_id` and `roof_type` to every entry in
 `services/weather/weather/stadiums.py`, using the crosswalk from Step 1. Example
 of the shape for one entry:
 
@@ -1325,7 +1323,6 @@ of the shape for one entry:
         "longitude": -94.4839,
         "stadium_id": "KAN00",
         "roof_type": "open",
-        "enclosure_class": "partial",
     },
 ```
 
@@ -1333,10 +1330,8 @@ Then append to the module:
 
 ```python
 # This is a proto-`venue` table. It migrates wholesale into the `venue`
-# collector at 8E, at which point `enclosure_class` gets a name that does not
-# collide with venue.crowd_noise_profile.enclosure_class — that field describes
-# acoustics, this one describes how much the bowl shelters the field from wind.
-# Two correlated but distinct properties.
+# collector at 8E, which is also where wind-sheltering (`enclosure_class`) lands
+# — it needs real per-venue sourcing and a consumer, and 8A has neither.
 
 BY_STADIUM_ID: dict[str, dict] = {s["stadium_id"]: s for s in STADIUMS.values()}
 
@@ -1348,8 +1343,14 @@ RETRACTABLE_STADIUM_IDS: frozenset[str] = frozenset(
 )
 ```
 
-`enclosure_class` values: `exposed` for an open bowl, `partial` where stands are
-roofed but the field is open, `enclosed` for a dome or a closed-roof design.
+**`enclosure_class` is deliberately NOT in this table.** It was specced as a
+three-way description of how much a stadium's bowl shelters the field from wind,
+but nothing in 8A consumes it — `playability` reads wind speed and gust directly,
+and `crosswind_component_mph` waits on `venue.field_orientation_deg` at 8E. It
+cannot be sourced reliably here, and a uniform value across every open-air venue
+would carry no information for exactly the stadiums where wind matters, while
+looking like data in the contract and in every lake record. It lands at 8E with
+the `venue` collector, alongside real per-venue sourcing and a consumer.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -1360,7 +1361,7 @@ Expected: PASS (6 tests)
 
 ```bash
 git add services/weather/weather/stadiums.py services/weather/tests/test_stadiums.py
-git commit -m "feat(weather): add stadium_id crosswalk, roof type, and enclosure class"
+git commit -m "feat(weather): add stadium_id crosswalk and roof type"
 ```
 
 ---
@@ -4088,7 +4089,7 @@ Do not skip it.
 - [ ] Both signal types emitting, each with its own coverage denominator
 - [ ] The capture loop runs on the cadence, escalating into and out of the T−90 min window — proven by test
 - [ ] Neutral-site games never resolve to the designated home team's venue — proven by the Munich fixture
-- [ ] Bundled table carries `stadium_id`, `roof_type`, `enclosure_class`; every 2026 domestic venue resolves
+- [ ] Bundled table carries `stadium_id` and `roof_type`; every 2026 domestic venue resolves
 - [ ] MinIO in the local stack; lake objects written and readable at the documented key layout
 - [ ] Both contract snapshots regenerated; `smoke-test.sh` green against the new paths
 - [ ] Phase 8 doc amended on the coverage window and 8A dependencies
