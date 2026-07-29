@@ -227,3 +227,56 @@ def test_other_nonzero_codes_fail_even_for_breakpoint(code):
     passed, verdict = rl.interpret_exit("breakpoint", code)
     assert passed is False
     assert "ERROR" in verdict
+
+
+# ── first_breached_threshold ──────────────────────────────────────────────────
+#
+# Both fixtures are trimmed from real k6 2.1.0 --summary-export output captured
+# against the live cluster in Task 2: PASSING from a 5-minute ramp run
+# (14999/14999 requests succeeded, http_req_failed's rate<0.01 held), CROSSED
+# from a throwaway probe deliberately given an impossible threshold
+# (p(95)<0.001, i.e. 1 microsecond) so it would abort with a real crossed
+# result. The boolean's polarity is the whole point of this function, so it is
+# pinned against real output in both directions rather than a hand-written
+# guess: true means crossed, false means held.
+
+CROSSED = {
+    "metrics": {
+        "http_req_duration": {
+            "p(95)": 1.6454691999999997,
+            "p(99)": 1.7809906399999997,
+            "max": 1.814871,
+            "avg": 1.0058854,
+            "min": 0.688533,
+            "med": 0.836026,
+            "thresholds": {"p(95)<0.001": True},
+        }
+    }
+}
+
+PASSING = {
+    "metrics": {
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 14999,
+            "thresholds": {"rate<0.01": False},
+            "value": 0,
+        }
+    }
+}
+
+
+def test_names_the_crossed_threshold():
+    assert rl.first_breached_threshold(CROSSED) == "http_req_duration (p(95)<0.001)"
+
+
+def test_returns_none_when_every_threshold_held():
+    assert rl.first_breached_threshold(PASSING) is None
+
+
+def test_tolerates_a_metric_with_no_thresholds():
+    assert rl.first_breached_threshold({"metrics": {"http_reqs": {"value": 10}}}) is None
+
+
+def test_tolerates_an_empty_summary():
+    assert rl.first_breached_threshold({}) is None

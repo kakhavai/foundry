@@ -205,6 +205,24 @@ def interpret_exit(shape: str, code: int) -> tuple[bool, str]:
     return False, f"ERROR — k6 exited {code}"
 
 
+def first_breached_threshold(summary: dict) -> str | None:
+    """Name the first metric whose threshold was crossed.
+
+    Polarity confirmed empirically against both a passing and a crossed run —
+    see docs/scale-baselines.md. k6's exported schema is
+    metrics.<name>.thresholds = {"<expression>": <bool>}, and true means the
+    threshold was crossed: a real ramp run's held http_req_failed threshold
+    exported `{"rate<0.01": false}`, and a deliberately impossible
+    http_req_duration threshold that actually aborted the run exported
+    `{"p(95)<0.001": true}`.
+    """
+    for name, metric in sorted((summary.get("metrics") or {}).items()):
+        for expression, crossed in (metric.get("thresholds") or {}).items():
+            if crossed:
+                return f"{name} ({expression})"
+    return None
+
+
 # ── cluster interaction ───────────────────────────────────────────────────────
 
 def kubectl(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
