@@ -3162,6 +3162,36 @@ async def refresh(body: dict | None = None):
     return {"refresh_id": refresh_id, "scope": {"season": season, "week": week}}
 ```
 
+- [ ] **Step 3b: Give `fetch_current_conditions` an injectable clock**
+
+Carried over from Task 12's review as an Important finding. `fetch_current_conditions`
+in `services/weather/weather/adapters/forecast.py` calls `datetime.now(tz=UTC)`
+internally. Every other time-dependent component in this codebase is handed its
+reference time — `collector_core.cadence.next_interval`, `collector_core.refresh.RefreshGate`,
+and `capture_week` itself all take `now`. This one function reads the clock.
+
+Two consequences beyond testability: `capture_week`'s own `now` (used for
+`captured_at`, `Upstream.fetched_at`, and `forecast_lead_hours`) can silently
+diverge from the instant current conditions were actually fetched by however long
+a capture pass takes; and a replay or backfill through `capture_week` with an
+injected `now` — the entire reason that parameter exists — would still hit the
+real clock for this one signal type.
+
+Change the signature to:
+
+```python
+async def fetch_current_conditions(
+    lat: float, lon: float, client: httpx.AsyncClient, *, now: datetime
+) -> dict:
+```
+
+and drop the internal `datetime.now(tz=UTC)`, using the passed `now` truncated to
+the hour. Update `capture.py`'s call site to thread its own `now` through. Then
+remove the wall-clock branch from `test_capture.py`'s `hourly_payload()` fixture —
+it exists only to tolerate the real clock and its removal is how you prove the fix
+landed. The suite must stay green on any calendar date; verify by running it with
+a fixture date far from today.
+
 - [ ] **Step 4: Update `test_auth.py` route references**
 
 Replace every `/weather/stadiums` occurrence in `services/weather/tests/test_auth.py`
