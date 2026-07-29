@@ -69,3 +69,27 @@ def test_no_upcoming_event_falls_back_to_base():
         escalated_interval=timedelta(minutes=5),
     )
     assert interval == timedelta(minutes=15)
+
+
+def test_no_escalation_window_falls_back_to_base():
+    """Missing escalate_within triggers guard clause — falls back to base."""
+    interval = next_interval(
+        CadenceClass.VOLATILE,
+        now=NOW,
+        next_event_at=NOW + timedelta(minutes=45),
+        escalate_within=None,
+        escalated_interval=timedelta(minutes=5),
+    )
+    assert interval == timedelta(minutes=15)
+
+
+def test_no_escalated_interval_falls_back_to_base():
+    """Missing escalated_interval triggers guard clause — falls back to base."""
+    interval = next_interval(
+        CadenceClass.VOLATILE,
+        now=NOW,
+        next_event_at=NOW + timedelta(minutes=45),
+        escalate_within=timedelta(minutes=90),
+        escalated_interval=None,
+    )
+    assert interval == timedelta(minutes=15)
