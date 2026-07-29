@@ -345,6 +345,34 @@ See `docs/runbooks/rollback.md` for the full runbook.
 
 ---
 
+## Chaos Engineering
+
+```bash
+cd infra/chaos-mesh && helmfile apply          # install (not part of stack-up.py)
+uv run --with pyyaml==6.0.3 python scripts/run-chaos.py --list
+uv run --with pyyaml==6.0.3 python scripts/run-chaos.py pod-kill
+```
+
+Scenarios live in `chaos/scenarios/`, one multi-document YAML each: a
+`foundry.chaos/v1` head carrying the steady state, hypothesis, and
+Prometheus-checked criteria, followed by the Chaos Mesh resources that inject
+the fault.
+
+`scripts/run-chaos.py` reaches Prometheus through the Kubernetes API proxy
+(`kubectl get --raw`), never a port-forward. **An empty query result is a hard
+error, not a zero** — Prometheus answers identically for a series that has never
+existed and for a typo'd metric name, so a check opts in with `allowEmpty: true`
+where absence is genuinely correct.
+
+`chaos-test.yml` is `workflow_dispatch` only. Chaos coverage therefore exists
+only when somebody runs it — accepted deliberately, and stated in
+`docs/chaos-runbook.md` rather than quietly patched with a schedule.
+
+See `docs/chaos-runbook.md` for known failure modes, including that a chaos run
+exercises `main`'s images rather than your branch's.
+
+---
+
 ## Local Stack
 
 ```bash

@@ -1,0 +1,45 @@
+apiVersion: foundry.chaos/v1
+kind: Scenario
+metadata:
+  name: pod-kill
+spec:
+  steadyState:
+    # Residue guard. The criterion below looks back [5m], so a run started too
+    # soon after a previous one inherits its predecessor's replacement pod and
+    # PASSES having broken nothing — the same hazard network-partition and
+    # resource-pressure already guard against.
+    - description: only one weather pod in the recent window
+      query: count(count by (pod) (max_over_time(container_start_time_seconds{namespace="default",container="weather"}[2m])))
+      expect: "== 1"
+    - description: weather is up and being scraped
+      query: up{job="weather"}
+      expect: "== 1"
+  hypothesis: >
+    Killing weather's only pod interrupts scraping briefly. The ReplicaSet
+    replaces it with no human action and scraping resumes unaided.
+  duration: 30s
+  settle: 90s
+  criteria:
+    # Without this, a chaos that silently no-ops passes on a green cluster.
+    # "the container is younger than 5 minutes" was rejected for the same
+    # reason: in CI the cluster is minutes old, so it passes without any kill.
+    - description: a replacement pod was actually created
+      query: count(count by (pod) (max_over_time(container_start_time_seconds{namespace="default",container="weather"}[5m])))
+      expect: ">= 2"
+    - description: weather is being scraped again
+      query: up{job="weather"}
+      expect: "== 1"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: chaos-pod-kill-weather
+  namespace: default
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      app.kubernetes.io/name: weather

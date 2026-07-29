@@ -4,8 +4,14 @@ alertmanager:
 prometheus-pushgateway:
   enabled: false
 
+# Required by chaos/scenarios/bad-deploy.yaml. With replicaCount 1 and the
+# default rolling update, maxUnavailable resolves to 0, so the old pod keeps
+# serving whether or not Argo's selfHeal reverts a bad image — every
+# continuity-based criterion passes either way. kube_deployment_status_replicas_unavailable
+# is the only signal that separates the two, so without this the scenario
+# cannot fail.
 kube-state-metrics:
-  enabled: false
+  enabled: true
 
 prometheus-node-exporter:
   enabled: false

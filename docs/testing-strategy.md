@@ -214,7 +214,48 @@ correctly placed for the day gateway-level auth is added; today it is a guard
 against auth disappearing entirely, which is a weaker claim than its position
 implies.
 
+**Chaos criteria prove collection, but only for the series they name.** The
+chaos scenarios in `chaos/scenarios/` query `collector_capture_failures_total`,
+`up`, `container_memory_working_set_bytes`, `envoy_cluster_upstream_cx_connect_fail`,
+and `kube_deployment_status_replicas_unavailable` against a live Prometheus,
+which closes the earlier gap between "the metric is emitted" and "Prometheus is
+collecting the metric" — for those series. Nothing here covers
+`upstream_poll_failures_total` or `upstream_cache_age_seconds`, which remain
+proven only in-process.
+
+**A scenario proves its hypothesis under one injected fault, not resilience.**
+Each scenario was demonstrated capable of failing, which is a much stronger
+claim than a green run — but it is still one fault, one shape, one cluster.
+
+**Prefer counters over gauges for anything transient.** `resource-pressure`
+learned this the hard way. Its first criterion asked
+`max_over_time(memory / limit) > 0.85` and sat flat at ~0.20 across runs of
+120s, 210s, and 450s: the cgroup OOM-kills a 400MB hog in about one second, and
+cAdvisor is scraped every 60s, so the event never landed in a sample. A gauge
+cannot see what it does not sample. The scenario now asserts on
+`kube_pod_container_status_restarts_total`, a counter — it increments and stays
+incremented, so scrape timing cannot hide it. Any criterion measuring a
+short-lived event needs the same treatment.
+
+**One of `resource-pressure`'s criteria qualifies rather than proves.**
+`kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}` pins the
+restart to the cgroup rather than a liveness-probe failure, but it is *sticky*:
+it stays `1` until the container next terminates for some other reason. In the
+deliberate red run it passed on the previous run's value while the restart
+counter correctly failed. It is therefore retained only as a qualifier and never
+travels without the falsifiable check beside it.
+
+**Chaos coverage is not continuous.** `chaos-test.yml` runs on
+`workflow_dispatch` only, so these scenarios prove nothing between the runs
+somebody remembers to trigger. A regression that breaks pod replacement or
+gateway routing would not be caught until the next manual run. Accepted
+deliberately — see `docs/chaos-runbook.md`.
+
+**Tracing delivery to Tempo is still uncovered.** Unchanged by this phase and
+called out again because chaos is where it would most plausibly have been
+caught: nothing tests the process → Collector → Tempo path.
+
 ## Not Covered Here
 
-Chaos scenarios, load and scale testing, and adversarial agent sessions are
-Phase 5B and 5C. See `docs/architecture/phase-5-resilience-and-ai-testing.md`.
+Load and scale testing, and adversarial agent sessions, are Phase 5C. See
+`docs/architecture/phase-5-resilience-and-ai-testing.md`.

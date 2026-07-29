@@ -1,0 +1,39 @@
+apiVersion: foundry.chaos/v1
+kind: Scenario
+metadata:
+  name: bad-deploy
+spec:
+  steadyState:
+    - description: weather has no unavailable replicas
+      query: max(kube_deployment_status_replicas_unavailable{deployment="weather"})
+      expect: "== 0"
+    - description: weather is up
+      query: up{job="weather"}
+      expect: "== 1"
+  hypothesis: >
+    Argo CD detects the drift from the manifest and reverts the image. The bad
+    ReplicaSet never becomes available and weather never stops serving.
+  # Longer than the other scenarios: this gives Argo's reconcile loop room
+  # rather than making the criterion a race against it.
+  duration: 30s
+  settle: 180s
+  fault:
+    - ["kubectl", "set", "image", "deployment/weather",
+       "weather=ghcr.io/kakhavai/foundry/weather:does-not-exist", "-n", "default"]
+  # No restore step. Argo CD's selfHeal IS the restore mechanism here — that is
+  # precisely the hypothesis this scenario asserts, not a gap to patch over.
+  # `kubectl rollout undo` with no --to-revision rolls back to the
+  # second-highest revision, not the newest good one. On the passing path
+  # Argo has already re-adopted the good ReplicaSet as the newest revision by
+  # the time restore would run, which makes the second-highest the bad image
+  # — so `rollout undo` would re-inject the very fault it is meant to clean
+  # up. Running this scenario on a cluster without Argo leaves the bad image
+  # in place, and that is correct: the hypothesis is about Argo, so the
+  # scenario has no meaning without it.
+  criteria:
+    - description: the drift was reverted and no replica is unavailable
+      query: max(kube_deployment_status_replicas_unavailable{deployment="weather"})
+      expect: "== 0"
+    - description: weather never stopped serving
+      query: min_over_time(up{job="weather"}[5m])
+      expect: "== 1"

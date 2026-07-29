@@ -1,0 +1,18 @@
+# Kind runs containerd, not Docker, so the daemon socket must be pointed at
+# containerd's. The chart defaults to Docker and the chaos daemon silently
+# fails to attach to container network namespaces otherwise.
+chaosDaemon:
+  runtime: containerd
+  socketPath: /run/containerd/containerd.sock
+
+# The web dashboard is not needed: scenarios run from the CLI in CI and by hand.
+dashboard:
+  create: false
+
+# chaos-controller-manager is leader-elected, so extra replicas are standby
+# capacity, not extra throughput. The chart defaults to 3, sized for a
+# multi-node cluster; on a single-node Kind cluster also running
+# kube-state-metrics and Argo CD, 1 is strictly correct and reclaims headroom
+# on the CI runner.
+controllerManager:
+  replicaCount: 1
