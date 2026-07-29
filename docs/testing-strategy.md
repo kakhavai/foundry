@@ -245,11 +245,20 @@ deliberate red run it passed on the previous run's value while the restart
 counter correctly failed. It is therefore retained only as a qualifier and never
 travels without the falsifiable check beside it.
 
-**Chaos coverage is not continuous.** `chaos-test.yml` runs on
-`workflow_dispatch` only, so these scenarios prove nothing between the runs
-somebody remembers to trigger. A regression that breaks pod replacement or
-gateway routing would not be caught until the next manual run. Accepted
-deliberately — see `docs/chaos-runbook.md`.
+**Chaos coverage is not continuous, and the structural tests are not a
+substitute.** `tests/test_chaos_scenarios.py` checks that every scenario file
+parses, is named for its file, declares a steady state and a falsifiable
+criterion, and keeps its two `duration` values in agreement. It never *executes*
+a scenario, so a criterion whose PromQL is schema-valid and wrong passes here —
+which is the exact defect class Phase 5B hit three times, each caught by running
+the scenario rather than by review.
+
+`chaos-test.yml` closes part of that: it runs on `workflow_dispatch`, and on
+`pull_request` for changes under `chaos/`, `infra/chaos-mesh/`,
+`scripts/run-chaos.py`, or the workflow itself. A regression arriving from
+anywhere else — a renamed service metric, a moved port, an edited scrape config —
+is caught by nothing until somebody triggers a run. Accepted deliberately — see
+`docs/chaos-runbook.md`.
 
 **Tracing delivery to Tempo is still uncovered.** Unchanged by this phase and
 called out again because chaos is where it would most plausibly have been

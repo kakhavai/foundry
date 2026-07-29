@@ -364,8 +364,15 @@ error, not a zero** — Prometheus answers identically for a series that has nev
 existed and for a typo'd metric name, so a check opts in with `allowEmpty: true`
 where absence is genuinely correct.
 
-`chaos-test.yml` is `workflow_dispatch` only. Chaos coverage therefore exists
-only when somebody runs it — accepted deliberately, and stated in
+`chaos-test.yml` runs on `workflow_dispatch`, and on `pull_request` for changes
+under `chaos/`, `infra/chaos-mesh/`, `scripts/run-chaos.py`, or the workflow
+itself. No label, no schedule. **It is not a required check** — chaos scenarios
+are timing-sensitive, so it earns trust before it blocks anything.
+
+Coverage is therefore still discontinuous: a regression arriving from outside
+those paths is caught by nothing until somebody triggers a run. `platform-tests`
+validates scenario files structurally but never executes them, so a criterion
+whose PromQL is valid-but-wrong passes it. Accepted deliberately, and stated in
 `docs/chaos-runbook.md` rather than quietly patched with a schedule.
 
 See `docs/chaos-runbook.md` for known failure modes, including that a chaos run

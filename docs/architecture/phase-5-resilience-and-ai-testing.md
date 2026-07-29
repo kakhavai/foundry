@@ -107,7 +107,7 @@ against whichever shape is live when it runs.
 |---|---|
 | Gateway component | Gateway API, implemented by Envoy Gateway. `ingress-nginx` is dominated — it still needs a controller and an annotation vocabulary, so it is not the simple option, and the project is winding down, so it is not the durable one. A plain nginx pod is genuinely simpler but makes every collector edit one shared config rather than shipping its own route. |
 | Auth enforcement | In each service. The gateway routes and terminates TLS; it does not authenticate. |
-| `chaos-test.yml` trigger | `workflow_dispatch` only. No label — CLAUDE.md's no-manual-gate rule governs required merge checks, and a label additionally needs a human to remember it. No nightly schedule either: **chaos coverage therefore exists only when somebody runs it, and will decay silently between sessions.** Accepted, not overlooked. |
+| `chaos-test.yml` trigger | `workflow_dispatch`, plus `pull_request` scoped to `chaos/`, `infra/chaos-mesh/`, `scripts/run-chaos.py`, and the workflow itself. Dispatch-only shipped first and was widened once it became clear that `platform-tests` validates scenario files without ever executing them — so a criterion with valid-but-wrong PromQL merged green, the defect class this phase hit three times. Still no label (CLAUDE.md's no-manual-gate rule governs required checks, and a label needs remembering) and still no nightly schedule (a cluster every night on a bursty repo). **Coverage remains discontinuous outside those paths**, and the PR run is deliberately not required, because chaos scenarios are timing-sensitive. Accepted, not overlooked. |
 | Chaos assertion layer | Chaos Mesh 2.8.3 plus `scripts/run-chaos.py`. Chaos Mesh injects but cannot judge — its `StatusCheck` criteria supports `statusCode` only, and Prometheus answers `200` even for an empty result. Litmus's `promProbe` was the alternative and was rejected: `min_over_time` makes its `Continuous` mode unnecessary, `bad-deploy` fits neither tool's fault library, and a Python comparator is unit-testable without a cluster. |
 | `bad-deploy` framing | Argo CD **selfHeal reverting out-of-band drift**, not "the health check fails the rollout". The Applications pin `targetRevision: main` against GitHub, so on a PR branch Argo syncs `main` regardless of what is under test; the reframed claim needs no Git push. Requires `kube-state-metrics`, previously disabled — with `replicaCount: 1` no continuity criterion can fail. |
 
@@ -203,7 +203,7 @@ service logs anything today — and chaos criteria need metrics, not prose.
 - `infra/chaos-mesh/` — Chaos Mesh helmfile installation
 - `chaos/scenarios/` — Chaos Mesh scenario manifests with documented hypotheses
 - `tests/load/` — k6 scripts per service
-- `.github/workflows/chaos-test.yml` — **decided: `workflow_dispatch` only** — see the decisions table above.
+- `.github/workflows/chaos-test.yml` — **decided: `workflow_dispatch`, plus `pull_request` scoped to the chaos machinery** — see the decisions table above.
 - `docs/chaos-runbook.md` — how to run scenarios manually, how to read results, known failure modes
 - `docs/scale-baselines.md` — documented performance baselines per service, updated after each phase
 

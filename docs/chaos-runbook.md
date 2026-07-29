@@ -81,12 +81,22 @@ resources that inject the fault.
 
 ## Known failure modes
 
-**Chaos coverage decays silently between sessions.** `chaos-test.yml` is
-`workflow_dispatch` only — no label, no nightly schedule. Chaos coverage
-therefore exists only when somebody runs it. This is accepted, not overlooked:
-a schedule spends a Kind cluster every night on a repo that changes in bursts,
-and a label needs a human to remember it. The consequence is real, so it is
-written down here rather than discovered later.
+**Chaos coverage is still not continuous.** `chaos-test.yml` runs on
+`workflow_dispatch`, and on `pull_request` for changes under `chaos/`,
+`infra/chaos-mesh/`, `scripts/run-chaos.py`, or the workflow itself. There is no
+label and no nightly schedule — a schedule spends a cluster every night on a repo
+that changes in bursts, and a label needs a human to remember it.
+
+So a PR that touches the chaos machinery is covered, and everything else is not.
+A regression reaching the scenarios from *outside* those paths — a changed metric
+name in a service, a Helm value that moves a port, a Prometheus scrape-config
+edit — will not be caught until somebody triggers a run by hand. The consequence
+is real; it is written down here rather than discovered later.
+
+**The `pull_request` run is deliberately not a required check.** Chaos scenarios
+are timing-sensitive: PR #46 saw a run pass on residue from its predecessor's
+`[5m]` window. Let it earn trust over several runs before anyone makes it
+blocking, and read a single red as "look at it", not "the branch is broken".
 
 **A chaos run tests `main`'s images, not your branch's.** `argocd-deploy.py
 install` applies app-of-apps, and the Applications pin `targetRevision: main`
