@@ -4276,6 +4276,52 @@ In `.github/workflows/weather.yml`, the `build-push` job's step becomes:
           tag: ${{ github.sha }}
 ```
 
+- [ ] **Step 8b: Guard against dev-only dependencies imported at runtime**
+
+A real bug this plan already shipped and accidentally un-shipped: `collector-core`'s
+`metrics.py` imported `httpx` at module level while `httpx` was declared **dev-only**.
+The test suite could never catch it — tests always run with dev dependencies
+installed — and the Dockerfile installs with `--no-dev`, so the first symptom
+would have been a container crash-looping on `ImportError` in the cluster.
+
+That class of bug is invisible to every test in the repo by construction, so guard
+it mechanically. Add to `.github/workflows/weather.yml`, inside the existing
+`collector-core-test` job, after the test step:
+
+```yaml
+      - name: Every library module must import with runtime deps only
+        shell: bash
+        working-directory: libs/collector-core
+        run: |
+          uv sync --frozen --no-dev
+          uv run --no-sync python - <<'PY'
+          import importlib, pkgutil, sys
+          import collector_core
+          failed = []
+          for m in pkgutil.iter_modules(collector_core.__path__):
+              name = f"collector_core.{m.name}"
+              try:
+                  importlib.import_module(name)
+              except Exception as exc:
+                  failed.append(f"{name}: {exc!r}")
+          if failed:
+              print("Modules that fail to import without dev dependencies:")
+              for f in failed:
+                  print("  ", f)
+              sys.exit(1)
+          print("all modules import with runtime dependencies only")
+          PY
+```
+
+This runs in a fresh container so pruning dev dependencies cannot poison a later
+step. Verify locally before committing:
+
+```bash
+cd libs/collector-core && uv sync --frozen --no-dev &&   uv run --no-sync python -c "import collector_core.routes, collector_core.metrics, collector_core.auth, collector_core.lake, collector_core.cadence, collector_core.refresh, collector_core.envelope, collector_core.coverage; print('OK')"
+```
+
+Then restore your dev environment with `uv sync --frozen`.
+
 - [ ] **Step 9: Run the shared library's tests in CI**
 
 Still in `.github/workflows/weather.yml`, add `libs/**` to **both** the
@@ -4684,6 +4730,7 @@ Do not skip it.
 - [ ] Phase 8 doc amended on the coverage window and 8A dependencies
 - [ ] `CLAUDE.md` and `docs/onboarding.md` document the workspace-member build
 - [ ] `collector-core` lint+test running in CI; `build-push` builds weather from the repo root
+- [ ] CI proves every `collector_core` module imports with runtime dependencies only
 - [ ] Gateway publishes only `/catalog`, `/signals`, `/refresh`; `/health` and `/metrics` return 404 at the edge and 200 in-cluster
 - [ ] `uv lock --check` clean in every changed directory
 - [ ] Full suite green, coverage gates met, `integration-test` passing
