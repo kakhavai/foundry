@@ -1,0 +1,49 @@
+# Drives authenticated traffic through the collector gateway for the duration of
+# a scenario. weather is a synchronous proxy with no poll loop, so
+# collector_capture_* only moves while something is calling it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chaos-traffic-gateway
+  namespace: default
+  labels:
+    app.kubernetes.io/name: chaos-traffic-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: chaos-traffic-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: chaos-traffic-gateway
+    spec:
+      containers:
+        - name: curl
+          image: curlimages/curl:8.11.1
+          env:
+            - name: COLLECTOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: weather-collector-token
+                  key: token
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # The single-stadium route, not /weather/stadiums. Under total
+              # upstream failure the list route loops 30 stadiums at a 10s
+              # timeout each with no overall deadline — one request would
+              # outlive the scenario.
+              while true; do
+                curl -s -o /dev/null -m 30 \
+                  -H "Authorization: Bearer $COLLECTOR_TOKEN" \
+                  "http://${GATEWAY_HOST}/collectors/weather/weather/stadiums/lambeau" || true
+                sleep 2
+              done
+          resources:
+            limits:
+              cpu: 100m
+              memory: 64Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi

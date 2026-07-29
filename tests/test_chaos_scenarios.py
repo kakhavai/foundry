@@ -264,3 +264,34 @@ def test_check_with_unparseable_expect_is_a_problem():
     head = _valid_head()
     head["spec"]["criteria"][0]["expect"] = "roughly one"
     assert any("expect" in p for p in rc.validate_scenario(head, _chaos_docs()))
+
+
+# ── every real scenario file ──────────────────────────────────────────────────
+
+SCENARIOS = sorted((ROOT / "chaos" / "scenarios").glob("*.yaml"))
+
+
+def test_scenarios_directory_is_not_empty():
+    assert SCENARIOS, "no scenario files found under chaos/scenarios/"
+
+
+@pytest.mark.parametrize("path", SCENARIOS, ids=lambda p: p.stem)
+def test_scenario_file_is_valid(path):
+    """Every committed scenario parses, declares a steady state, a hypothesis,
+    and at least one criterion that some observation could falsify."""
+    head, chaos_docs = rc.load_scenario(path)
+    assert rc.validate_scenario(head, chaos_docs) == []
+
+
+@pytest.mark.parametrize("path", SCENARIOS, ids=lambda p: p.stem)
+def test_scenario_name_matches_filename(path):
+    head, _ = rc.load_scenario(path)
+    assert head["metadata"]["name"] == path.stem
+
+
+@pytest.mark.parametrize("path", SCENARIOS, ids=lambda p: p.stem)
+def test_scenario_declaring_traffic_has_a_manifest(path):
+    head, _ = rc.load_scenario(path)
+    traffic = head["spec"].get("traffic")
+    if traffic:
+        assert (ROOT / "chaos" / "traffic" / f"{traffic}.yaml").exists()
