@@ -38,9 +38,19 @@ def test_each_failure_class_increments_its_own_reason(
 ):
     respx.get(WEATHER_URL).mock(**mock_kwargs)
 
-    before = metric_value("weather_upstream_failures_total", reason=reason) or 0.0
+    before = (
+        metric_value(
+            "collector_capture_failures_total", collector="weather", reason=reason
+        )
+        or 0.0
+    )
     response = client.get("/weather/stadiums/lambeau")
-    after = metric_value("weather_upstream_failures_total", reason=reason) or 0.0
+    after = (
+        metric_value(
+            "collector_capture_failures_total", collector="weather", reason=reason
+        )
+        or 0.0
+    )
 
     assert response.status_code == 502
     assert after - before == 1.0
@@ -59,9 +69,23 @@ def test_every_stadium_failure_is_counted_even_though_the_response_is_200(
     """
     respx.get(WEATHER_URL).mock(side_effect=httpx.ConnectError("refused"))
 
-    before = metric_value("weather_upstream_failures_total", reason="transport") or 0.0
+    before = (
+        metric_value(
+            "collector_capture_failures_total",
+            collector="weather",
+            reason="transport",
+        )
+        or 0.0
+    )
     response = client.get("/weather/stadiums")
-    after = metric_value("weather_upstream_failures_total", reason="transport") or 0.0
+    after = (
+        metric_value(
+            "collector_capture_failures_total",
+            collector="weather",
+            reason="transport",
+        )
+        or 0.0
+    )
 
     body = response.json()
     assert response.status_code == 200
@@ -74,14 +98,28 @@ def test_every_stadium_failure_is_counted_even_though_the_response_is_200(
 def test_successful_calls_count_as_attempts_but_not_failures(metric_value):
     respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json=_GOOD_BODY))
 
-    attempts_before = metric_value("weather_upstream_requests_total") or 0.0
+    attempts_before = (
+        metric_value("collector_capture_requests_total", collector="weather") or 0.0
+    )
     failures_before = (
-        metric_value("weather_upstream_failures_total", reason="transport") or 0.0
+        metric_value(
+            "collector_capture_failures_total",
+            collector="weather",
+            reason="transport",
+        )
+        or 0.0
     )
     response = client.get("/weather/stadiums/lambeau")
-    attempts_after = metric_value("weather_upstream_requests_total") or 0.0
+    attempts_after = (
+        metric_value("collector_capture_requests_total", collector="weather") or 0.0
+    )
     failures_after = (
-        metric_value("weather_upstream_failures_total", reason="transport") or 0.0
+        metric_value(
+            "collector_capture_failures_total",
+            collector="weather",
+            reason="transport",
+        )
+        or 0.0
     )
 
     assert response.status_code == 200
