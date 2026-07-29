@@ -2,25 +2,58 @@
 set -euo pipefail
 
 cleanup() {
-  kill "$WEATHER_PF" "$PP_PF" 2>/dev/null || true
+  kill "$WEATHER_PF" "$PP_PF" "$GW_PF" 2>/dev/null || true
 }
 trap cleanup EXIT
+
+# The Envoy data-plane Service name is generated and includes a hash, so it is
+# found by the label Envoy Gateway stamps on it rather than hardcoded.
+ENVOY_SVC=$(kubectl get svc -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=foundry \
+  -o jsonpath='{.items[0].metadata.name}')
 
 kubectl port-forward svc/weather 8000:8000 &
 WEATHER_PF=$!
 kubectl port-forward svc/player-projections 8001:8001 &
 PP_PF=$!
+kubectl port-forward -n envoy-gateway-system "svc/$ENVOY_SVC" 8080:80 &
+GW_PF=$!
 sleep 3
 
-# weather
+# Matches scripts/deploy-local.py's LOCAL_DEV_TOKEN. Kind-only.
+TOKEN=local-dev-token
+GATEWAY=http://localhost:8080/collectors/weather
+AUTH="Authorization: Bearer $TOKEN"
+
+# weather — /health and /metrics are exempt from auth so the kubelet's probes
+# and Prometheus's scrape keep working.
 curl -sf http://localhost:8000/health | grep '"status":"ok"'
 curl -sf http://localhost:8000/metrics | grep '# HELP'
-curl -sf http://localhost:8000/weather/stadiums | python3 -c "
+curl -sf -H "$AUTH" http://localhost:8000/weather/stadiums | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 assert data['count'] == 30, f'expected 30 stadiums, got {data[\"count\"]}'
 print('stadiums OK')
 "
+
+# Through the gateway, authenticated. The doubled path segment is expected:
+# the gateway strips /collectors/weather and weather's own routes live under
+# /weather/. Phase 8's 8A removes the doubling.
+curl -sf -H "$AUTH" "$GATEWAY/weather/stadiums" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+assert data['count'] == 30, f'gateway: expected 30 stadiums, got {data[\"count\"]}'
+print('gateway routing OK')
+"
+
+# Rejections. The second one is the one that matters: it goes straight at the
+# Service, bypassing the gateway entirely. Under gateway-only auth it would
+# return 200 and this required check would pass over an unprotected path.
+STATUS=$(curl -o /dev/null -sw '%{http_code}' "$GATEWAY/weather/stadiums")
+[ "$STATUS" = "401" ] || (echo "gateway without token should be 401, got $STATUS" && exit 1)
+STATUS=$(curl -o /dev/null -sw '%{http_code}' http://localhost:8000/weather/stadiums)
+[ "$STATUS" = "401" ] || (echo "direct Service call without token should be 401, got $STATUS" && exit 1)
+echo "collector auth OK"
 echo "weather: OK"
 
 # player-projections

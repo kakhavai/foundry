@@ -98,6 +98,15 @@ jobs:
           helmfile repos
           helmfile apply
 
+      - name: Deploy collector gateway
+        run: |
+          cd infra/gateway
+          helmfile apply
+          cd ../..
+          kubectl apply -f infra/gateway/manifests/
+          kubectl wait --for=condition=Programmed gateway/foundry \
+            -n envoy-gateway-system --timeout=180s
+
       - name: Deploy services
         run: |
           python3 scripts/deploy-local.py weather
@@ -107,6 +116,8 @@ jobs:
         run: |
           kubectl wait --for=condition=ready pod \
             --all -n monitoring --timeout=180s
+          kubectl wait --for=condition=ready pod \
+            -n envoy-gateway-system --all --timeout=180s
           kubectl wait --for=condition=ready pod \
             -l app.kubernetes.io/name=weather --timeout=120s
           kubectl wait --for=condition=ready pod \
