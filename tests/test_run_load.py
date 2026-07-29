@@ -280,3 +280,69 @@ def test_tolerates_a_metric_with_no_thresholds():
 
 def test_tolerates_an_empty_summary():
     assert rl.first_breached_threshold({}) is None
+
+
+# ── phase_action ──────────────────────────────────────────────────────────────
+#
+# The very first live run of this tool found `kubectl logs -f` giving up in
+# ~30-100ms — not honouring --pod-running-timeout at all — while the pod was
+# still ContainerCreating (phase "Pending"), and the fallback fetch racing the
+# identical window and failing the same way. phase_action is the decision that
+# drives waiting through that window instead of racing it; the polling loop
+# that calls it needs a live cluster and is not tested here.
+
+def test_pending_means_wait():
+    assert rl.phase_action("Pending") == "wait"
+
+
+def test_running_means_follow():
+    assert rl.phase_action("Running") == "follow"
+
+
+def test_succeeded_means_fetch():
+    """A short shape can finish before we ever look — that's the normal path
+    for a quick run, not a failure, so it gets the checked fetch directly
+    rather than a follow attempt with nothing left to stream."""
+    assert rl.phase_action("Succeeded") == "fetch"
+
+
+def test_failed_means_fetch():
+    assert rl.phase_action("Failed") == "fetch"
+
+
+def test_unknown_phase_means_wait():
+    """Node-unreachable ('Unknown') is not a state we know how to act on —
+    keep polling rather than guessing."""
+    assert rl.phase_action("Unknown") == "wait"
+
+
+def test_empty_phase_means_wait():
+    """No pod found yet (selector hasn't matched anything) reads the same as
+    still waiting, not an error."""
+    assert rl.phase_action("") == "wait"
+
+
+def test_unrecognized_phase_means_wait():
+    """An unexpected string is treated the same as not-yet-actionable rather
+    than raising — the caller's timeout is what bounds this, not an exception
+    from a phase string kubectl might add in some future version."""
+    assert rl.phase_action("SomeFuturePhase") == "wait"
+
+
+# ── parse_kube_duration ──────────────────────────────────────────────────────
+
+def test_parses_minutes():
+    assert rl.parse_kube_duration("10m") == 600
+
+
+def test_parses_seconds():
+    assert rl.parse_kube_duration("90s") == 90
+
+
+def test_parses_hours():
+    assert rl.parse_kube_duration("1h") == 3600
+
+
+def test_rejects_an_unrecognized_duration():
+    with pytest.raises(ValueError):
+        rl.parse_kube_duration("10")

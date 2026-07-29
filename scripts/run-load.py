@@ -17,8 +17,10 @@ Exits non-zero if any shape failed.
 """
 
 import argparse
+import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
@@ -188,6 +190,45 @@ def needs_fallback(returncode: int, saw_marker: bool) -> bool:
     return returncode != 0 or not saw_marker
 
 
+def phase_action(phase: str) -> str:
+    """Decide what to do about a pod given its current `.status.phase`.
+
+    Kept separate from the polling loop that calls it so the *decision* is
+    unit-testable without a cluster — only the polling itself (which needs
+    wall-clock time and a live API server) is not.
+
+    "wait": not yet in a state that tells us anything useful — `Pending`
+        (still `ContainerCreating`, the case that broke the very first live
+        run of this tool: `kubectl logs -f` gives up in ~30-100ms rather than
+        honouring `--pod-running-timeout` while the pod is still Pending), the
+        empty string (no pod found yet), `Unknown` (node unreachable), or
+        anything else unrecognised. The caller keeps polling.
+    "follow": `Running` — attach the live log stream as normal.
+    "fetch": `Succeeded` or `Failed` — the container already terminated. A
+        short shape can finish before we ever look; a live follow would
+        attach to nothing, so go straight to the checked non-follow fetch
+        instead of trying to follow a stream that will never produce data.
+    """
+    if phase in ("Succeeded", "Failed"):
+        return "fetch"
+    if phase == "Running":
+        return "follow"
+    return "wait"
+
+
+def parse_kube_duration(spec: str) -> int:
+    """Parse a Kubernetes-style duration ('10m', '90s', '1h') into seconds.
+
+    Only the single-unit form the SHAPES table actually uses; not a general
+    Go-duration parser.
+    """
+    match = re.fullmatch(r"(\d+)([smh])", spec)
+    if not match:
+        raise ValueError(f"unrecognized duration: {spec!r}")
+    value, unit = match.groups()
+    return int(value) * {"s": 1, "m": 60, "h": 3600}[unit]
+
+
 def interpret_exit(shape: str, code: int) -> tuple[bool, str]:
     """Turn a k6 exit code into (passed, verdict).
 
@@ -285,6 +326,42 @@ def pod_exit_code(shape: str) -> int:
     return int(text)
 
 
+def pod_phase(shape: str) -> str:
+    """Read the shape's pod's current `.status.phase` ('' if no pod exists yet)."""
+    result = kubectl(
+        [
+            "get", "pod",
+            "-l", f"job-name={job_name(shape)}",
+            "-o", "jsonpath={.items[0].status.phase}",
+        ],
+        check=False,
+    )
+    return result.stdout.strip()
+
+
+def wait_for_pod_action(shape: str, timeout_s: float, poll_interval: float = 2.0) -> str:
+    """Poll the shape's pod until phase_action has a real decision, up to timeout_s.
+
+    Deliberately not `kubectl wait --for=condition=ready` — this repo has
+    been bitten repeatedly by that selector also matching a still-`Terminating`
+    pod from a previous run, which never reaches Ready and hangs the wait.
+    Polling `.status.phase` directly and asking phase_action what it means
+    avoids that trap; phase_action is what decides when to stop waiting.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        phase = pod_phase(shape)
+        action = phase_action(phase)
+        if action != "wait":
+            return action
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"{job_name(shape)}: pod still {phase or '(not found)'} "
+                f"after {timeout_s:.0f}s"
+            )
+        time.sleep(poll_interval)
+
+
 def restart_count() -> int:
     """Total container restarts across player-projections pods.
 
@@ -317,33 +394,51 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
         kubectl(["delete", "job", job_name(shape), "--ignore-not-found"])
         apply_job(render_job(shape, soak_minutes))
 
-        # Streams k6's own output as it runs, live — route_log_lines prints
-        # each line as it arrives instead of buffering the whole run. --follow
-        # exits when the pod terminates, and reading its stdout to EOF is the
-        # wait; the summary JSON is withheld from the console and captured
-        # for the results file instead.
-        follow_cmd = [
-            "kubectl", "logs", "-f", f"job/{job_name(shape)}",
-            "--pod-running-timeout", cfg["timeout"],
-        ]
-        print(f"  $ {' '.join(follow_cmd)}")
-        proc = subprocess.Popen(
-            follow_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        )
-        logs = route_log_lines(proc.stdout, lambda line: print(line, end=""))
-        proc.wait()
+        # The very first live run of this tool found kubectl logs -f giving up
+        # in ~30-100ms — not honouring --pod-running-timeout at all — while the
+        # pod was still ContainerCreating, and the (then-immediate) fallback
+        # fetch racing the exact same window and failing identically. Wait for
+        # the pod to leave that window first, budgeted by the shape's own
+        # timeout, and let phase_action decide what to do with what's observed.
+        action = wait_for_pod_action(shape, parse_kube_duration(cfg["timeout"]))
 
-        # The follow stream is not proof of a complete log: a non-zero exit
-        # means kubectl itself gave up, and a clean exit with no marker means
-        # it ended before k6 printed its summary. Either way, fall back to the
-        # checked, non-follow fetch — it only runs after the pod has fully
-        # terminated, and kubectl()'s check=True makes a failure here loud
-        # rather than quietly leaving `logs` as whatever the stream managed.
-        if needs_fallback(proc.returncode, SUMMARY_MARKER in logs):
-            print(
-                f"  follow stream looked incomplete (exit {proc.returncode}, "
-                f"marker seen: {SUMMARY_MARKER in logs}) — re-fetching settled logs"
+        if action == "follow":
+            # Streams k6's own output as it runs, live — route_log_lines prints
+            # each line as it arrives instead of buffering the whole run. --follow
+            # exits when the pod terminates, and reading its stdout to EOF is the
+            # wait; the summary JSON is withheld from the console and captured
+            # for the results file instead.
+            follow_cmd = [
+                "kubectl", "logs", "-f", f"job/{job_name(shape)}",
+                "--pod-running-timeout", cfg["timeout"],
+            ]
+            print(f"  $ {' '.join(follow_cmd)}")
+            proc = subprocess.Popen(
+                follow_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             )
+            logs = route_log_lines(proc.stdout, lambda line: print(line, end=""))
+            proc.wait()
+
+            # The follow stream is not proof of a complete log: a non-zero exit
+            # means kubectl itself gave up, and a clean exit with no marker means
+            # it ended before k6 printed its summary. Either way, fall back to the
+            # checked, non-follow fetch — it only runs after the pod has fully
+            # terminated, and kubectl()'s check=True makes a failure here loud
+            # rather than quietly leaving `logs` as whatever the stream managed.
+            if needs_fallback(proc.returncode, SUMMARY_MARKER in logs):
+                print(
+                    f"  follow stream looked incomplete (exit {proc.returncode}, "
+                    f"marker seen: {SUMMARY_MARKER in logs}) — re-fetching settled logs"
+                )
+                logs = kubectl(["logs", f"job/{job_name(shape)}"]).stdout
+        else:
+            # action == "fetch": the pod already reached Succeeded/Failed
+            # before wait_for_pod_action's poll ever saw it Running — a fast
+            # shape can finish inside one poll interval. A live follow would
+            # attach to a stream with nothing left to send, so this is the
+            # normal path for a quick run, not a failure; go straight to the
+            # checked fetch.
+            print("  pod already terminated before follow would have attached — fetching settled logs directly")
             logs = kubectl(["logs", f"job/{job_name(shape)}"]).stdout
 
         text, payload = split_summary(logs)
