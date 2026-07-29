@@ -96,6 +96,7 @@ open     -> retractable_open     closed -> retractable_closed
 | `scripts/smoke-test.sh` | Assertions rewritten against `/signals` |
 | `.github/workflows/weather.yml` | `libs/**` path filter, collector-core lint+test jobs, repo-root build context |
 | `.github/actions/build-push/action.yml` | Optional `context` and `dockerfile` inputs, defaulting to today's behaviour |
+| `helm/charts/generic-service/templates/httproute.yaml` | Publish only the collector's declared contract paths, not the auth-exempt ones |
 | `docs/architecture/phase-8-data-source-collectors.md` | Amend coverage window + 8A dependencies |
 | `CLAUDE.md`, `docs/onboarding.md` | Workspace-member Dockerfile pattern |
 | `pyproject.toml` (repo root) | Declare the uv workspace |
@@ -4348,7 +4349,188 @@ git commit -m "feat(infra): workspace-aware image build, MinIO lake for the loca
 
 ---
 
-## Task 19: Smoke test and documentation
+## Task 19: Gateway publishes only the contract paths
+
+**Files:**
+- Modify: `helm/charts/generic-service/templates/httproute.yaml`, `helm/charts/generic-service/values.yaml`, `helm/values/weather/values.yaml`, `tests/test_helm_httproute.py`
+
+**Interfaces:**
+- Consumes: nothing in Python
+- Produces: `gateway.publicPaths` — a list of service-relative path prefixes the gateway is allowed to publish, defaulting to the three contract data routes
+
+**The defect this closes.** The HTTPRoute matches one bare `PathPrefix` (`/collectors/<name>`) and rewrites it to `/`, so **every** route the service serves is reachable from the edge — including the two that are deliberately exempt from bearer auth. Verified against the running app: `/signals` correctly returns 401 without a token, but `/health` returns 200 and `/metrics` returns 200. In-cluster with OTel wired, that second one publishes `collector_capture_failures_total{reason}`, `collector_coverage_ratio`, `collector_staleness_seconds`, and `collector_auth_failures_total` — poll cadence, upstream failure patterns, coverage posture, and a counter that lets someone probing tokens watch their own attempts register. No signal data leaks; operational posture does, to the internet.
+
+The exemption itself is correct and stays. The kubelet's probes and Prometheus's annotation scrape cannot carry a token, and a probe cannot reference a Secret — requiring auth would put the token in plaintext in the Deployment manifest and therefore in the GitOps repo, which is a worse trade than the exposure. But that argument only ever justified exempting those paths **in-cluster**. It says nothing about publishing them at the edge, and conflating the two is the bug.
+
+Arrived with Phase 5B's gateway work rather than with 8A, but 8A defines the contract 25 more collectors inherit, so this is the cheapest moment it will ever be to fix.
+
+**Nothing should break.** `scripts/smoke-test.sh` reaches `/health` and `/metrics` over a `kubectl port-forward` to the Service, not through the gateway. Prometheus scrapes pod annotations directly. Neither path depends on edge routing.
+
+- [ ] **Step 1: Write the failing render assertions**
+
+Add to `tests/test_helm_httproute.py` (follow the existing helpers in that file for rendering the chart — do not invent a new harness):
+
+```python
+def test_one_rule_per_public_path(weather_httproute):
+    rules = weather_httproute["spec"]["rules"]
+    matched = [r["matches"][0]["path"]["value"] for r in rules]
+    assert matched == [
+        "/collectors/weather/catalog",
+        "/collectors/weather/signals",
+        "/collectors/weather/refresh",
+    ]
+
+
+def test_each_rule_rewrites_to_the_service_relative_path(weather_httproute):
+    """The gateway strips the collector prefix and nothing else, so
+    /collectors/weather/signals/convergence still reaches /signals/convergence."""
+    for rule in weather_httproute["spec"]["rules"]:
+        matched = rule["matches"][0]["path"]["value"]
+        rewrite = rule["filters"][0]["urlRewrite"]["path"]["replacePrefixMatch"]
+        assert matched == f"/collectors/weather{rewrite}"
+
+
+def test_health_is_not_published_at_the_edge(weather_httproute):
+    """Auth-exempt by necessity in-cluster; that is not a reason to publish it."""
+    matched = [
+        r["matches"][0]["path"]["value"] for r in weather_httproute["spec"]["rules"]
+    ]
+    assert not any(m.endswith("/health") for m in matched)
+
+
+def test_metrics_is_not_published_at_the_edge(weather_httproute):
+    """In-cluster this exposes collector_* series — poll cadence, failure
+    reasons, coverage, and auth-failure counts. Not an edge surface."""
+    matched = [
+        r["matches"][0]["path"]["value"] for r in weather_httproute["spec"]["rules"]
+    ]
+    assert not any(m.endswith("/metrics") for m in matched)
+
+
+def test_no_rule_matches_the_bare_collector_prefix(weather_httproute):
+    """A bare prefix rule would republish everything and silently undo this."""
+    matched = [
+        r["matches"][0]["path"]["value"] for r in weather_httproute["spec"]["rules"]
+    ]
+    assert "/collectors/weather" not in matched
+    assert "/collectors/weather/" not in matched
+
+
+def test_empty_public_paths_fails_the_render():
+    """Fail loudly rather than rendering a route that publishes nothing, or
+    worse, falls back to a bare prefix."""
+    with pytest.raises(Exception):
+        render_chart(
+            values={"gateway": {"enabled": True, "pathPrefix": "/collectors/x",
+                                "publicPaths": []}}
+        )
+```
+
+Adapt the fixture and render-helper names to whatever `tests/test_helm_httproute.py` already uses.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `uv run --with pyyaml==6.0.3 --with pytest==9.0.3 pytest tests/test_helm_httproute.py -v`
+Expected: the new assertions fail — the chart currently renders exactly one rule matching the bare prefix.
+
+- [ ] **Step 3: Add the chart default**
+
+In `helm/charts/generic-service/values.yaml`, under `gateway`:
+
+```yaml
+gateway:
+  # Service-relative path prefixes the gateway may publish. Deliberately NOT
+  # the whole service: /health and /metrics are exempt from bearer auth so the
+  # kubelet's probes and Prometheus's annotation scrape can reach them, and a
+  # probe cannot read a Secret — so requiring a token there would mean
+  # committing one in plaintext. Exempting them in-cluster is correct;
+  # publishing them at the edge is not, and a bare prefix rule did both.
+  publicPaths:
+    - /catalog
+    - /signals
+    - /refresh
+```
+
+A collector with extra contract routes adds them here. Weather needs nothing extra — `/signals/convergence` is already covered by the `/signals` prefix.
+
+- [ ] **Step 4: Render one rule per public path**
+
+Rewrite the `rules:` block of `helm/charts/generic-service/templates/httproute.yaml`:
+
+```yaml
+{{- if not .Values.gateway.publicPaths }}
+{{- fail "gateway.publicPaths must be a non-empty list when gateway.enabled is true" }}
+{{- end }}
+  rules:
+    {{- range $path := .Values.gateway.publicPaths }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: {{ printf "%s%s" $.Values.gateway.pathPrefix $path | quote }}
+      filters:
+        # Strip the collector prefix and nothing else, so a collector's own
+        # sub-routes still resolve: /collectors/weather/signals/convergence
+        # reaches /signals/convergence.
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: {{ $path | quote }}
+      backendRefs:
+        - name: {{ include "generic-service.fullname" $ }}
+          port: {{ $.Values.service.port }}
+    {{- end }}
+```
+
+Note the `$` prefixes inside the `range` — inside the loop, `.` is the path string, so chart values must come off the root context. Getting this wrong renders an empty service name and the route silently points nowhere.
+
+Delete the old comment about the doubled `/collectors/weather/weather/stadiums` path; those routes no longer exist.
+
+- [ ] **Step 5: Run the render assertions**
+
+Run: `uv run --with pyyaml==6.0.3 --with pytest==9.0.3 pytest tests/test_helm_httproute.py -v`
+Expected: PASS
+
+- [ ] **Step 6: Lint the chart**
+
+```bash
+helm lint helm/charts/generic-service --values helm/values/weather/values.yaml
+helm template weather helm/charts/generic-service --values helm/values/weather/values.yaml | grep -A30 "kind: HTTPRoute"
+```
+
+Read the rendered output and confirm three rules, correct rewrite targets, and a real backend service name in each.
+
+- [ ] **Step 7: Verify on Kind**
+
+```bash
+python scripts/stack-up.py
+TOKEN=local-dev-token
+GW=http://localhost:8080/collectors/weather
+# Contract routes reachable with a token
+curl -o /dev/null -sw 'catalog  %{http_code}\n' -H "Authorization: Bearer $TOKEN" "$GW/catalog"
+curl -o /dev/null -sw 'signals  %{http_code}\n' -H "Authorization: Bearer $TOKEN" "$GW/signals"
+# Exempt paths no longer published at the edge — expect 404 from the gateway
+curl -o /dev/null -sw 'health   %{http_code}\n' "$GW/health"
+curl -o /dev/null -sw 'metrics  %{http_code}\n' "$GW/metrics"
+# Still reachable in-cluster, unchanged
+kubectl port-forward svc/weather 8000:8000 &
+sleep 3
+curl -o /dev/null -sw 'direct health  %{http_code}\n' http://localhost:8000/health
+curl -o /dev/null -sw 'direct metrics %{http_code}\n' http://localhost:8000/metrics
+```
+
+Expected: `catalog`/`signals` 200, gateway `health`/`metrics` **404**, direct `health`/`metrics` **200**.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add helm/ tests/test_helm_httproute.py
+git commit -m "fix(gateway): publish only the contract paths, not the auth-exempt ones"
+```
+
+---
+
+## Task 20: Smoke test and documentation
 
 **Files:**
 - Modify: `scripts/smoke-test.sh`, `docs/architecture/phase-8-data-source-collectors.md`, `CLAUDE.md`, `docs/onboarding.md`, `README.md`
@@ -4502,6 +4684,7 @@ Do not skip it.
 - [ ] Phase 8 doc amended on the coverage window and 8A dependencies
 - [ ] `CLAUDE.md` and `docs/onboarding.md` document the workspace-member build
 - [ ] `collector-core` lint+test running in CI; `build-push` builds weather from the repo root
+- [ ] Gateway publishes only `/catalog`, `/signals`, `/refresh`; `/health` and `/metrics` return 404 at the edge and 200 in-cluster
 - [ ] `uv lock --check` clean in every changed directory
 - [ ] Full suite green, coverage gates met, `integration-test` passing
 - [ ] `superpowers:pr-uat` run before the PR opens
