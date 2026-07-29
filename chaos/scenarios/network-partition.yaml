@@ -7,6 +7,19 @@ spec:
     - description: the gateway sees weather as a healthy upstream
       query: max(envoy_cluster_membership_healthy{envoy_cluster_name="httproute/default/weather/rule/0"})
       expect: "== 1"
+    # Residue guard, and it is load-bearing. The criterion below looks back
+    # [5m], so a run started too soon after a previous one inherits its
+    # predecessor's connect-fail spike and PASSES without having broken
+    # anything — a green result proving nothing, which is the failure this
+    # whole directory exists to prevent. Observed for real: a deliberately
+    # neutered run scored 6.15 purely on the prior run's residue.
+    # [2m] rather than [5m] so a re-run is merely delayed, not blocked.
+    # No allowEmpty here, unlike latency-injection: this series always exists
+    # (it reads 0 on a healthy gateway), so an empty result means the Envoy
+    # metrics are genuinely missing and aborting is the right response.
+    - description: no recent gateway connection failures
+      query: increase(max(envoy_cluster_upstream_cx_connect_fail{envoy_cluster_name="httproute/default/weather/rule/0"})[2m:15s])
+      expect: "== 0"
     - description: weather is up
       query: up{job="weather"}
       expect: "== 1"
