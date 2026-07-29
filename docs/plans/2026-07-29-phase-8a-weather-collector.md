@@ -2517,24 +2517,43 @@ async def test_total_upstream_failure_still_writes_an_envelope():
     assert envelope.errors, "a failed capture must record why"
 
 
+class SpyLakeWriter:
+    """Records what it was handed. Deliberately NOT moto/S3.
+
+    `collector-core` already tests real object-store semantics against moto,
+    and its dev dependencies are not installed for this service in CI — a moto
+    import here passes locally off a shared virtualenv and fails in CI, which is
+    the worst place to find out. What weather needs to prove is narrower anyway:
+    that a capture hands one envelope per signal type to whatever writer it was
+    given. The storage layer's correctness is not this service's test to own.
+    """
+
+    def __init__(self) -> None:
+        self.written: list = []
+
+    def write(self, envelope) -> str:
+        self.written.append(envelope)
+        return f"spy://{envelope.signal_type}"
+
+    def list_keys(self, collector, signal_type, season, week) -> list[str]:
+        return [f"spy://{e.signal_type}" for e in self.written]
+
+    def read(self, key: str) -> dict:
+        raise KeyError(key)
+
+
 @respx.mock
-async def test_capture_writes_to_the_lake():
-    from collector_core.lake import S3LakeWriter
+async def test_capture_writes_one_envelope_per_signal_type_to_the_lake():
+    lake = SpyLakeWriter()
+    mock_upstreams(schedule_csv(HOME_GAME))
+    async with httpx.AsyncClient() as client:
+        await capture_week(2026, 1, client=client, lake=lake, now=NOW)
 
-    import boto3
-    from moto import mock_aws
-
-    with mock_aws():
-        s3 = boto3.client("s3", region_name="us-east-1")
-        s3.create_bucket(Bucket="signals")
-        lake = S3LakeWriter("signals", s3)
-
-        mock_upstreams(schedule_csv(HOME_GAME))
-        async with httpx.AsyncClient() as client:
-            await capture_week(2026, 1, client=client, lake=lake, now=NOW)
-
-        keys = lake.list_keys("weather", "venue_forecast_kickoff", 2026, 1)
-        assert len(keys) == 2, "one object per signal type"
+    assert {e.signal_type for e in lake.written} == {
+        "venue_forecast_kickoff",
+        "venue_conditions_current",
+    }
+    assert len(lake.written) == 2
 
 
 def test_forecast_hour_assertion_accepts_the_matching_hour():
