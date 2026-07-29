@@ -70,7 +70,7 @@ Three outcomes are worth telling apart:
 | Scenario | Injects | Asserts |
 |---|---|---|
 | `pod-kill` | Kills weather's only pod | A replacement is created and scraping resumes unaided |
-| `resource-pressure` | 190MB memory stress against a 256Mi limit | Pressure stays in weather's cgroup; player-projections is untouched |
+| `resource-pressure` | 400MB memory hog against a 256Mi limit | The cgroup OOM-kills the container rather than eating node memory; player-projections is untouched and weather restarts to Ready |
 | `latency-injection` | 12s egress delay to Open-Meteo | Captures time out and the counter says so |
 | `network-partition` | Partitions the Envoy data plane from weather | The gateway loses its upstream; weather stays healthy |
 | `bad-deploy` | Sets a nonexistent image out of band | Argo's selfHeal reverts the drift |

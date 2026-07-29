@@ -4,35 +4,52 @@ metadata:
   name: resource-pressure
 spec:
   steadyState:
-    # Residue guard. The criterion below looks back [5m], so an instantaneous
-    # check here would pass the moment memory is released while that window
-    # still holds a previous run's peak. Windowed to the same shape.
-    - description: weather has recently been well under its memory limit
-      query: max_over_time((max(container_memory_working_set_bytes{namespace="default",container="weather"}) / max(container_spec_memory_limit_bytes{namespace="default",container="weather"}))[2m:15s])
-      expect: "< 0.5"
+    # Residue guard. The criterion below looks back [5m], so a run started too
+    # soon after a previous one would inherit its predecessor's restart and pass
+    # without having killed anything.
+    #
+    # allowEmpty because increase() over [2m] needs two samples: a pod replaced
+    # moments ago (pod-kill runs immediately before this scenario under --all)
+    # has only one, and Prometheus returns an empty result rather than 0.
+    - description: weather has not restarted recently
+      query: max(increase(kube_pod_container_status_restarts_total{namespace="default",container="weather"}[2m]))
+      allowEmpty: true
+      expect: "== 0"
+    - description: weather is up
+      query: up{job="weather"}
+      expect: "== 1"
     - description: player-projections is up
       query: up{job="player-projections"}
       expect: "== 1"
   hypothesis: >
-    Sustained memory pressure holds weather's cgroup near its limit without
-    breaching it. The cgroup contains the pressure inside weather's own
-    container: it does not consume node memory, player-projections on the
-    same node is untouched, and weather keeps serving throughout. This
-    scenario does not exercise an OOM kill — that failure path is real, but
-    it resolves in under a second, which is invisible at this cluster's 60s
-    metrics scrape resolution.
-  duration: 180s
-  settle: 60s
+    A memory hog well past weather's 256Mi limit is contained by its own cgroup.
+    The kernel OOM-kills the container rather than letting it consume node
+    memory, so the blast radius stops at weather: player-projections on the same
+    node keeps serving throughout, and the kubelet restarts weather back to
+    Ready without human action.
+  duration: 60s
+  # Long enough for kube-state-metrics to be scraped after the restart —
+  # Prometheus's global scrape_interval is 1m, so a shorter settle would race it.
+  settle: 120s
   criteria:
-    # "the limit held" is on its own a criterion the kernel guarantees — it is
-    # true whether or not any stress ran. It is paired with "the stress was
-    # real", which is the half that can go red. The pairing is the pattern.
-    - description: the stress actually pressed against the limit
-      query: max_over_time((max(container_memory_working_set_bytes{namespace="default",container="weather"}) / max(container_spec_memory_limit_bytes{namespace="default",container="weather"}))[5m:15s])
-      expect: "> 0.85"
-    - description: the limit held
-      query: max_over_time((max(container_memory_working_set_bytes{namespace="default",container="weather"}) / max(container_spec_memory_limit_bytes{namespace="default",container="weather"}))[5m:15s])
-      expect: "<= 1.05"
+    # The falsifiable half. A counter, deliberately: the OOM resolves in about
+    # one second, and a *gauge* sampled every 60s cannot see an event that
+    # brief. An earlier version of this scenario asked
+    # max_over_time(memory / limit) > 0.85 and sat flat at ~0.20 across runs of
+    # 120s, 210s, and 450s, because the spike always fell between two scrapes.
+    # A counter increments and stays incremented, so scrape timing cannot hide
+    # it. Prefer counters over gauges for anything transient.
+    - description: the container was actually killed and restarted
+      query: max(increase(kube_pod_container_status_restarts_total{namespace="default",container="weather"}[5m]))
+      expect: "> 0"
+    # Qualifies the restart above: a liveness-probe failure would also increment
+    # the counter, and that is a different scenario. This pins the cause to the
+    # cgroup. It is sticky — it stays 1 until the container next terminates for
+    # some other reason — so it qualifies rather than proves, and never travels
+    # without the falsifiable check above.
+    - description: and the kill was an OOM, not a probe failure
+      query: max(kube_pod_container_status_last_terminated_reason{namespace="default",container="weather",reason="OOMKilled"})
+      expect: "== 1"
     - description: blast radius stayed inside weather's container
       query: min_over_time(up{job="player-projections"}[5m])
       expect: "== 1"
@@ -55,16 +72,9 @@ spec:
   stressors:
     memory:
       workers: 1
-      # Sized to SURVIVE, not to be OOM-killed. weather idles at ~49 MiB
-      # against a 256 MiB limit, so 190 MB holds working-set at ~239 MiB
-      # (ratio ~0.93) — high enough to prove real pressure, low enough that
-      # the stressor is not killed on contact.
-      #
-      # An earlier version used 400MB, expecting the cgroup to OOM-kill it.
-      # It did — in about ONE SECOND. cadvisor is scraped every 60s (global
-      # scrape_interval: 1m), so that spike fell between samples and the ratio
-      # never rose above ~0.20. Verified across 120s, 210s, and 450s runs.
-      # A sub-second pulse cannot be caught by a 60s scrape no matter how long
-      # the scenario runs.
-      size: 190MB
-  duration: 180s
+      # Deliberately far past the 256Mi limit so the cgroup MUST intervene.
+      # weather idles at ~49 MiB, so 400MB cannot fit and the OOM killer fires
+      # within about a second. That speed is why the criteria above are counters
+      # rather than a memory gauge.
+      size: 400MB
+  duration: 60s

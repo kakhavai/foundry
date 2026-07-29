@@ -226,9 +226,24 @@ proven only in-process.
 **A scenario proves its hypothesis under one injected fault, not resilience.**
 Each scenario was demonstrated capable of failing, which is a much stronger
 claim than a green run — but it is still one fault, one shape, one cluster.
-`resource-pressure`'s "the limit held" criterion in particular is guaranteed by
-the kernel and cannot fail on its own; it is retained because it states the
-hypothesis, and paired with "the stress was real", which can.
+
+**Prefer counters over gauges for anything transient.** `resource-pressure`
+learned this the hard way. Its first criterion asked
+`max_over_time(memory / limit) > 0.85` and sat flat at ~0.20 across runs of
+120s, 210s, and 450s: the cgroup OOM-kills a 400MB hog in about one second, and
+cAdvisor is scraped every 60s, so the event never landed in a sample. A gauge
+cannot see what it does not sample. The scenario now asserts on
+`kube_pod_container_status_restarts_total`, a counter — it increments and stays
+incremented, so scrape timing cannot hide it. Any criterion measuring a
+short-lived event needs the same treatment.
+
+**One of `resource-pressure`'s criteria qualifies rather than proves.**
+`kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}` pins the
+restart to the cgroup rather than a liveness-probe failure, but it is *sticky*:
+it stays `1` until the container next terminates for some other reason. In the
+deliberate red run it passed on the previous run's value while the restart
+counter correctly failed. It is therefore retained only as a qualifier and never
+travels without the falsifiable check beside it.
 
 **Chaos coverage is not continuous.** `chaos-test.yml` runs on
 `workflow_dispatch` only, so these scenarios prove nothing between the runs
