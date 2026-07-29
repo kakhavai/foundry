@@ -76,8 +76,14 @@ def render_job(shape: str, soak_minutes: int) -> dict:
     otherwise, and the exit code is the entire verdict.
     """
     cfg = SHAPES[shape]
+    # No --quiet: verified by probe that k6 still prints its periodic
+    # non-interactive progress line (`running (Ns), NN/NN VUs, ...`) roughly
+    # once a second when stdout is not a TTY, which is exactly the case under
+    # `kubectl logs -f`. With --quiet, k6 prints nothing at all until the run
+    # ends, which made route_log_lines's live-streaming pointless in practice
+    # — an operator watching a 5-minute ramp saw nothing until t=300s.
     command = (
-        f"k6 run --quiet --summary-mode full "
+        f"k6 run --summary-mode full "
         f"--summary-trend-stats 'avg,min,med,p(95),p(99),max' "
         f"--summary-export /tmp/summary.json /scripts/{cfg['script']}; "
         f"code=$?; "
