@@ -1,0 +1,66 @@
+apiVersion: foundry.chaos/v1
+kind: Scenario
+metadata:
+  name: latency-injection
+spec:
+  steadyState:
+    # `job="weather"` is REQUIRED, not decoration. Every weather metric is
+    # scraped twice — once through the Service DNS name by the static
+    # extraScrapeConfigs entry (job="weather"), and once per-pod by the default
+    # annotation scrape (job="kubernetes-pods"). Both carry the same value.
+    # Without the filter this resolves to two series and run-chaos.py raises
+    # `query returned 2 series; a check must reduce to one` rather than
+    # producing a verdict at all.
+    #
+    # The lookback here is [2m], not [5m]: the criterion's own [5m] window means
+    # a completed run leaves timeouts visible for five minutes, so a [5m] steady
+    # state would refuse to start a second run until they aged out. [2m] still
+    # catches live contamination while allowing a re-run after roughly two
+    # minutes — which the green-then-red sequence below needs.
+    - description: no upstream timeouts recorded recently
+      query: increase(collector_capture_failures_total{job="weather",collector="weather",reason="timeout"}[2m])
+      # This series legitimately does not exist on a healthy cluster — the
+      # counter has never fired. Everywhere else an empty result is an error,
+      # because Prometheus answers identically for a typo'd metric name.
+      allowEmpty: true
+      expect: "== 0"
+    - description: weather is up
+      query: up{job="weather"}
+      expect: "== 1"
+  hypothesis: >
+    12s of injected egress latency to Open-Meteo exceeds weather's 10s httpx
+    timeout (services/weather/weather/main.py:42 and :70), so every capture
+    times out while the route still answers. Only the counter reveals it — the
+    HTTP response cannot.
+  traffic: gateway
+  duration: 120s
+  settle: 30s
+  criteria:
+    - description: upstream captures timed out
+      query: increase(collector_capture_failures_total{job="weather",collector="weather",reason="timeout"}[5m])
+      expect: "> 0"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: chaos-latency-weather-upstream
+  namespace: default
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      app.kubernetes.io/name: weather
+  direction: to
+  # Scoping to the upstream host is load-bearing. Delaying all of weather's
+  # egress would also delay its /metrics response past Prometheus's 10s scrape
+  # timeout, dropping `up` to 0 and destroying the signal being measured.
+  externalTargets:
+    - api.open-meteo.com
+  delay:
+    latency: "12s"
+    correlation: "0"
+    jitter: "0ms"
+  duration: 120s
