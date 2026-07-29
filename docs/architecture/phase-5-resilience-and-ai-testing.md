@@ -78,6 +78,29 @@ Auth is a new failure surface, so it needs its own tests: a missing token, a
 wrong token, and an expired/rotated token must all be rejected with the right
 status, and the rejection must be observable — not a silent 500.
 
+**Rename `weather`'s metrics to the fleet convention in the gateway PR.**
+[Phase 8](phase-8-data-source-collectors.md) specifies fleet-wide names that the
+failure-path metrics PR predates and therefore does not follow:
+
+| Shipped | Phase 8 convention |
+|---|---|
+| `weather_upstream_failures_total{reason}` | `collector_capture_failures_total{collector,reason}` |
+| `weather_upstream_requests_total` | folded into the same `{collector}` dimension |
+
+Do it while `weather` is the only collector — the same rename across the
+twenty-six-collector catalog is a far worse afternoon. `player-projections` is
+deliberately **not** included: it consumes the generator's output rather than
+capturing a signal, so it is not part of the collector fleet and its
+`upstream_*` names stay as they are.
+
+Note also that Phase 8's 8A **rebuilds** `weather` onto the capture model —
+forecast-at-kickoff, polled on a cadence and served from memory — rather than
+extending the current stateless proxy. The counters added here instrument the
+synchronous request path, which that retrofit removes. They are correct and
+load-bearing for the chaos scenarios below, but for `weather` they are
+transitional; the chaos scenario that exercises its upstream must be written
+against whichever shape is live when it runs.
+
 ### What Gets Built — chaos and scale
 
 **Chaos engineering with Chaos Mesh.** Chaos Mesh is deployed to the Kind cluster. A `chaos/` directory contains scenario manifests:
