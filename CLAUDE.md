@@ -75,8 +75,40 @@ that works. Revisit if the generator ever becomes multi-tenant, or if a token
 leaking into a log becomes a realistic concern — mTLS removes the bearer secret
 entirely, and OIDC removes the long-lived one.
 
-`weather` is the first collector and today feeds nothing; it gets the gateway
-path and token treatment in Phase 5B.
+`weather` is the first collector. It is served at `/collectors/weather/` through
+the gateway and enforces a bearer token in-process.
+
+**Gateway:** Envoy Gateway (pinned, `infra/gateway/`) implementing Gateway API.
+One `Gateway` named `foundry` in `envoy-gateway-system` holds the front door;
+each collector's Helm chart templates its own `HTTPRoute` via `gateway.enabled`
+and `gateway.pathPrefix` in its values file. On Kind it is reachable at
+`http://localhost:8080` through the NodePort 30080 mapping in
+`infra/kind/cluster.yaml`.
+
+The gateway strips `/collectors/<name>` and passes the rest through — one rule
+for the whole fleet, no per-collector rewrite target. Because `weather`'s own
+routes are namespaced under `/weather/`, the external path today reads
+`/collectors/weather/weather/stadiums`. The doubled segment is expected, not a
+bug; Phase 8's 8A replaces those routes with `/signals` and it disappears.
+
+**Auth is enforced in the service, not at the gateway** (`weather/auth.py`).
+Middleware, so a route added later is protected by default. `/health` and
+`/metrics` are exempt because the kubelet's probes and Prometheus's annotation
+scrape cannot carry a token. An absent or empty `COLLECTOR_TOKEN` returns 503
+on every data route — it fails closed, so a Secret that never syncs is loud
+rather than an open collector.
+
+Gateway-only enforcement was rejected because `scripts/smoke-test.sh`
+port-forwards `svc/weather` directly: it would have left the required
+`integration-test` check green over an unprotected path.
+
+**Rotation requires a rollout.** `secretKeyRef` injects the token as an env var
+captured at pod start, so updating the Secret takes effect only after
+`kubectl rollout restart deploy/<service>`.
+
+**Local development:** `scripts/deploy-local.py` creates the Secret with the
+literal `local-dev-token`. That value is Kind-only and committed deliberately;
+real tokens are created out of band and never enter Git.
 
 ---
 

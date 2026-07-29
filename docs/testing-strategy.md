@@ -148,7 +148,7 @@ fail. Tracked as a Phase 5B follow-up, not raised here.
 **Failure-path metrics are proven to be emitted, not to be collected.** The
 metric tests assert against real `generate_latest()` output, so they prove
 `upstream_poll_failures_total`, `upstream_cache_age_seconds`, `upstream_healthy`,
-and `weather_upstream_{requests,failures}_total` carry the right labels and
+and `collector_capture_{requests,failures}_total` carry the right labels and
 values in-process. Nothing in them touches scrape configuration, pod
 annotations, or the Helm chart, so "the metric exists" and "Prometheus is
 collecting the metric" remain separate claims and only the first is tested here.
@@ -158,6 +158,41 @@ Prometheus in Phase 5B's chaos PR.
 They also fix no thresholds. What counts as an unacceptable cache age or failure
 rate is a scenario-design question, deliberately left to the chaos work rather
 than guessed at here.
+
+**Collector auth is proven in-process and in one cluster, not against a real
+client.** `test_auth.py` proves the middleware rejects a missing, malformed,
+wrong, superseded, and unconfigured token, and `smoke-test.sh` proves a
+deployed pod rejects an unauthenticated request both through the gateway and
+directly at the Service. Nothing here exercises the projections generator,
+which does not exist yet, so "the intended caller can authenticate" is still
+untested.
+
+**Token rotation is tested as an environment change, not as a rotation.**
+`secretKeyRef` injects the token as an env var captured at pod start, so a live
+rotation requires `kubectl rollout restart`. The test swaps the env var
+in-process, which is the same event the pod observes after that restart — but
+nothing tests the restart itself, or what happens to in-flight requests during
+one.
+
+**`/metrics` is reachable through the gateway without a token.** It is exempt
+so Prometheus's annotation scrape works, and the gateway forwards the whole
+`/collectors/<name>/` prefix. Upstream failure counts are therefore externally
+readable wherever the gateway is. Phase 6 makes the gateway internal-only.
+
+**The gateway is proven to route, not to survive.** No test in this phase
+exercises it under failure — a killed data plane, a partitioned collector, a
+revoked token. That is the chaos PR's job, and it is the reason the gateway
+landed first.
+
+**The direct-to-Service rejection assertion is not yet proven against the
+regression it exists for.** `smoke-test.sh` asserts a tokenless call straight at
+`svc/weather` returns 401 — the check that would catch auth enforced only at the
+gateway. But no gateway-level enforcement exists to remove: Envoy Gateway
+carries no `SecurityPolicy` here, so the gateway-path and direct-path assertions
+currently rest on the same in-service check and fail together. The assertion is
+correctly placed for the day gateway-level auth is added; today it is a guard
+against auth disappearing entirely, which is a weaker claim than its position
+implies.
 
 ## Not Covered Here
 
