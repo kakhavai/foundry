@@ -4863,6 +4863,39 @@ echo "collector auth OK"
 echo "weather: OK"
 ```
 
+- [ ] **Step 1b: Assert a real lake write from inside the cluster**
+
+Task 18's review left one gap it could not close locally: the union of a real
+Pod, `secretKeyRef` credential injection, and cluster-DNS resolution of
+`minio.monitoring.svc.cluster.local` was never observed together, because this
+machine's Kind cluster is ArgoCD-managed and `deploy-local.py` hits the
+documented Server-Side-Apply conflict. CI's `integration-test` job has no ArgoCD
+— it runs `deploy-local.py` on a fresh cluster — so an assertion here converts
+that CI run into the missing proof.
+
+Add to `scripts/smoke-test.sh`, after the collector-auth block:
+
+```bash
+# Force a capture, then prove it reached the object store. This is the only
+# check that exercises a real Pod reading its credentials from a Secret and
+# resolving MinIO through cluster DNS — the local ArgoCD-managed cluster cannot.
+curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json'   -d '{"season":2026,"week":1}' http://localhost:8000/refresh   | python3 -c "import sys,json; assert json.load(sys.stdin)['refresh_id']; print('refresh accepted')"
+
+# /refresh returns before the capture finishes, so poll rather than assume.
+for i in $(seq 1 30); do
+  OBJECTS=$(kubectl exec -n monitoring deploy/minio --     sh -c 'ls -R /export/foundry-signals 2>/dev/null | grep -c ".json"' || echo 0)
+  [ "$OBJECTS" -gt 0 ] && break
+  sleep 2
+done
+[ "$OBJECTS" -gt 0 ] || (echo "no envelope reached the lake after 60s" && exit 1)
+echo "lake write OK ($OBJECTS object(s))"
+```
+
+Adapt the `kubectl exec` target to whatever the MinIO chart actually names its
+Deployment or StatefulSet — check with `kubectl get all -n monitoring | grep minio`
+rather than assuming `deploy/minio`. If the chart uses a StatefulSet, the path
+differs.
+
 - [ ] **Step 2: Amend the phase doc where this PR departs from it**
 
 In `docs/architecture/phase-8-data-source-collectors.md`, make three edits:
