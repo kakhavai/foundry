@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import os
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -10,6 +12,7 @@ from fastapi import FastAPI, Query
 from .auth import require_bearer_token
 from .capture import CADENCE_CLASS, COLLECTOR_NAME, SIGNAL_TYPES, capture_week
 from .metrics import metrics
+from .scheduler import run_capture_loop
 
 # `player_id` is deliberately absent -- weather emits no players, and
 # silently accepting it would return everything and read as a match.
@@ -50,7 +53,25 @@ async def lifespan(app: FastAPI):
         from .telemetry import setup_telemetry
 
         setup_telemetry(app)
-    yield
+
+    # Guarded so tests and local runs do not reach an upstream on import.
+    task: asyncio.Task | None = None
+    if os.getenv("CAPTURE_ENABLED", "").lower() in {"1", "true", "yes"}:
+        task = asyncio.create_task(
+            run_capture_loop(
+                _state,
+                lake=_lake,
+                season=int(os.getenv("CAPTURE_SEASON", "2026")),
+                week=int(os.getenv("CAPTURE_WEEK", "1")),
+            )
+        )
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 app = FastAPI(lifespan=lifespan)
