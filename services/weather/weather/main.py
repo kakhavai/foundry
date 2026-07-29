@@ -1,35 +1,47 @@
 import os
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
-import httpx
-from collector_core.envelope import ENVELOPE_VERSION, Envelope
 from collector_core.lake import build_lake_writer_from_env
 from collector_core.refresh import RefreshGate
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse, Response
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from collector_core.routes import CaptureState, CollectorSpec, build_collector_router
+from fastapi import FastAPI, Query
 
 from .auth import require_bearer_token
-from .capture import (
-    CADENCE_CLASS,
-    COLLECTOR_NAME,
-    SIGNAL_TYPES,
-    CaptureState,
-    capture_week,
-)
+from .capture import CADENCE_CLASS, COLLECTOR_NAME, SIGNAL_TYPES, capture_week
+from .metrics import metrics
 
-# The filters this collector actually supports. `player_id` is deliberately
-# absent — weather emits no players, and silently accepting it would return
-# everything and read as a match. /catalog publishes this list so a consumer
-# discovers the surface rather than guessing.
+# `player_id` is deliberately absent -- weather emits no players, and
+# silently accepting it would return everything and read as a match.
 SUPPORTED_FILTERS = ("season", "week", "game_id", "team", "signal_type")
 
 REFRESH_FLOOR = timedelta(seconds=int(os.getenv("REFRESH_MIN_INTERVAL_SECONDS", "300")))
 
+
+def _signal_matches(row: dict, params: dict) -> bool:
+    """weather's row filter for every query parameter beyond season/week/signal_type."""
+    if "game_id" in params and row.get("game_id") != params["game_id"]:
+        return False
+    if "team" in params and row.get("team") != params["team"]:
+        return False
+    return True
+
+
 _state = CaptureState()
 _refresh_gate = RefreshGate(REFRESH_FLOOR)
 _lake = build_lake_writer_from_env()
+_spec = CollectorSpec(
+    name=COLLECTOR_NAME,
+    cadence_class=CADENCE_CLASS,
+    signal_types=SIGNAL_TYPES,
+    supported_filters=SUPPORTED_FILTERS,
+    capture=capture_week,
+    state=_state,
+    lake=_lake,
+    metrics=metrics,
+    refresh_gate=_refresh_gate,
+    signal_matches=_signal_matches,
+)
 
 
 @asynccontextmanager
@@ -42,99 +54,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-# Registered as a call rather than a decorator so auth.py never imports main —
-# the dependency runs one way only.
+# A call, not a decorator, so auth.py never imports main -- one-way dependency.
 app.middleware("http")(require_bearer_token)
-
-
-def _rfc3339(value: datetime | None) -> str | None:
-    return (
-        None if value is None else value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    )
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
-
-@app.get("/metrics")
-async def prometheus_metrics():
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
-
-
-@app.get("/catalog")
-async def catalog():
-    """Self-description. The registry says a collector exists; this says what
-    it currently offers."""
-    return {
-        "collector": COLLECTOR_NAME,
-        "envelope_version": ENVELOPE_VERSION,
-        "cadence_class": str(CADENCE_CLASS),
-        "signal_types": list(SIGNAL_TYPES),
-        "filters": list(SUPPORTED_FILTERS),
-        "last_capture_at": _rfc3339(_state.last_capture_at),
-        "coverage": {
-            signal_type: envelope.coverage.to_dict()
-            for signal_type, envelope in _state.envelopes.items()
-        },
-    }
-
-
-def _filter_signals(envelope: Envelope, game_id: str | None, team: str | None) -> dict:
-    body = envelope.to_dict()
-    signals = body["signals"]
-    if game_id is not None:
-        signals = [s for s in signals if s.get("game_id") == game_id]
-    if team is not None:
-        signals = [s for s in signals if s.get("team") == team]
-    body["signals"] = signals
-    return body
-
-
-@app.get("/signals")
-async def signals(
-    season: int | None = None,
-    week: int | None = None,
-    game_id: str | None = None,
-    team: str | None = None,
-    signal_type: str | None = None,
-    player_id: str | None = Query(default=None),
-):
-    if player_id is not None:
-        raise HTTPException(
-            status_code=422,
-            detail="weather emits no player_id; supported filters: "
-            + ", ".join(SUPPORTED_FILTERS),
-        )
-    if signal_type is not None and signal_type not in SIGNAL_TYPES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"unknown signal_type {signal_type!r}; "
-            f"expected one of {', '.join(SIGNAL_TYPES)}",
-        )
-
-    wanted = SIGNAL_TYPES if signal_type is None else (signal_type,)
-    envelopes = []
-    for name in wanted:
-        envelope = _state.envelopes.get(name)
-        if envelope is None:
-            continue
-        if season is not None and envelope.scope.get("season") != season:
-            continue
-        if week is not None and envelope.scope.get("week") != week:
-            continue
-        envelopes.append(_filter_signals(envelope, game_id, team))
-    return {"envelopes": envelopes, "count": len(envelopes)}
+app.include_router(build_collector_router(_spec))
 
 
 @app.get("/signals/convergence")
 async def convergence(game_id: str = Query(...), season: int = 2026, week: int = 1):
     """The ordered forecast series for one kickoff, with per-snapshot deltas.
-
-    Derivable from the lake, but every consumer would otherwise reimplement it —
-    and it is what makes the flat-band nowcast guard observable.
-    """
+    weather's own extra route, not part of the shared five -- derivable from
+    the lake, but every consumer would otherwise reimplement it."""
     keys = _lake.list_keys(COLLECTOR_NAME, "venue_forecast_kickoff", season, week)
     series = []
     previous: dict | None = None
@@ -166,25 +95,3 @@ async def convergence(game_id: str = Query(...), season: int = 2026, week: int =
         series.append(entry)
         previous = match
     return {"game_id": game_id, "series": series, "count": len(series)}
-
-
-@app.post("/refresh", status_code=202)
-async def refresh(body: dict | None = None):
-    """Force a capture outside the cadence, subject to the interval floor."""
-    now = datetime.now(tz=UTC)
-    refresh_id = _refresh_gate.try_acquire(now)
-    if refresh_id is None:
-        return JSONResponse(
-            {"detail": "refresh requested too soon"},
-            status_code=429,
-            headers={"Retry-After": str(_refresh_gate.retry_after(now))},
-        )
-
-    scope = body or {}
-    season = int(scope.get("season", 2026))
-    week = int(scope.get("week", 1))
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        envelopes = await capture_week(season, week, client=client, lake=_lake, now=now)
-    _state.envelopes = envelopes
-    _state.last_capture_at = now
-    return {"refresh_id": refresh_id, "scope": {"season": season, "week": week}}

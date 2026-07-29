@@ -277,12 +277,13 @@ source = { editable = "libs/collector-core" }
 dependencies = [
     { name = "boto3" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "opentelemetry-api" },
+    { name = "prometheus-client" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "jsonschema", extra = ["format"] },
     { name = "moto", extra = ["s3"] },
     { name = "pytest" },
@@ -295,12 +296,13 @@ dev = [
 requires-dist = [
     { name = "boto3" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "opentelemetry-api" },
+    { name = "prometheus-client" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx" },
     { name = "jsonschema", extras = ["format"] },
     { name = "moto", extras = ["s3"] },
     { name = "pytest" },

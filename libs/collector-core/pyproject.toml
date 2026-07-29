@@ -2,10 +2,10 @@
 name = "collector-core"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["boto3", "fastapi", "opentelemetry-api"]
+dependencies = ["boto3", "fastapi", "httpx", "opentelemetry-api", "prometheus-client"]
 
 [dependency-groups]
-dev = ["ruff", "pytest", "pytest-asyncio", "pytest-cov", "jsonschema[format]", "moto[s3]", "httpx"]
+dev = ["ruff", "pytest", "pytest-asyncio", "pytest-cov", "jsonschema[format]", "moto[s3]"]
 
 [tool.uv]
 package = true

@@ -4,7 +4,6 @@
 outage therefore degrades freshness rather than availability.
 """
 
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import httpx
@@ -12,6 +11,7 @@ from collector_core.cadence import CadenceClass
 from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.lake import LakeWriter
+from collector_core.routes import CaptureState
 
 from .adapters.forecast import fetch_current_conditions, fetch_forecast_at
 from .adapters.schedule import fetch_schedule
@@ -19,16 +19,19 @@ from .environment import UnresolvableVenue, resolve_environment, resolve_venue
 from .metrics import metrics
 from .playability import derive_playability
 
+__all__ = [
+    "CADENCE_CLASS",
+    "COLLECTOR_NAME",
+    "SIGNAL_TYPES",
+    "CaptureState",
+    "assert_forecast_hour",
+    "capture_week",
+]
+
 COLLECTOR_NAME = "weather"
 CADENCE_CLASS = CadenceClass.VOLATILE
 SIGNAL_TYPES = ("venue_forecast_kickoff", "venue_conditions_current")
 UPSTREAM_ADAPTER = "open-meteo"
-
-
-@dataclass
-class CaptureState:
-    envelopes: dict[str, Envelope] = field(default_factory=dict)
-    last_capture_at: datetime | None = None
 
 
 def assert_forecast_hour(valid_at: datetime, kickoff_at: datetime) -> None:
