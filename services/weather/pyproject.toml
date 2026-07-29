@@ -13,6 +13,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi",
     "opentelemetry-instrumentation-httpx",
     "prometheus-client",
+    "collector-core",
 ]
 
 [dependency-groups]
@@ -47,3 +48,6 @@ source = ["weather"]
 
 [tool.coverage.report]
 show_missing = true
+
+[tool.uv.sources]
+collector-core = { workspace = true }
