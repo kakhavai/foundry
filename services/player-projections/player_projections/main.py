@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from . import metrics
 from .client import fetch_projections
 
 # The three scoring modes the frontend offers. Kicker and DST rows repeat
@@ -27,6 +28,11 @@ def _empty_cache() -> dict:
 # In-memory projection cache, one entry per scoring format — refreshed by the
 # background polling loop. Each `projections` is a flat list in upstream order.
 _state: dict = {fmt: _empty_cache() for fmt in FORMATS}
+
+# Seed the health gauge so `upstream_healthy` reports 0 from startup rather
+# than appearing only after the first poll. Stub mode is production today.
+for _fmt in FORMATS:
+    metrics.register_format(_fmt)
 
 
 def _url_for(template: str, fmt: str) -> str:
@@ -56,11 +62,16 @@ async def _poll_loop() -> None:
                 players = await fetch_projections(
                     _url_for(template, fmt), expect_format=fmt
                 )
+            except Exception as exc:
+                # Deliberately broad — the loop must outlive any single failure.
+                # `metrics._reason` does the classification in one place.
+                _state[fmt]["upstream_healthy"] = False
+                metrics.record_poll_failure(fmt, exc)
+            else:
                 _state[fmt]["projections"] = players
                 _state[fmt]["last_updated"] = _now_iso()
                 _state[fmt]["upstream_healthy"] = True
-            except Exception:
-                _state[fmt]["upstream_healthy"] = False
+                metrics.record_poll_success(fmt)
 
         await asyncio.sleep(interval)
 
