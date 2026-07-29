@@ -28,6 +28,7 @@ Thumbs.db
 
 # AI session artifacts
 docs/superpowers/
+.superpowers/
 
 # Claude Code — ignore session/memory/settings, track shared commands
 .claude/settings.local.json
