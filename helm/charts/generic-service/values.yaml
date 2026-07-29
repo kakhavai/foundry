@@ -37,6 +37,16 @@ gateway:
   name: foundry                    # the Gateway to attach to
   namespace: envoy-gateway-system  # the Gateway's namespace
   pathPrefix: ""                   # required when enabled, e.g. /collectors/weather
+  # Service-relative path prefixes the gateway may publish. Deliberately NOT
+  # the whole service: /health and /metrics are exempt from bearer auth so the
+  # kubelet's probes and Prometheus's annotation scrape can reach them, and a
+  # probe cannot read a Secret — so requiring a token there would mean
+  # committing one in plaintext. Exempting them in-cluster is correct;
+  # publishing them at the edge is not, and a bare prefix rule did both.
+  publicPaths:
+    - /catalog
+    - /signals
+    - /refresh
 
 grafanaAnnotations:
   enabled: false
