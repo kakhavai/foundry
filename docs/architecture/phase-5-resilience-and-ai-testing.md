@@ -101,13 +101,15 @@ load-bearing for the chaos scenarios below, but for `weather` they are
 transitional; the chaos scenario that exercises its upstream must be written
 against whichever shape is live when it runs.
 
-**Decisions taken in the gateway PR.**
+**Decisions taken in Stage 2.**
 
 | Question | Decision |
 |---|---|
 | Gateway component | Gateway API, implemented by Envoy Gateway. `ingress-nginx` is dominated — it still needs a controller and an annotation vocabulary, so it is not the simple option, and the project is winding down, so it is not the durable one. A plain nginx pod is genuinely simpler but makes every collector edit one shared config rather than shipping its own route. |
 | Auth enforcement | In each service. The gateway routes and terminates TLS; it does not authenticate. |
 | `chaos-test.yml` trigger | `workflow_dispatch` only. No label — CLAUDE.md's no-manual-gate rule governs required merge checks, and a label additionally needs a human to remember it. No nightly schedule either: **chaos coverage therefore exists only when somebody runs it, and will decay silently between sessions.** Accepted, not overlooked. |
+| Chaos assertion layer | Chaos Mesh 2.8.3 plus `scripts/run-chaos.py`. Chaos Mesh injects but cannot judge — its `StatusCheck` criteria supports `statusCode` only, and Prometheus answers `200` even for an empty result. Litmus's `promProbe` was the alternative and was rejected: `min_over_time` makes its `Continuous` mode unnecessary, `bad-deploy` fits neither tool's fault library, and a Python comparator is unit-testable without a cluster. |
+| `bad-deploy` framing | Argo CD **selfHeal reverting out-of-band drift**, not "the health check fails the rollout". The Applications pin `targetRevision: main` against GitHub, so on a PR branch Argo syncs `main` regardless of what is under test; the reframed claim needs no Git push. Requires `kube-state-metrics`, previously disabled — with `replicaCount: 1` no continuity criterion can fail. |
 
 Full rationale, including the rejected alternatives (`ingress-nginx`, Traefik, a
 hand-rolled nginx pod) and why the AWS-native Gateway API implementations were

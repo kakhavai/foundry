@@ -214,6 +214,32 @@ correctly placed for the day gateway-level auth is added; today it is a guard
 against auth disappearing entirely, which is a weaker claim than its position
 implies.
 
+**Chaos criteria prove collection, but only for the series they name.** The
+chaos scenarios in `chaos/scenarios/` query `collector_capture_failures_total`,
+`up`, `container_memory_working_set_bytes`, `envoy_cluster_upstream_cx_connect_fail`,
+and `kube_deployment_status_replicas_unavailable` against a live Prometheus,
+which closes the earlier gap between "the metric is emitted" and "Prometheus is
+collecting the metric" — for those series. Nothing here covers
+`upstream_poll_failures_total` or `upstream_cache_age_seconds`, which remain
+proven only in-process.
+
+**A scenario proves its hypothesis under one injected fault, not resilience.**
+Each scenario was demonstrated capable of failing, which is a much stronger
+claim than a green run — but it is still one fault, one shape, one cluster.
+`resource-pressure`'s "the limit held" criterion in particular is guaranteed by
+the kernel and cannot fail on its own; it is retained because it states the
+hypothesis, and paired with "the stress was real", which can.
+
+**Chaos coverage is not continuous.** `chaos-test.yml` runs on
+`workflow_dispatch` only, so these scenarios prove nothing between the runs
+somebody remembers to trigger. A regression that breaks pod replacement or
+gateway routing would not be caught until the next manual run. Accepted
+deliberately — see `docs/chaos-runbook.md`.
+
+**Tracing delivery to Tempo is still uncovered.** Unchanged by this phase and
+called out again because chaos is where it would most plausibly have been
+caught: nothing tests the process → Collector → Tempo path.
+
 ## Not Covered Here
 
 Chaos scenarios, load and scale testing, and adversarial agent sessions are
