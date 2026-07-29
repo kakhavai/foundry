@@ -20,6 +20,12 @@ SUPPORTED_FILTERS = ("season", "week", "game_id", "team", "signal_type")
 
 REFRESH_FLOOR = timedelta(seconds=int(os.getenv("REFRESH_MIN_INTERVAL_SECONDS", "300")))
 
+# Bounds a single capture pass in wall-clock time -- background loop tick and
+# dispatched `/refresh` alike -- so total upstream failure costs at most this
+# much rather than `games x per-call timeout`. Read once here (mirroring
+# REFRESH_FLOOR above) so both call sites share one configured value.
+CAPTURE_DEADLINE = timedelta(seconds=int(os.getenv("CAPTURE_DEADLINE_SECONDS", "300")))
+
 
 def _signal_matches(row: dict, params: dict) -> bool:
     """weather's row filter for every query parameter beyond season/week/signal_type."""
@@ -44,6 +50,7 @@ _spec = CollectorSpec(
     metrics=metrics,
     refresh_gate=_refresh_gate,
     signal_matches=_signal_matches,
+    capture_deadline=CAPTURE_DEADLINE,
 )
 
 
@@ -63,6 +70,7 @@ async def lifespan(app: FastAPI):
                 lake=_lake,
                 season=int(os.getenv("CAPTURE_SEASON", "2026")),
                 week=int(os.getenv("CAPTURE_WEEK", "1")),
+                capture_deadline=CAPTURE_DEADLINE,
             )
         )
     try:
@@ -72,6 +80,8 @@ async def lifespan(app: FastAPI):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        # A refresh dispatched right before shutdown must not outlive the app.
+        await _state.cancel_in_flight()
 
 
 app = FastAPI(lifespan=lifespan)

@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from collector_core.cadence import CadenceClass
-from collector_core.routes import CaptureState
+from collector_core.routes import DEFAULT_CAPTURE_DEADLINE, CaptureState
 from collector_core.scheduler import (
     ESCALATED_INTERVAL,
     interval_for_state,
@@ -42,8 +42,10 @@ class _CaptureStub:
         self.calls: list[dict] = []
         self._outcomes = list(outcomes)
 
-    async def __call__(self, season, week, *, client, lake, now) -> dict:
-        self.calls.append({"season": season, "week": week, "now": now})
+    async def __call__(self, season, week, *, client, lake, now, deadline=None) -> dict:
+        self.calls.append(
+            {"season": season, "week": week, "now": now, "deadline": deadline}
+        )
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -399,4 +401,60 @@ async def test_loop_passes_season_week_and_now_through_to_capture():
             clock=_FakeClock(NOW),
         )
 
-    assert capture.calls == [{"season": 2099, "week": 7, "now": NOW}]
+    assert capture.calls == [
+        {
+            "season": 2099,
+            "week": 7,
+            "now": NOW,
+            "deadline": NOW + DEFAULT_CAPTURE_DEADLINE,
+        }
+    ]
+
+
+async def test_loop_passes_now_plus_capture_deadline_to_capture():
+    """The pass-level deadline is derived from the tick's own `now`, not
+    wall-clock time read a second time -- so it stays deterministic under a
+    fake clock."""
+    state = CaptureState()
+    capture = _CaptureStub({"alpha": "envelope"})
+    sleep = _FakeSleep(stop_after=1)
+
+    with pytest.raises(_StopLoop):
+        await run_capture_loop(
+            state,
+            capture=capture,
+            lake=_NullLake(),
+            season=2026,
+            week=1,
+            cadence_class=CadenceClass.VOLATILE,
+            next_event_at=no_event,
+            metrics=_StalenessSpy(),
+            sleep=sleep,
+            clock=_FakeClock(NOW),
+            capture_deadline=timedelta(seconds=90),
+        )
+
+    assert capture.calls[0]["deadline"] == NOW + timedelta(seconds=90)
+
+
+async def test_loop_passes_no_deadline_when_capture_deadline_is_none():
+    state = CaptureState()
+    capture = _CaptureStub({"alpha": "envelope"})
+    sleep = _FakeSleep(stop_after=1)
+
+    with pytest.raises(_StopLoop):
+        await run_capture_loop(
+            state,
+            capture=capture,
+            lake=_NullLake(),
+            season=2026,
+            week=1,
+            cadence_class=CadenceClass.VOLATILE,
+            next_event_at=no_event,
+            metrics=_StalenessSpy(),
+            sleep=sleep,
+            clock=_FakeClock(NOW),
+            capture_deadline=None,
+        )
+
+    assert capture.calls[0]["deadline"] is None

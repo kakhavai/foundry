@@ -1449,6 +1449,35 @@ Beyond metrics:
 - Scaffolder golden test: `new-collector.py` output lints, renders through Helm, and passes the envelope conformance suite unmodified
 - Cadence-class declarations in the registry match what each service actually schedules
 
+### Load coverage — inherited from Phase 5B
+
+Phase 5B's load-test harness deliberately defers all load coverage of `weather`
+to 8A. The reason was structural: the pre-8A service made 30 sequential upstream
+calls per request, so a single soak run would have exceeded the upstream's free
+daily tier several times over. Load-testing that shape was impossible without
+either hammering a third party or building a fake upstream.
+
+8A removes the cause. The stadium routes are gone, `/signals` serves the latest
+captured envelope from memory, and no request path calls an upstream — so a load
+test against a collector now exercises the collector.
+
+8A discharges the prerequisites and no more:
+
+- `POST /refresh` returns before its capture runs, per its own `202` contract.
+  Awaiting the capture made the route unloadtestable and violated the contract.
+- A capture pass carries an aggregate deadline, so total upstream failure
+  truncates the pass and records it rather than running for `games x timeout`.
+- `FORECAST_URL` and `SCHEDULE_URL` are environment-overridable, so a load test
+  can point at a fake upstream.
+
+**Still owed, and not 8A's to write:** the k6 scripts themselves. The harness,
+the in-cluster runner, the file format, and the thresholds all arrive with Phase
+5B's load-test PR, and its `docs/scale-baselines.md` will state that `weather`
+is uncovered and why. The follow-up that adds `weather`'s scripts replaces that
+statement with measured numbers — it does not simply delete it. Layout for
+per-service scripts is decided there, with both services in view, rather than
+guessed at here.
+
 ---
 
 ## Contracts

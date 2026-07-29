@@ -113,7 +113,7 @@
     },
     "/refresh": {
       "post": {
-        "description": "Force a capture outside the cadence, subject to the interval floor.",
+        "description": "Force a capture outside the cadence, subject to the interval floor.\n\nReturns 202 once the capture is dispatched, not once it finishes --\nthe caller is told \"accepted\", not \"done\". The capture itself runs\nas a background task and lands in `spec.state` (and the lake, via\n`spec.capture`) whenever it completes.",
         "operationId": "refresh_refresh_post",
         "requestBody": {
           "content": {

@@ -8,6 +8,9 @@ abstraction was extracted from, and pins the same shapes against the real
 service.
 """
 
+import asyncio
+import logging
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -61,9 +64,18 @@ class _StubCapture:
         self.calls: list[dict] = []
 
     async def __call__(
-        self, season: int, week: int, *, client, lake, now: datetime
+        self,
+        season: int,
+        week: int,
+        *,
+        client,
+        lake,
+        now: datetime,
+        deadline: datetime | None = None,
     ) -> dict[str, Envelope]:
-        self.calls.append({"season": season, "week": week, "now": now})
+        self.calls.append(
+            {"season": season, "week": week, "now": now, "deadline": deadline}
+        )
         return {
             "alpha": make_envelope(
                 "alpha",
@@ -218,13 +230,108 @@ def test_second_refresh_inside_the_floor_is_429_with_retry_after(client):
     assert int(response.headers["Retry-After"]) > 0
 
 
-def test_refresh_updates_state_and_last_capture_at(client, spec):
+async def _wait_until(predicate, timeout: float = 2.0) -> bool:
+    """Poll `predicate` until it is truthy or `timeout` elapses.
+
+    `/refresh` now dispatches its capture rather than awaiting it, and the
+    dispatched task runs on `TestClient`'s own background event loop/thread --
+    not the one running this test -- so there is no coroutine to `await`
+    directly from here. Polling is the honest way to observe "eventually",
+    without assuming exactly how many loop iterations a background task needs.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(0.01)
+    return bool(predicate())
+
+
+async def test_refresh_updates_state_and_last_capture_at(client, spec):
+    """The dispatched capture still has to land -- returning 202 early must
+    not drop the work, only defer when it is visible."""
     assert spec.state.last_capture_at is None
 
     client.post("/refresh", json={})
 
-    assert spec.state.last_capture_at is not None
+    assert await _wait_until(lambda: spec.state.last_capture_at is not None)
     assert set(spec.state.envelopes) == {"alpha", "beta"}
+
+
+async def test_refresh_returns_before_the_capture_completes(client, spec):
+    """202 means accepted, not finished. A caller must not block on the
+    upstream -- that is what makes /refresh unusable under load."""
+    started = threading.Event()
+    release = threading.Event()
+
+    async def slow_capture(season, week, *, client, lake, now, deadline=None):
+        started.set()
+        while not release.is_set():
+            await asyncio.sleep(0.01)
+        return {}
+
+    spec.capture = slow_capture
+
+    response = client.post("/refresh", json={})
+
+    assert response.status_code == 202
+    assert response.json()["refresh_id"]
+    assert await _wait_until(started.is_set), "the capture should have been dispatched"
+    # The response above already landed while `release` was still unset, so
+    # the capture cannot have finished yet -- prove it explicitly.
+    assert spec.state.last_capture_at is None
+
+    release.set()
+    assert await _wait_until(lambda: not spec.state.in_flight)
+
+
+async def test_refresh_updates_state_once_the_dispatched_capture_finishes(client, spec):
+    """The work still has to land -- returning early must not drop it."""
+    response = client.post("/refresh", json={})
+
+    assert response.status_code == 202
+    assert await _wait_until(lambda: spec.state.last_capture_at is not None)
+    assert set(spec.state.envelopes) == {"alpha", "beta"}
+
+
+async def test_a_failed_dispatched_capture_does_not_escape(client, spec, caplog):
+    """An upstream failure inside a dispatched capture must be logged, not
+    surfaced as an unhandled task exception."""
+
+    async def failing_capture(season, week, *, client, lake, now, deadline=None):
+        raise RuntimeError("upstream exploded")
+
+    spec.capture = failing_capture
+
+    with caplog.at_level(logging.ERROR, logger="collector_core.routes"):
+        response = client.post("/refresh", json={})
+        assert response.status_code == 202
+        assert await _wait_until(lambda: not spec.state.in_flight)
+
+    assert "dispatched capture failed" in caplog.text
+    # State from before the failure is untouched -- a failed dispatched
+    # capture must not corrupt what /signals is currently serving.
+    assert spec.state.last_capture_at is None
+
+
+async def test_shutdown_cancels_an_in_flight_dispatched_capture(spec):
+    """A pending capture must not outlive the app or leak a task."""
+    started = asyncio.Event()
+
+    async def never_finishes() -> None:
+        started.set()
+        await asyncio.sleep(999)
+
+    task = asyncio.create_task(never_finishes())
+    spec.state.in_flight.add(task)
+    task.add_done_callback(spec.state.in_flight.discard)
+
+    await started.wait()
+    await spec.state.cancel_in_flight()
+
+    assert task.cancelled()
+    assert not spec.state.in_flight
 
 
 def test_health_returns_ok(client):

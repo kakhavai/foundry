@@ -17,9 +17,12 @@ is rejected with 422 rather than silently ignored — the same reasoning
 a loud error, not look like a quiet week.
 """
 
+import asyncio
+import contextlib
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -32,6 +35,8 @@ from .lake import LakeWriter
 from .metrics import CollectorMetrics
 from .refresh import RefreshGate
 
+logger = logging.getLogger(__name__)
+
 # Applied by the router itself against every envelope, regardless of what a
 # given collector declares in its own `supported_filters`.
 UNIVERSAL_FILTERS: tuple[str, ...] = ("season", "week", "signal_type")
@@ -42,6 +47,15 @@ UNIVERSAL_FILTERS: tuple[str, ...] = ("season", "week", "signal_type")
 # "current scope" lookup; moving that literal is out of scope for this task.
 _DEFAULT_SEASON = 2026
 _DEFAULT_WEEK = 1
+
+# A sane ceiling on how long a single capture pass may run before it must
+# start truncating, applied both to the background loop and to a dispatched
+# `/refresh`. Overridable per collector via `CollectorSpec.capture_deadline`.
+DEFAULT_CAPTURE_DEADLINE = timedelta(seconds=300)
+
+
+def _default_client_factory() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=10.0)
 
 
 @dataclass
@@ -55,11 +69,28 @@ class CaptureState:
 
     envelopes: dict[str, Envelope] = field(default_factory=dict)
     last_capture_at: datetime | None = None
+    # Strong references to dispatched-but-not-yet-finished `/refresh` captures.
+    # `asyncio.create_task` does not itself keep a task alive -- with nothing
+    # else referencing it, the task can be garbage-collected mid-flight. Kept
+    # here so a pending capture survives until it finishes or is cancelled at
+    # shutdown, and discarded via `add_done_callback` once it has.
+    in_flight: set[asyncio.Task] = field(default_factory=set)
+
+    async def cancel_in_flight(self) -> None:
+        """Cancel every dispatched capture still running and wait for it to
+        unwind. Call from a collector's lifespan shutdown so a pending
+        `/refresh` cannot outlive the app process."""
+        tasks = list(self.in_flight)
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 # The capture entry point a collector supplies. Matches the shape of
 # weather's `capture_week`: positional `season`, `week`, keyword-only
-# `client`, `lake`, `now`, returning one Envelope per signal type.
+# `client`, `lake`, `now`, `deadline`, returning one Envelope per signal type.
 CaptureFn = Callable[..., Awaitable[dict[str, Envelope]]]
 
 # Collector-specific row filtering. The router hands each signal dict plus
@@ -84,12 +115,43 @@ class CollectorSpec:
     metrics: CollectorMetrics
     refresh_gate: RefreshGate
     signal_matches: SignalMatcher
+    # The transport a dispatched `/refresh` capture opens its client with.
+    # Defaulting to today's `httpx.AsyncClient(timeout=10.0)` means no
+    # collector's behaviour changes; a collector whose upstream is slower or
+    # rate-limited differently can override it without forking the router.
+    client_factory: Callable[[], httpx.AsyncClient] = _default_client_factory
+    # How long a single capture pass may run before `capture` must start
+    # truncating it. `None` means uncapped -- today's behaviour.
+    capture_deadline: timedelta | None = DEFAULT_CAPTURE_DEADLINE
 
 
 def _rfc3339(value: datetime | None) -> str | None:
     return (
         None if value is None else value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
+
+
+async def _run_capture(
+    spec: CollectorSpec,
+    season: int,
+    week: int,
+    now: datetime,
+    deadline: datetime | None,
+) -> None:
+    """Run a dispatched capture. Never raises: an upstream failure must degrade
+    freshness, not surface as an unhandled task exception. `spec.capture`
+    already records the failure in its own envelope and metrics -- this is
+    only a backstop for anything that escapes that, e.g. a bug in `capture`
+    itself."""
+    try:
+        async with spec.client_factory() as client:
+            envelopes = await spec.capture(
+                season, week, client=client, lake=spec.lake, now=now, deadline=deadline
+            )
+        spec.state.envelopes = envelopes
+        spec.state.last_capture_at = now
+    except Exception:
+        logger.exception("dispatched capture failed")
 
 
 def build_collector_router(spec: CollectorSpec) -> APIRouter:
@@ -174,7 +236,13 @@ def build_collector_router(spec: CollectorSpec) -> APIRouter:
 
     @router.post("/refresh", status_code=202)
     async def refresh(body: dict | None = None):
-        """Force a capture outside the cadence, subject to the interval floor."""
+        """Force a capture outside the cadence, subject to the interval floor.
+
+        Returns 202 once the capture is dispatched, not once it finishes --
+        the caller is told "accepted", not "done". The capture itself runs
+        as a background task and lands in `spec.state` (and the lake, via
+        `spec.capture`) whenever it completes.
+        """
         now = datetime.now(tz=UTC)
         refresh_id = spec.refresh_gate.try_acquire(now)
         if refresh_id is None:
@@ -187,12 +255,14 @@ def build_collector_router(spec: CollectorSpec) -> APIRouter:
         scope = body or {}
         season = int(scope.get("season", _DEFAULT_SEASON))
         week = int(scope.get("week", _DEFAULT_WEEK))
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            envelopes = await spec.capture(
-                season, week, client=client, lake=spec.lake, now=now
-            )
-        spec.state.envelopes = envelopes
-        spec.state.last_capture_at = now
+        deadline = (
+            None if spec.capture_deadline is None else now + spec.capture_deadline
+        )
+
+        task = asyncio.create_task(_run_capture(spec, season, week, now, deadline))
+        spec.state.in_flight.add(task)
+        task.add_done_callback(spec.state.in_flight.discard)
+
         return {"refresh_id": refresh_id, "scope": {"season": season, "week": week}}
 
     return router

@@ -1,9 +1,11 @@
+import importlib
 from datetime import UTC, datetime
 
 import httpx
 import pytest
 import respx
 
+import weather.adapters.forecast as forecast_module
 from weather.adapters.forecast import (
     FORECAST_URL,
     ForecastHorizonError,
@@ -115,3 +117,39 @@ async def test_upstream_error_propagates():
     async with httpx.AsyncClient() as client:
         with pytest.raises(httpx.HTTPStatusError):
             await fetch_forecast_at(35.2, -80.8, VALID_AT, client)
+
+
+def test_forecast_url_default_matches_the_real_upstream(monkeypatch):
+    """Guards the literal itself, byte for byte.
+
+    Every other test in this suite mocks whatever `FORECAST_URL` happens to
+    resolve to via `respx`, so a one-character typo in the default would 404
+    in production while every test here stayed green. This is the one test
+    that compares against the real upstream URL as a hardcoded string.
+    """
+    monkeypatch.delenv("FORECAST_URL", raising=False)
+    try:
+        reloaded = importlib.reload(forecast_module)
+        assert reloaded.FORECAST_URL == "https://api.open-meteo.com/v1/forecast"
+    finally:
+        importlib.reload(forecast_module)
+
+
+def test_forecast_url_is_overridable_by_environment(monkeypatch):
+    """A load test (and this suite's own respx mocks) needs to point the
+    collector at a fake upstream instead of the real one.
+
+    `FORECAST_URL` is read at import time, so the override is only visible
+    after a reload -- this test reloads the module under the env var and
+    restores the real default afterwards, since `fetch_forecast_at` reads
+    the module's global at call time and other test files hold a reference
+    to the very same function object and namespace.
+    """
+    monkeypatch.setenv("FORECAST_URL", "https://fake-upstream.test/forecast")
+    try:
+        reloaded = importlib.reload(forecast_module)
+        assert reloaded.FORECAST_URL == "https://fake-upstream.test/forecast"
+    finally:
+        monkeypatch.delenv("FORECAST_URL", raising=False)
+        importlib.reload(forecast_module)
+        assert forecast_module.FORECAST_URL == FORECAST_URL

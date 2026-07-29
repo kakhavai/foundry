@@ -19,14 +19,16 @@ Two normalizations here are load-bearing and neither is obvious:
 
 import csv
 import io
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import httpx
 
-SCHEDULE_URL = (
-    "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
+SCHEDULE_URL = os.getenv(
+    "SCHEDULE_URL",
+    "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv",
 )
 
 # The feed publishes kickoff in this zone regardless of where the game is played.

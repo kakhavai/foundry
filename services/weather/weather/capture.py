@@ -34,6 +34,21 @@ SIGNAL_TYPES = ("venue_forecast_kickoff", "venue_conditions_current")
 UPSTREAM_ADAPTER = "open-meteo"
 
 
+def _wall_clock() -> datetime:
+    """Real elapsed time, for deadline enforcement only.
+
+    Distinct from `capture_week`'s own `now` parameter, which is the single
+    instant the whole pass *describes* (`captured_at`, `Upstream.fetched_at`,
+    `forecast_lead_hours`) and is deliberately frozen for the duration of a
+    pass, including in tests. A deadline has to be checked against the clock
+    that is actually advancing while upstream calls run, which `now` is not.
+    Wrapped in its own function so a test can substitute a deterministic
+    sequence rather than depending on real wall-clock time elapsing between
+    mocked, near-instant upstream calls.
+    """
+    return datetime.now(tz=UTC)
+
+
 def assert_forecast_hour(valid_at: datetime, kickoff_at: datetime) -> None:
     """Write-time guard: the forecast must describe the kickoff hour.
 
@@ -58,7 +73,18 @@ async def capture_week(
     client: httpx.AsyncClient,
     lake: LakeWriter,
     now: datetime,
+    deadline: datetime | None = None,
 ) -> dict[str, Envelope]:
+    """Capture one week's forecast and current-conditions signals.
+
+    `deadline`, when given, bounds the whole pass in real wall-clock time --
+    checked between games (forecast) and between venues (current conditions),
+    never by wrapping the coroutine in a timeout. A wrapper that cancels the
+    coroutine on expiry would discard everything already captured; checking
+    between iterations instead preserves the partial capture and records the
+    truncation as `deadline_exceeded` in `coverage.missing`/`errors`, the same
+    accounting a genuine upstream failure gets.
+    """
     games = await fetch_schedule(season, week, client)
 
     forecast_acc = CoverageAccumulator(g.game_id for g in games)
@@ -66,7 +92,11 @@ async def capture_week(
 
     resolved: dict[str, dict] = {}  # stadium_id -> venue, for current conditions
 
-    for game in games:
+    for index, game in enumerate(games):
+        if deadline is not None and _wall_clock() >= deadline:
+            for remaining in games[index:]:
+                forecast_acc.fail(remaining.game_id, "deadline_exceeded")
+            break
         try:
             venue = resolve_venue(game)
             environment = resolve_environment(game, venue)
@@ -110,7 +140,12 @@ async def capture_week(
 
     current_acc = CoverageAccumulator(resolved)
     current_signals: list[dict] = []
-    for stadium_id, venue in resolved.items():
+    resolved_items = list(resolved.items())
+    for index, (stadium_id, venue) in enumerate(resolved_items):
+        if deadline is not None and _wall_clock() >= deadline:
+            for remaining_id, _ in resolved_items[index:]:
+                current_acc.fail(remaining_id, "deadline_exceeded")
+            break
         metrics.capture_attempt()
         try:
             conditions = await fetch_current_conditions(

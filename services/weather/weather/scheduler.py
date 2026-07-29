@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 from collector_core.lake import LakeWriter
-from collector_core.routes import CaptureState
+from collector_core.routes import DEFAULT_CAPTURE_DEADLINE, CaptureState
 from collector_core.scheduler import interval_for_state as _interval_for_state
 from collector_core.scheduler import run_capture_loop as _run_capture_loop
 
@@ -64,6 +64,7 @@ async def run_capture_loop(
     week: int,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], datetime] | None = None,
+    capture_deadline: timedelta | None = DEFAULT_CAPTURE_DEADLINE,
 ) -> None:
     """weather's capture loop -- the shared loop with weather's cadence
     class, capture function, metrics, and kickoff lookup bound in, so
@@ -79,5 +80,6 @@ async def run_capture_loop(
         next_event_at=next_kickoff,
         metrics=metrics,
         sleep=sleep,
+        capture_deadline=capture_deadline,
         **kwargs,
     )

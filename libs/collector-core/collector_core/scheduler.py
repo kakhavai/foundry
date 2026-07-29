@@ -23,7 +23,7 @@ import httpx
 from .cadence import CadenceClass, next_interval
 from .lake import LakeWriter
 from .metrics import CollectorMetrics
-from .routes import CaptureFn, CaptureState
+from .routes import DEFAULT_CAPTURE_DEADLINE, CaptureFn, CaptureState
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,7 @@ async def run_capture_loop(
     escalated_interval: timedelta = ESCALATED_INTERVAL,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], datetime] = _utc_now,
+    capture_deadline: timedelta | None = DEFAULT_CAPTURE_DEADLINE,
 ) -> None:
     """Capture forever, re-deriving the interval after each pass.
 
@@ -90,13 +91,19 @@ async def run_capture_loop(
     records the failure in its own envelope and metrics; this loop's only
     job on failure is to not die and to leave `state` exactly as it was
     before the attempt.
+
+    `capture_deadline` bounds each pass the same way it bounds a dispatched
+    `/refresh`: total upstream failure costs at most one deadline's worth of
+    wall-clock time rather than `games x per-call timeout`, so an overrun
+    pass cannot pile up behind the next tick indefinitely.
     """
     while True:
         now = clock()
+        deadline = None if capture_deadline is None else now + capture_deadline
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 state.envelopes = await capture(
-                    season, week, client=client, lake=lake, now=now
+                    season, week, client=client, lake=lake, now=now, deadline=deadline
                 )
             state.last_capture_at = now
         except Exception:  # noqa: BLE001 -- the loop must survive anything

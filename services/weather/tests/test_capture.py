@@ -19,6 +19,10 @@ HOME_GAME = (
     "2026_01_CHI_CAR,2026,REG,1,2026-09-13,13:00,CHI,CAR,Home,outdoors,grass,CAR00,"
     "Bank of America Stadium"
 )
+SECOND_HOME_GAME = (
+    "2026_01_NYG_DET,2026,REG,1,2026-09-13,13:00,NYG,DET,Home,dome,turf,DET00,"
+    "Ford Field"
+)
 MUNICH_GAME = (
     "2026_10_NE_DET,2026,REG,1,2026-09-13,09:30,NE,DET,Neutral,dome,grass,DET00,"
     "FC Bayern Munich Stadium"
@@ -172,6 +176,109 @@ async def test_current_conditions_failure_is_isolated_from_a_healthy_forecast():
     assert current.coverage.missing == ["CAR00"]
     assert current.signals == []
     assert current.errors, "a failed current-conditions fetch must record why"
+
+
+@respx.mock
+async def test_a_pass_stops_at_the_deadline_and_records_the_remainder(monkeypatch):
+    """Truncation is a fact to record, not a silent short week."""
+    mock_upstreams(schedule_csv(HOME_GAME, SECOND_HOME_GAME))
+
+    deadline = NOW + timedelta(seconds=300)
+    calls = {"n": 0}
+
+    def fake_wall_clock() -> datetime:
+        calls["n"] += 1
+        # The first game's deadline check passes; every check after that is
+        # past the deadline, so the second game is truncated.
+        if calls["n"] <= 1:
+            return deadline - timedelta(seconds=1)
+        return deadline + timedelta(seconds=1)
+
+    monkeypatch.setattr("weather.capture._wall_clock", fake_wall_clock)
+
+    async with httpx.AsyncClient() as client:
+        result = await capture_week(
+            2026, 1, client=client, lake=NullLakeWriter(), now=NOW, deadline=deadline
+        )
+
+    envelope = result["venue_forecast_kickoff"]
+    assert envelope.coverage.present < envelope.coverage.expected
+    assert envelope.coverage.missing  # the games never attempted
+    assert any(e["reason"] == "deadline_exceeded" for e in envelope.errors)
+
+
+@respx.mock
+async def test_signals_captured_before_the_deadline_are_kept(monkeypatch):
+    """A partial capture is worth more than none -- do not discard it."""
+    mock_upstreams(schedule_csv(HOME_GAME, SECOND_HOME_GAME))
+
+    deadline = NOW + timedelta(seconds=300)
+    calls = {"n": 0}
+
+    def fake_wall_clock() -> datetime:
+        calls["n"] += 1
+        if calls["n"] <= 1:
+            return deadline - timedelta(seconds=1)
+        return deadline + timedelta(seconds=1)
+
+    monkeypatch.setattr("weather.capture._wall_clock", fake_wall_clock)
+
+    async with httpx.AsyncClient() as client:
+        result = await capture_week(
+            2026, 1, client=client, lake=NullLakeWriter(), now=NOW, deadline=deadline
+        )
+
+    envelope = result["venue_forecast_kickoff"]
+    assert envelope.coverage.present == 1
+    assert [s["game_id"] for s in envelope.signals] == ["2026_01_CHI_CAR"]
+
+
+@respx.mock
+async def test_a_pass_stops_at_the_deadline_during_current_conditions(monkeypatch):
+    """The current-conditions loop enforces the same deadline as the
+    forecast loop -- both games' forecasts land before the venue loop
+    starts, so this exercises the second check site independently."""
+    mock_upstreams(schedule_csv(HOME_GAME, SECOND_HOME_GAME))
+
+    deadline = NOW + timedelta(seconds=300)
+    calls = {"n": 0}
+
+    def fake_wall_clock() -> datetime:
+        calls["n"] += 1
+        # Both forecast-loop checks (one per game) pass; the current-
+        # conditions loop's first check is past the deadline.
+        if calls["n"] <= 2:
+            return deadline - timedelta(seconds=1)
+        return deadline + timedelta(seconds=1)
+
+    monkeypatch.setattr("weather.capture._wall_clock", fake_wall_clock)
+
+    async with httpx.AsyncClient() as client:
+        result = await capture_week(
+            2026, 1, client=client, lake=NullLakeWriter(), now=NOW, deadline=deadline
+        )
+
+    forecast = result["venue_forecast_kickoff"]
+    assert forecast.coverage.present == 2
+
+    current = result["venue_conditions_current"]
+    assert current.coverage.present < current.coverage.expected
+    assert any(e["reason"] == "deadline_exceeded" for e in current.errors)
+
+
+@respx.mock
+async def test_no_deadline_captures_everything():
+    """Default behaviour is unchanged when no deadline is supplied."""
+    mock_upstreams(schedule_csv(HOME_GAME, SECOND_HOME_GAME))
+
+    async with httpx.AsyncClient() as client:
+        result = await capture_week(
+            2026, 1, client=client, lake=NullLakeWriter(), now=NOW
+        )
+
+    envelope = result["venue_forecast_kickoff"]
+    assert envelope.coverage.present == envelope.coverage.expected == 2
+    assert envelope.coverage.missing == []
 
 
 @respx.mock

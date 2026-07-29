@@ -95,6 +95,15 @@ async def test_run_capture_loop_wires_weathers_capture_cadence_and_metrics_in():
             week=1,
             sleep=sleep,
             clock=lambda: INTEGRATION_NOW,
+            # This test injects a fixed calendar date well removed from real
+            # wall-clock time to prove the cadence binding, not deadline
+            # enforcement -- `capture_week`'s deadline check reads the real
+            # clock (see `weather.capture._wall_clock`), so pairing a fake
+            # `now` with a live deadline would make this test's outcome
+            # depend on how far the real clock has drifted from the fixed
+            # date above. Deadline behaviour has its own tests in
+            # test_capture.py.
+            capture_deadline=None,
         )
 
     assert set(state.envelopes) == {

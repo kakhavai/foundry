@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 
 import httpx
 
-FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+FORECAST_URL = os.getenv("FORECAST_URL", "https://api.open-meteo.com/v1/forecast")
 
 _HOURLY_FIELDS = (
     "temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,"

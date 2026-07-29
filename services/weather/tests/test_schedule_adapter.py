@@ -1,9 +1,11 @@
+import importlib
 from datetime import UTC, datetime
 
 import httpx
 import pytest
 import respx
 
+import weather.adapters.schedule as schedule_module
 from weather.adapters.schedule import (
     SCHEDULE_URL,
     ScheduledGame,
@@ -117,3 +119,42 @@ async def test_fetch_schedule_raises_on_upstream_error():
     async with httpx.AsyncClient() as client:
         with pytest.raises(httpx.HTTPStatusError):
             await fetch_schedule(2026, 1, client)
+
+
+def test_schedule_url_default_matches_the_real_upstream(monkeypatch):
+    """Guards the literal itself, byte for byte.
+
+    Every other test in this suite mocks whatever `SCHEDULE_URL` happens to
+    resolve to via `respx`, so a one-character typo in the default would 404
+    in production while every test here stayed green. This is the one test
+    that compares against the real upstream URL as a hardcoded string.
+    """
+    monkeypatch.delenv("SCHEDULE_URL", raising=False)
+    try:
+        reloaded = importlib.reload(schedule_module)
+        assert (
+            reloaded.SCHEDULE_URL
+            == "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
+        )
+    finally:
+        importlib.reload(schedule_module)
+
+
+def test_schedule_url_is_overridable_by_environment(monkeypatch):
+    """A load test (and this suite's own respx mocks) needs to point the
+    collector at a fake upstream instead of the real one.
+
+    `SCHEDULE_URL` is read at import time, so the override is only visible
+    after a reload -- this test reloads the module under the env var and
+    restores the real default afterwards, since `fetch_schedule` reads the
+    module's global at call time and other test files hold a reference to
+    the very same function object and namespace.
+    """
+    monkeypatch.setenv("SCHEDULE_URL", "https://fake-upstream.test/games.csv")
+    try:
+        reloaded = importlib.reload(schedule_module)
+        assert reloaded.SCHEDULE_URL == "https://fake-upstream.test/games.csv"
+    finally:
+        monkeypatch.delenv("SCHEDULE_URL", raising=False)
+        importlib.reload(schedule_module)
+        assert schedule_module.SCHEDULE_URL == SCHEDULE_URL
