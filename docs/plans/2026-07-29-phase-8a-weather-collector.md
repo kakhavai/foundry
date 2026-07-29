@@ -4863,6 +4863,37 @@ echo "collector auth OK"
 echo "weather: OK"
 ```
 
+- [ ] **Step 1a: Assert the auth-exempt paths are not published at the edge**
+
+Task 20 narrowed the gateway to the declared contract paths, but its live
+verification could not run: this machine's Kind cluster is ArgoCD-managed and the
+running pod predates this branch's route surface. CI's `integration-test` job has
+no ArgoCD and builds this branch's image, so an assertion here is the only place
+the fix is actually proven — and the only thing that keeps it fixed.
+
+Add to `scripts/smoke-test.sh`, in the weather block:
+
+```bash
+# The auth exemption for /health and /metrics is necessary in-cluster: the
+# kubelet's probes and the annotation scrape cannot carry a token, and a probe
+# cannot read a Secret. That is not a reason to publish them at the edge, so the
+# gateway routes only the contract paths. In-cluster they must still answer.
+for p in health metrics; do
+  STATUS=$(curl -o /dev/null -sw '%{http_code}' "$GATEWAY/$p")
+  [ "$STATUS" = "404" ] || (echo "$p must not be published at the edge, got $STATUS" && exit 1)
+done
+echo "edge surface OK (/health and /metrics not routed)"
+
+# Same two paths, in-cluster, unauthenticated, must still work — otherwise the
+# probes and the metrics scrape break and the fix has overshot.
+curl -sf http://localhost:8000/health | grep '"status":"ok"'
+curl -sf http://localhost:8000/metrics | grep '# HELP'
+echo "in-cluster exempt paths OK"
+```
+
+Note the 404 comes from the gateway having no matching route, not from the
+service. If you see a 200 here, the bare-prefix rule is back.
+
 - [ ] **Step 1b: Assert a real lake write from inside the cluster**
 
 Task 18's review left one gap it could not close locally: the union of a real
