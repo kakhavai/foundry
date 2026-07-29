@@ -156,7 +156,11 @@ python scripts/deploy-local.py weather
 ```
 
 This runs:
-1. `docker build -t weather:local services/weather/`
+1. `docker build -f services/weather/Dockerfile -t weather:local .` — from the
+   repo root, not `services/weather/`: `weather` depends on the
+   `libs/collector-core/` workspace member by path, so the build context has
+   to include it. Services that don't consume the shared library still build
+   from their own service directory.
 2. `kind load docker-image weather:local --name foundry`
 3. `helm upgrade --install weather helm/charts/generic-service -f helm/values/weather/values.yaml ...`
 

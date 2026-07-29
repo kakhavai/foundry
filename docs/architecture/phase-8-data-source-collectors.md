@@ -334,7 +334,10 @@ The stadium as it will be at kickoff — split into what changes by the hour and
 **Signal types:** `venue_forecast_kickoff`, `venue_conditions_current`
 **Cadence class:** volatile — every 15 min from 96 h before kickoff, hourly beyond that; escalates to 5 min (perishable) from T−90 min through the final whistle
 **Stage:** 8A
-**Depends on:** nothing at 8A — the retrofit ships with the bundled stadium table it already carries. Reads `venue` for roof state and field orientation, and `schedule-context` for authoritative kickoff timestamps, once those land in 8B/8E
+**Depends on:** a bundled schedule adapter at 8A, supplying `game_id`,
+kickoff timestamps, and per-game roof state. Replaced by `schedule-context`
+at 8B behind the same interface. Reads `venue` for field orientation once it
+lands at 8E.
 **Scope-aware:** no — signals are keyed by game and venue, not by player
 
 Answers what the ball and the players will actually be dealing with at kickoff, for a projection generated three or four days earlier. The service as it exists today answers "what is the weather right now at Lambeau", which is a different and largely useless question on a Wednesday. The second-order signal is the *convergence*: successive snapshots of the same kickoff are appended to the lake, so the generator can see how much a Sunday forecast moved between Wednesday and Saturday and widen or narrow its own uncertainty accordingly.
@@ -363,7 +366,13 @@ Answers what the ball and the players will actually be dealing with at kickoff, 
 
 **Extra routes beyond the standard five:** `GET /signals/convergence?game_id=` — the ordered series of prior forecasts for one kickoff, with the delta between consecutive snapshots. Derivable from the lake, but every consumer would otherwise reimplement it.
 
-**`coverage.expected` means:** one `venue_forecast_kickoff` record per scheduled game whose kickoff falls inside the 96-hour horizon — indoor games included, emitting a controlled-environment record rather than being dropped.
+**`coverage.expected` means:** one `venue_forecast_kickoff` record per game
+scheduled in the queried week — indoor games included, emitting a
+controlled-environment record rather than being dropped. Games beyond the
+96-hour horizon are captured at the hourly cadence with a larger
+`forecast_lead_hours` and wider `bands`. Counting only in-horizon games would
+make the coverage denominator move hour by hour, so the ratio could not
+distinguish a healthy collector from one that has captured only the near games.
 
 **Adapter notes:** An adapter must resolve a venue to a forecast point, request the *specific kickoff hour* rather than a daily summary, and carry the model's own spread through into `bands` instead of publishing a bare point estimate. Unit normalization is real work here: the current service emits Celsius and km/h, and the envelope standardizes on the suffixed imperial fields above. The hard part is the roof: an outdoor forecast for a closed dome is not merely wrong, it is confidently wrong, so `environment` must be resolved before any meteorological field is populated, and `retractable_undecided` must be representable rather than guessed.
 
@@ -1406,7 +1415,7 @@ Phase 8 ships in six sub-phases. Each is independently deployable and leaves the
 
 | Stage | Ships | Why this is the boundary |
 |---|---|---|
-| **8A** | The collector contract, signal envelope, registry + drift gate, S3 lake, shared capture library, `new-collector.py` — plus `player-identity`, `roster-scope`, and the `weather` retrofit | Nothing else can be built correctly until the contract exists. The two platform collectors and the weather retrofit prove it end to end against three different shapes. |
+| **8A** | The collector contract, signal envelope, registry + drift gate, S3 lake, shared capture library, `new-collector.py` — plus `player-identity`, `roster-scope`, and the `weather` retrofit. `weather` ships first within 8A — it is the only 8A collector whose upstream already works, so the shared capture library is extracted from a working consumer rather than designed against `player-identity`, which is the catalog's least representative collector. | Nothing else can be built correctly until the contract exists. The two platform collectors and the weather retrofit prove it end to end against three different shapes. |
 | **8B** | `player-stats`, `usage-share`, `depth-chart`, `injury-report`, `roster-transactions`, `schedule-context` | Who is playing, in what role, how much. The first stage after which the generator can produce a real projection rather than a placeholder. |
 | **8C** | `betting-lines`, `player-props`, `game-script`, `season-futures` | The market block. Highest signal-per-service in the catalog, and all four share one auth shape, one rate-limit profile, and the same perishability problem. |
 | **8D** | `defense-vs-position`, `coverage-matchup`, `defensive-front`, `offensive-line` | Matchup block — four unit-strength ratings sharing a weekly cadence, an opponent-adjustment requirement, and a sample-size discipline. |

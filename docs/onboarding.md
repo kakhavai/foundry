@@ -37,6 +37,16 @@ The service must satisfy the [service contract](service-contract.md):
 - `GET /metrics` → Prometheus-format metrics
 - OTel initialization guarded on `OTEL_EXPORTER_OTLP_ENDPOINT`
 
+**Collectors build from the repo root**, not the service directory, because
+they depend on the `libs/collector-core/` workspace member by path:
+
+    docker build -f services/<name>/Dockerfile -t <name>:local .
+
+The build stage copies `libs/collector-core/` before `uv sync`, since the lock
+cannot resolve without the member present. Services that do not consume the
+shared library keep the original service-directory context. See
+`services/weather/` for the reference collector.
+
 ---
 
 ## Step 2: Add Helm values
