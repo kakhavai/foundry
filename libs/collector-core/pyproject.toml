@@ -5,7 +5,7 @@ requires-python = ">=3.12"
 dependencies = ["boto3"]
 
 [dependency-groups]
-dev = ["ruff", "pytest", "pytest-asyncio", "pytest-cov", "jsonschema", "moto[s3]"]
+dev = ["ruff", "pytest", "pytest-asyncio", "pytest-cov", "jsonschema[format]", "moto[s3]"]
 
 [tool.uv]
 package = true
