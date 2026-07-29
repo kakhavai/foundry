@@ -3,6 +3,45 @@
 > **Phase 5B, PR 1 of 4.** Sequence: **failure-path metrics** → collector gateway
 > + bearer auth → Chaos Mesh scenarios → k6 load and scale.
 
+## Sequencing under stub mode — decided, carry into PRs 3 and 4
+
+Most of the platform is stubbed: `player-projections` returns an empty document
+because the generator has not shipped, and there is no frontend. That is a real
+constraint on what Phase 5B can honestly prove, and it was weighed against
+deferring Phase 5 entirely until the services are real.
+
+**Decision: build now, but do not publish numbers that must be discarded.**
+
+Deferring was rejected because the blocking dependency — the projections
+generator — is private, outside this repository, and on no committed timeline, so
+deferring Phase 5 behind it defers it indefinitely. `weather` is also genuinely
+unstubbed: it calls Open-Meteo for thirty real stadiums with real latency and
+real failure modes.
+
+The line is whether a given piece tests **the platform** or **a service under
+realistic load**:
+
+- **Payload-independent, build as specified.** `pod-kill`, `resource-pressure`,
+  and especially `bad-deploy` — a crash-on-startup image whose rollout Argo CD
+  must fail while the previous version stays live. That exercises GitOps,
+  probes, and rollback, and does not care what the response body contains.
+- **`network-partition` is vacuous as written.** It claims to validate that
+  "stub-mode fallback activates." Stub mode is not a fallback; it is the
+  permanent state. Cutting the network from an upstream that is never called
+  changes nothing observable, so the scenario passes by definition. Drop it or
+  rewrite it against a failure the platform can actually exhibit — PR 2's
+  gateway and bearer tokens create one (partition the gateway, or revoke a
+  token, and assert the failure is visible in metrics).
+- **`latency-injection` cannot trip.** See "Deferred" below.
+- **k6 baselines must not become a gate yet.** A ramp against
+  `{"projections": [], "count": 0}` measures uvicorn, not the service. Real
+  documents are ~350 rows / ~45 KB where serialization dominates P95, so every
+  number would be invalidated the day the generator ships — and a >20% P95
+  regression gate built on them would fire on noise until someone disabled it.
+  PR 4 builds the harness and wires CI; `docs/scale-baselines.md` records
+  **stub-mode reference numbers, explicitly marked invalid once real documents
+  flow**. The regression gate turns on when there is real data.
+
 ## Why this comes first
 
 Phase 5B's chaos scenarios each need a pass/fail criterion expressed as a

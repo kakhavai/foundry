@@ -82,12 +82,27 @@ status, and the rejection must be observable — not a silent 500.
 
 **Chaos engineering with Chaos Mesh.** Chaos Mesh is deployed to the Kind cluster. A `chaos/` directory contains scenario manifests:
 - `pod-kill.yaml` — kills a random service pod, validates auto-recovery within N seconds
-- `network-partition.yaml` — blocks outbound calls from `player-projections`, validates stub-mode fallback activates
+- `network-partition.yaml` — **as originally written this scenario cannot fail.** It
+  claimed to validate that `player-projections`' "stub-mode fallback activates."
+  Stub mode is not a fallback — it is the permanent state while the generator is
+  unbuilt, so blocking outbound calls to an upstream that is never called changes
+  nothing observable. Rewrite it against a failure the platform can actually
+  exhibit: once the collector gateway lands, partition the gateway or revoke a
+  collector's token and assert the failure surfaces in metrics rather than
+  silently
 - `resource-pressure.yaml` — injects CPU and memory pressure, validates resource limits hold
-- `latency-injection.yaml` — adds 2s of latency to `weather` upstream calls, validates timeout handling
+- `latency-injection.yaml` — **the originally specified +2s cannot trip `weather`'s
+  10s upstream timeout** (`weather/main.py:37`, `:61`). Either inject above the
+  timeout or revisit the timeout itself — a live request-path change, so it does
+  not belong in the observability PR that precedes this work
 - `bad-deploy.yaml` — deploys an image that crashes at startup, validates Argo CD health check fails the rollout and the previous version stays live
 
 Each scenario has a defined **steady state** (what "healthy" looks like before), a **hypothesis** (what the platform should do under the failure), and a **pass/fail criterion** checked via Prometheus queries after the scenario runs.
+
+A scenario that cannot fail is worse than a missing one: it reports green and is
+counted as coverage. Both corrections above were found by reading the code rather
+than by running the scenarios, which is the only reason they did not ship as
+passing.
 
 **Load and scale testing with k6.** `tests/load/` contains k6 scripts for each service:
 - Ramp test: 0 → 100 RPS over 5 minutes, measure P95 latency and error rate
@@ -95,7 +110,21 @@ Each scenario has a defined **steady state** (what "healthy" looks like before),
 - Spike test: 10x normal load for 60 seconds, validate graceful degradation
 - Breakpoint test: ramp until error rate exceeds 1%, document the service's failure threshold
 
-Load test results are published as artifacts and compared against a documented baseline. Regressions (P95 latency increasing >20% vs. baseline) fail CI.
+Load test results are published as artifacts and compared against a documented baseline.
+
+**The regression gate is deliberately deferred.** Regressions (P95 latency
+increasing >20% vs. baseline) were specified to fail CI, but that gate cannot be
+turned on yet. `player-projections` serves `{"projections": [], "count": 0}` in
+stub mode, so a ramp against it measures uvicorn's overhead rather than the
+service's: real documents are ~350 rows / ~45 KB, where serialization dominates
+P95. Baselines captured now are invalidated the day the generator publishes, and
+a gate built on them fires on noise until somebody disables it — at which point
+the gate is worse than absent.
+
+So `docs/scale-baselines.md` records **stub-mode reference numbers, explicitly
+marked invalid once real documents flow**, and the >20% gate turns on when there
+is real data behind it. The k6 harness, scripts, and CI wiring are built now;
+only the gate waits.
 
 **Chaos + scale CI job.** A new workflow `chaos-test.yml` runs on the `ready-for-chaos` label (separate from `ready-for-merge`). Spins up the Kind cluster, runs the full chaos suite, then runs load tests. Results published to PR as a structured report: scenario name, hypothesis, observed behavior, pass/fail.
 
@@ -218,7 +247,7 @@ The catalog is updated after every adversarial test session. It becomes the livi
 ## Milestones
 
 - [x] Stage 1: Coverage thresholds enforced, schema contract tests in CI, Hypothesis suites for all external data parsers
-- [ ] Stage 2: Collector gateway + bearer auth live with `weather` as the first collector, failure-path metrics emitting, Chaos Mesh running, all 5 chaos scenarios documented and passing, k6 baselines established for all services
+- [ ] Stage 2: Collector gateway + bearer auth live with `weather` as the first collector, failure-path metrics emitting, Chaos Mesh running, every chaos scenario documented and passing against a criterion it is capable of failing, k6 harness wired with stub-mode reference baselines (regression gate deferred until real documents flow)
 - [ ] Stage 3: Agent scaffolding built, first adversarial session run against weather and player-projections, fault catalog seeded with results
 
 ---
