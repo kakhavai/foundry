@@ -109,3 +109,65 @@ async def test_a_failing_format_does_not_increment_another_format(
 
     assert after_bad - before_bad == 1.0
     assert after_good - before_good == 0.0
+
+
+async def test_healthy_reports_zero_from_startup_in_stub_mode(metric_value):
+    """Stub mode is production today. The series must exist and read 0 —
+    absent would force every query through absent(), and 1 would be a lie."""
+    for fmt in main.FORMATS:
+        assert metric_value("upstream_healthy", format=fmt) == 0.0
+
+
+async def test_cache_age_is_absent_until_the_first_success(metric_value):
+    """There is no age before a success. Emitting 0 would read as
+    'just refreshed', which is the opposite of the truth."""
+    assert metric_value("upstream_cache_age_seconds", format="ppr") is None
+
+
+async def test_success_sets_healthy_and_starts_the_cache_clock(
+    monkeypatch, one_iteration, metric_value
+):
+    monkeypatch.setenv("PROJECTIONS_SNAPSHOT_URL", URL_TEMPLATE)
+
+    async def ok(url, expect_format=None):
+        return [{"id": "p_1", "pos": "WR", "rank": 1}]
+
+    monkeypatch.setattr(main, "fetch_projections", ok)
+
+    with pytest.raises(asyncio.CancelledError):
+        await main._poll_loop()
+
+    assert metric_value("upstream_healthy", format="ppr") == 1.0
+    age = metric_value("upstream_cache_age_seconds", format="ppr")
+    assert age is not None
+    assert 0.0 <= age < 5.0
+
+
+async def test_cache_age_is_computed_at_scrape_time_not_poll_time(metric_value):
+    """The whole reason for an observable gauge: with a 900s poll interval, a
+    value written when the poll ran would be up to fifteen minutes stale."""
+    pp_metrics.record_poll_success("ppr")
+    pp_metrics._last_success["ppr"] -= 600.0
+
+    age = metric_value("upstream_cache_age_seconds", format="ppr")
+
+    assert age is not None
+    assert 600.0 <= age < 605.0
+
+
+async def test_failure_after_success_flips_healthy_but_keeps_the_age_series(
+    monkeypatch, one_iteration, metric_value
+):
+    """Staleness is the useful signal once an upstream breaks — the age series
+    must keep growing rather than disappearing."""
+    pp_metrics.record_poll_success("ppr")
+    monkeypatch.setenv("PROJECTIONS_SNAPSHOT_URL", URL_TEMPLATE)
+    monkeypatch.setattr(
+        main, "fetch_projections", _always_raise(httpx.ConnectError("down"))
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await main._poll_loop()
+
+    assert metric_value("upstream_healthy", format="ppr") == 0.0
+    assert metric_value("upstream_cache_age_seconds", format="ppr") is not None
