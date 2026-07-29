@@ -1,0 +1,10 @@
+# Kind runs containerd, not Docker, so the daemon socket must be pointed at
+# containerd's. The chart defaults to Docker and the chaos daemon silently
+# fails to attach to container network namespaces otherwise.
+chaosDaemon:
+  runtime: containerd
+  socketPath: /run/containerd/containerd.sock
+
+# The web dashboard is not needed: scenarios run from the CLI in CI and by hand.
+dashboard:
+  create: false

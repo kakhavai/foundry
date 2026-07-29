@@ -1,0 +1,20 @@
+# Chaos Mesh — the fault injector for chaos/scenarios/. Chaos Mesh injects but
+# cannot judge: its StatusCheck criteria supports statusCode only, and
+# Prometheus answers 200 even for an empty result, so a PromQL threshold cannot
+# be expressed as a StatusCheck. scripts/run-chaos.py evaluates the criteria.
+helmDefaults:
+  createNamespace: true
+  wait: true
+  kubeContext: kind-foundry
+
+repositories:
+  - name: chaos-mesh
+    url: https://charts.chaos-mesh.org
+
+releases:
+  - name: chaos-mesh
+    namespace: chaos-mesh
+    chart: chaos-mesh/chaos-mesh
+    version: 2.8.3
+    values:
+      - values/chaos-mesh.yaml
