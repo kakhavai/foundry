@@ -225,8 +225,11 @@ def kubectl_docs(action: str, docs: list[dict]) -> None:
     result = subprocess.run(
         args, input=yaml.safe_dump_all(docs), capture_output=True, text=True
     )
-    if result.returncode != 0 and action != "delete":
-        raise RuntimeError(f"kubectl {action} failed: {result.stderr.strip()}")
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip()
+        if action != "delete":
+            raise RuntimeError(f"kubectl {action} failed: {message}")
+        print(f"    (ignored: {message})")
 
 
 def gateway_host() -> str:
@@ -367,20 +370,32 @@ def main() -> None:
         parser.print_help()
         sys.exit(1)
 
-    results = {}
+    # A str result, not bool: "ERROR" (the scenario raised) must be
+    # distinguishable in the summary from "FAIL" (it ran and a criterion was
+    # not met). Without the try/except, one scenario's raise — a rollout
+    # timeout in traffic_up, a kubectl failure in promql, extract_scalar's
+    # multi-series ValueError — would kill the whole --all run: the remaining
+    # scenarios never execute, no summary prints, and CI's chaos-report.txt
+    # artifact is a bare traceback.
+    results: dict[str, str] = {}
     for scenario in targets:
-        results[scenario] = run_scenario(
-            SCENARIO_DIR / f"{scenario}.yaml",
-            skip_steady_state=args.skip_steady_state,
-        )
+        try:
+            passed = run_scenario(
+                SCENARIO_DIR / f"{scenario}.yaml",
+                skip_steady_state=args.skip_steady_state,
+            )
+            results[scenario] = "PASS" if passed else "FAIL"
+        except Exception as exc:
+            print(f"\nERROR running {scenario}: {exc}")
+            results[scenario] = "ERROR"
 
     print(f"\n{'=' * 66}")
     print("summary")
     print(f"{'=' * 66}")
-    for scenario, passed in results.items():
-        print(f"  {'PASS' if passed else 'FAIL'}  {scenario}")
+    for scenario, status in results.items():
+        print(f"  {status}  {scenario}")
 
-    if not all(results.values()):
+    if any(status != "PASS" for status in results.values()):
         sys.exit(1)
 
 

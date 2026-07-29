@@ -20,9 +20,16 @@ spec:
   fault:
     - ["kubectl", "set", "image", "deployment/weather",
        "weather=ghcr.io/kakhavai/foundry/weather:does-not-exist", "-n", "default"]
-  restore:
-    # A safety net only. On the passing path Argo has already reverted this.
-    - ["kubectl", "rollout", "undo", "deployment/weather", "-n", "default"]
+  # No restore step. Argo CD's selfHeal IS the restore mechanism here — that is
+  # precisely the hypothesis this scenario asserts, not a gap to patch over.
+  # `kubectl rollout undo` with no --to-revision rolls back to the
+  # second-highest revision, not the newest good one. On the passing path
+  # Argo has already re-adopted the good ReplicaSet as the newest revision by
+  # the time restore would run, which makes the second-highest the bad image
+  # — so `rollout undo` would re-inject the very fault it is meant to clean
+  # up. Running this scenario on a cluster without Argo leaves the bad image
+  # in place, and that is correct: the hypothesis is about Argo, so the
+  # scenario has no meaning without it.
   criteria:
     - description: the drift was reverted and no replica is unavailable
       query: max(kube_deployment_status_replicas_unavailable{deployment="weather"})

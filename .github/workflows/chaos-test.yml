@@ -18,6 +18,10 @@ concurrency:
 jobs:
   chaos:
     runs-on: ubuntu-latest
+    # --all is roughly 15 minutes of scenario time plus setup. Without this,
+    # the default 360-minute job timeout means a wedged run burns a runner
+    # for six hours.
+    timeout-minutes: 60
     container:
       image: ghcr.io/kakhavai/foundry/ci-runner:latest
       options: --privileged -v /var/run/docker.sock:/var/run/docker.sock

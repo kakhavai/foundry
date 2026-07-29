@@ -4,6 +4,13 @@ metadata:
   name: pod-kill
 spec:
   steadyState:
+    # Residue guard. The criterion below looks back [5m], so a run started too
+    # soon after a previous one inherits its predecessor's replacement pod and
+    # PASSES having broken nothing — the same hazard network-partition and
+    # resource-pressure already guard against.
+    - description: only one weather pod in the recent window
+      query: count(count by (pod) (max_over_time(container_start_time_seconds{namespace="default",container="weather"}[2m])))
+      expect: "== 1"
     - description: weather is up and being scraped
       query: up{job="weather"}
       expect: "== 1"

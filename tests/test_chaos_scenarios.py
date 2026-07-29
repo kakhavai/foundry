@@ -295,3 +295,27 @@ def test_scenario_declaring_traffic_has_a_manifest(path):
     traffic = head["spec"].get("traffic")
     if traffic:
         assert (ROOT / "chaos" / "traffic" / f"{traffic}.yaml").exists()
+
+
+@pytest.mark.parametrize("path", SCENARIOS, ids=lambda p: p.stem)
+def test_chaos_duration_matches_scenario_duration(path):
+    """A scenario states `duration` twice: once in spec.duration (how long the
+    runner holds the fault) and once in the Chaos Mesh resource's own
+    spec.duration. If the Chaos Mesh value ever became shorter, the fault
+    would end early while the criterion is still evaluated over a window
+    partly containing it — a silent weakening rather than a failure.
+
+    Skipped when a chaos document has no duration (pod-kill's PodChaos is
+    instantaneous) or when there are no chaos documents at all (bad-deploy
+    injects via spec.fault, not a Chaos Mesh resource).
+    """
+    head, chaos_docs = rc.load_scenario(path)
+    scenario_duration = rc.parse_duration(head["spec"]["duration"])
+    for doc in chaos_docs:
+        chaos_duration = doc.get("spec", {}).get("duration")
+        if chaos_duration is None:
+            continue
+        assert rc.parse_duration(chaos_duration) == scenario_duration, (
+            f"{doc.get('kind')} duration {chaos_duration!r} does not match "
+            f"spec.duration {head['spec']['duration']!r}"
+        )

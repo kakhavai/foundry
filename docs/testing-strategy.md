@@ -242,5 +242,5 @@ caught: nothing tests the process → Collector → Tempo path.
 
 ## Not Covered Here
 
-Chaos scenarios, load and scale testing, and adversarial agent sessions are
-Phase 5B and 5C. See `docs/architecture/phase-5-resilience-and-ai-testing.md`.
+Load and scale testing, and adversarial agent sessions, are Phase 5C. See
+`docs/architecture/phase-5-resilience-and-ai-testing.md`.

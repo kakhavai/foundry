@@ -4,8 +4,11 @@ metadata:
   name: resource-pressure
 spec:
   steadyState:
-    - description: weather is well under its memory limit
-      query: (max(container_memory_working_set_bytes{namespace="default",container="weather"}) / max(container_spec_memory_limit_bytes{namespace="default",container="weather"}))
+    # Residue guard. The criterion below looks back [5m], so an instantaneous
+    # check here would pass the moment memory is released while that window
+    # still holds a previous run's peak. Windowed to the same shape.
+    - description: weather has recently been well under its memory limit
+      query: max_over_time((max(container_memory_working_set_bytes{namespace="default",container="weather"}) / max(container_spec_memory_limit_bytes{namespace="default",container="weather"}))[2m:15s])
       expect: "< 0.5"
     - description: player-projections is up
       query: up{job="player-projections"}
