@@ -168,6 +168,20 @@ def route_log_lines(lines: Iterable[str], show: Callable[[str], None]) -> str:
     return "".join(captured)
 
 
+def needs_fallback(returncode: int, saw_marker: bool) -> bool:
+    """True when the live-follow stream cannot be trusted as the complete log.
+
+    A non-zero exit from `kubectl logs -f` means the stream itself failed —
+    cut short by a network blip, a late attach, or anything else that made
+    kubectl give up — and a zero exit with no marker seen means the stream
+    ended before k6 printed its summary (e.g. --pod-running-timeout expired
+    while k6 was still running). Either way the follow stream is not proof of
+    a complete log, and the checked non-follow fetch — which only runs after
+    the pod has fully terminated — is the text still worth trusting.
+    """
+    return returncode != 0 or not saw_marker
+
+
 def interpret_exit(shape: str, code: int) -> tuple[bool, str]:
     """Turn a k6 exit code into (passed, verdict).
 
@@ -294,7 +308,26 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
         )
         logs = route_log_lines(proc.stdout, lambda line: print(line, end=""))
         proc.wait()
+
+        # The follow stream is not proof of a complete log: a non-zero exit
+        # means kubectl itself gave up, and a clean exit with no marker means
+        # it ended before k6 printed its summary. Either way, fall back to the
+        # checked, non-follow fetch — it only runs after the pod has fully
+        # terminated, and kubectl()'s check=True makes a failure here loud
+        # rather than quietly leaving `logs` as whatever the stream managed.
+        if needs_fallback(proc.returncode, SUMMARY_MARKER in logs):
+            print(
+                f"  follow stream looked incomplete (exit {proc.returncode}, "
+                f"marker seen: {SUMMARY_MARKER in logs}) — re-fetching settled logs"
+            )
+            logs = kubectl(["logs", f"job/{job_name(shape)}"]).stdout
+
         text, payload = split_summary(logs)
+        if SUMMARY_MARKER not in logs:
+            print(
+                f"  WARNING: no summary marker in logs for {shape} — "
+                f"{shape}.json will not be written"
+            )
 
         RESULTS_DIR.mkdir(exist_ok=True)
         (RESULTS_DIR / f"{shape}.txt").write_text(text)

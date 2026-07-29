@@ -167,6 +167,28 @@ def test_route_log_lines_output_feeds_split_summary():
     assert payload.strip() == '{"metrics": {}}'
 
 
+# ── needs_fallback ────────────────────────────────────────────────────────────
+
+def test_needs_fallback_when_the_follow_stream_exited_nonzero():
+    """A non-zero exit means kubectl itself gave up on the stream — a cut
+    connection, a late attach — so the captured text cannot be trusted even
+    if it happens to contain a marker."""
+    assert rl.needs_fallback(returncode=1, saw_marker=True) is True
+
+
+def test_needs_fallback_when_the_marker_was_never_seen():
+    """A clean exit with no marker means the stream ended before k6 printed
+    its summary, e.g. --pod-running-timeout expiring while k6 still runs."""
+    assert rl.needs_fallback(returncode=0, saw_marker=False) is True
+
+
+def test_no_fallback_for_a_clean_stream_with_a_marker():
+    """The happy path: nothing to distrust, so the follow stream's own text
+    stands — this is what keeps the fix from reintroducing an unconditional
+    second fetch."""
+    assert rl.needs_fallback(returncode=0, saw_marker=True) is False
+
+
 # ── interpret_exit ────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("shape", ["ramp", "soak", "spike"])
