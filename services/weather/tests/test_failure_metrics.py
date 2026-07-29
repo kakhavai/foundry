@@ -29,10 +29,10 @@ import pytest
 import respx
 from collector_core.lake import NullLakeWriter
 
-from weather import metrics as weather_metrics
 from weather.adapters.forecast import FORECAST_URL
 from weather.adapters.schedule import SCHEDULE_URL
 from weather.capture import capture_week
+from weather.metrics import metrics as weather_metrics
 
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
 

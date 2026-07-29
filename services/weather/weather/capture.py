@@ -13,10 +13,10 @@ from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.lake import LakeWriter
 
-from . import metrics
 from .adapters.forecast import fetch_current_conditions, fetch_forecast_at
 from .adapters.schedule import fetch_schedule
 from .environment import UnresolvableVenue, resolve_environment, resolve_venue
+from .metrics import metrics
 from .playability import derive_playability
 
 COLLECTOR_NAME = "weather"
@@ -72,7 +72,7 @@ async def capture_week(
             continue
 
         lead_hours = max(0.0, (game.kickoff_at - now).total_seconds() / 3600.0)
-        metrics.record_upstream_attempt()
+        metrics.capture_attempt()
         try:
             forecast = await fetch_forecast_at(
                 venue["latitude"],
@@ -82,7 +82,7 @@ async def capture_week(
                 lead_hours=lead_hours,
             )
         except Exception as exc:  # noqa: BLE001 — reason is classified below
-            metrics.record_upstream_failure(exc)
+            metrics.capture_failure(exc)
             forecast_acc.fail(game.game_id, metrics.reason_for(exc))
             continue
 
@@ -108,13 +108,13 @@ async def capture_week(
     current_acc = CoverageAccumulator(resolved)
     current_signals: list[dict] = []
     for stadium_id, venue in resolved.items():
-        metrics.record_upstream_attempt()
+        metrics.capture_attempt()
         try:
             conditions = await fetch_current_conditions(
                 venue["latitude"], venue["longitude"], client, now=now
             )
         except Exception as exc:  # noqa: BLE001
-            metrics.record_upstream_failure(exc)
+            metrics.capture_failure(exc)
             current_acc.fail(stadium_id, metrics.reason_for(exc))
             continue
         conditions.pop("forecast_valid_at", None)
@@ -151,6 +151,6 @@ async def capture_week(
 
     for signal_type, envelope in envelopes.items():
         lake.write(envelope)
-        metrics.record_coverage(signal_type, envelope.coverage.ratio)
+        metrics.coverage(signal_type, envelope.coverage.ratio)
 
     return envelopes
