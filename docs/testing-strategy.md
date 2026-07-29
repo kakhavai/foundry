@@ -179,6 +179,26 @@ so Prometheus's annotation scrape works, and the gateway forwards the whole
 `/collectors/<name>/` prefix. Upstream failure counts are therefore externally
 readable wherever the gateway is. Phase 6 makes the gateway internal-only.
 
+**Tracing is proven wired in-process, not proven to reach Tempo.** Until this
+phase, `FastAPIInstrumentor.instrument_app` never took effect: it patches
+`app.build_middleware_stack`, but Starlette caches that stack on its first
+`__call__` — the lifespan scope, which runs before `setup_telemetry` — so
+`OpenTelemetryMiddleware` was silently absent in both services while
+`_is_instrumented_by_opentelemetry` reported `True`. No server spans were
+produced at all, and httpx client spans arrived orphaned. The existing test
+asserted only that `instrument_app` had been *called*, which was true the whole
+time — the defect lived precisely in the gap between calling it and it working.
+
+`test_server_middleware_is_actually_installed` now walks the real middleware
+chain and fails without the rebuild. What it does **not** prove: that spans
+leave the process, that the OTel Collector accepts them, or that they land in
+Tempo. Delivery was confirmed by hand once when the fix landed — Tempo's search
+API returned traces with `rootServiceName: weather` and a root server span,
+where before there was no root at all — but **no automated test covers the
+delivery path**, exactly as `test_helm_otel_endpoint.py` covers the collector
+DNS name without covering delivery. A future regression between the process and
+Tempo would be caught by nothing here.
+
 **The gateway is proven to route, not to survive.** No test in this phase
 exercises it under failure — a killed data plane, a partitioned collector, a
 revoked token. That is the chaos PR's job, and it is the reason the gateway

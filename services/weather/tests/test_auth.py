@@ -69,6 +69,22 @@ def test_malformed_authorization_header_is_rejected(header):
     assert response.status_code == 401
 
 
+@respx.mock
+def test_extra_spaces_between_scheme_and_token_are_accepted(client, collector_token):
+    """RFC 7235 allows `1*SP` after the scheme, so `Bearer  <token>` is valid.
+
+    Rejecting it fails closed, so this was never a security problem — just a
+    caller that cannot authenticate for a reason no error message explains.
+    """
+    respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json=GOOD_BODY))
+
+    response = anonymous().get(
+        STADIUM_PATH, headers={"Authorization": f"Bearer   {collector_token}"}
+    )
+
+    assert response.status_code == 200
+
+
 def test_wrong_token_is_rejected(metric_value):
     before = (
         metric_value(

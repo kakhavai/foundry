@@ -1,7 +1,9 @@
 import sys
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from weather.main import app
 
@@ -112,3 +114,90 @@ def test_fastapi_and_httpx_instrumentation_attached(monkeypatch, patched_sdk):
 
     assert patched_sdk["fastapi"] == 1
     assert patched_sdk["httpx"] == 1
+
+
+@pytest.fixture
+def real_fastapi_instrumentation(monkeypatch):
+    """Stub every global-installing SDK call EXCEPT the FastAPI instrumentor.
+
+    `patched_sdk` counts `instrument_app` calls, which proves the line is
+    reached but not that it achieved anything. This fixture lets the real
+    instrumentor run so the middleware chain can be inspected, while still
+    leaving no process state behind.
+    """
+
+    class FakeProvider:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def add_span_processor(self, processor):
+            pass
+
+    monkeypatch.setattr("weather.telemetry.TracerProvider", FakeProvider)
+    monkeypatch.setattr("weather.telemetry.MeterProvider", FakeProvider)
+    monkeypatch.setattr("weather.telemetry.BatchSpanProcessor", lambda exporter: None)
+    monkeypatch.setattr("weather.telemetry.OTLPSpanExporter", lambda endpoint: None)
+    monkeypatch.setattr("weather.telemetry.PrometheusMetricReader", lambda: None)
+    monkeypatch.setattr("weather.telemetry.trace.set_tracer_provider", lambda p: None)
+    monkeypatch.setattr("weather.telemetry.metrics.set_meter_provider", lambda p: None)
+    # Instrumenting httpx globally would outlive the test and interfere with
+    # respx in every other module.
+    monkeypatch.setattr(
+        "weather.telemetry.HTTPXClientInstrumentor",
+        lambda: SimpleNamespace(instrument=lambda: None),
+    )
+
+
+def middleware_chain(application) -> list[str]:
+    names, node = [], application.middleware_stack
+    while node is not None:
+        names.append(type(node).__name__)
+        node = getattr(node, "app", None)
+    return names
+
+
+def test_server_middleware_is_actually_installed(
+    monkeypatch, real_fastapi_instrumentation
+):
+    """The silent failure `patched_sdk` cannot see.
+
+    `instrument_app` only patches `app.build_middleware_stack`. Starlette builds
+    and caches that stack on its first `__call__` — the lifespan scope, which
+    runs before `setup_telemetry` — so without an explicit rebuild the
+    middleware never lands. Nothing raises: `_is_instrumented_by_opentelemetry`
+    reads True either way, so the app reports itself instrumented while emitting
+    no server spans at all and orphaning every httpx client span in Tempo.
+    """
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.test:4317")
+    original_stack = app.middleware_stack
+    try:
+        with TestClient(app) as client:
+            assert client.get("/health").status_code == 200
+
+        chain = middleware_chain(app)
+        assert any("OpenTelemetry" in name for name in chain), (
+            "OpenTelemetryMiddleware is missing from the middleware chain — the "
+            f"app reports itself instrumented but emits no server spans: {chain}"
+        )
+    finally:
+        FastAPIInstrumentor.uninstrument_app(app)
+        app.middleware_stack = original_stack
+
+
+def test_auth_middleware_survives_instrumentation(
+    monkeypatch, real_fastapi_instrumentation
+):
+    """Rebuilding the stack must not drop the bearer-token check.
+
+    The rebuild replaces the cached chain wholesale, so a mistake here would
+    silently unauthenticate every collector route in exactly the deployments
+    that have telemetry switched on — production, and nowhere else.
+    """
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.test:4317")
+    original_stack = app.middleware_stack
+    try:
+        with TestClient(app) as client:
+            assert client.get("/weather/stadiums").status_code == 401
+    finally:
+        FastAPIInstrumentor.uninstrument_app(app)
+        app.middleware_stack = original_stack

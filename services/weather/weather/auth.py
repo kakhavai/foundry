@@ -42,9 +42,13 @@ def _rejection(request: Request) -> tuple[int, str] | None:
     if header is None:
         return 401, "missing"
 
-    scheme, _, token = header.partition(" ")
-    if scheme.lower() != "bearer" or not token:
+    # split(None, 1) rather than partition(" "): RFC 7235 allows one or more
+    # spaces between the scheme and the credentials, and partition would fold
+    # the extra spaces into the token and reject a well-formed header.
+    parts = header.split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1]:
         return 401, "malformed"
+    token = parts[1]
 
     # Encoded because compare_digest rejects str containing non-ASCII, and the
     # token arrives from an untrusted header.

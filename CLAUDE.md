@@ -271,6 +271,25 @@ if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
 
 Each service has a `telemetry.py` with traces (OTLP gRPC → OTel Collector → Tempo) and metrics (`PrometheusMetricReader` → `/metrics` → Prometheus).
 
+**`setup_telemetry` must rebuild the middleware stack.** `setup_telemetry` runs
+inside the lifespan handler, and `FastAPIInstrumentor.instrument_app` only
+patches `app.build_middleware_stack`. Starlette builds and caches that stack on
+its first `__call__` — which *is* the lifespan scope — so the patch arrives too
+late and `OpenTelemetryMiddleware` is never installed. Every `telemetry.py`
+therefore ends with:
+
+```python
+FastAPIInstrumentor.instrument_app(app)
+app.middleware_stack = app.build_middleware_stack()
+```
+
+Omit that line and the failure is **silent**: `_is_instrumented_by_opentelemetry`
+still reads `True`, `/metrics` still works, and the service simply produces no
+server spans while its httpx client spans arrive in Tempo with no parent.
+`test_server_middleware_is_actually_installed` in each service's
+`tests/test_telemetry.py` guards it by walking the real middleware chain —
+asserting `instrument_app` was *called* does not catch this.
+
 **Collector service name:** The Helmfile release is named `otel-collector`, but the Helm chart appends `-opentelemetry-collector`, making the in-cluster DNS name `otel-collector-opentelemetry-collector.monitoring.svc.cluster.local`. This is set in `helm/charts/generic-service/values.yaml`. If traces/logs stop flowing while `/metrics` still works, this is the first thing to check — Prometheus scrapes pod annotations directly and is unaffected by a broken OTel endpoint.
 
 **Debugging the pipeline manually:** `kubectl port-forward` to gRPC (4317) is unreliable. Use the HTTP OTLP endpoint (4318) when you need to post test spans/logs:
