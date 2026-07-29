@@ -4395,7 +4395,234 @@ git commit -m "feat(infra): workspace-aware image build, MinIO lake for the loca
 
 ---
 
-## Task 19: Gateway publishes only the contract paths
+## Task 19: Make `weather` load-testable
+
+**Files:**
+- Modify: `libs/collector-core/collector_core/routes.py`, `services/weather/weather/capture.py`, `services/weather/weather/adapters/forecast.py`, `services/weather/weather/adapters/schedule.py`, `docs/architecture/phase-8-data-source-collectors.md`
+- Modify tests: `libs/collector-core/tests/test_collector_routes.py`, `services/weather/tests/test_capture.py`
+
+**Interfaces:**
+- Consumes: everything already built
+- Produces:
+  - `/refresh` returns `202` **before** the capture runs, per its own contract
+  - `capture_week(..., deadline: datetime | None = None)` — truncates a pass at the deadline, recording the untouched games in `coverage.missing` with reason `deadline_exceeded`
+  - `FORECAST_URL` and `SCHEDULE_URL` overridable by environment variable
+
+**Why this is 8A's work.** Phase 5B's load-test PR defers all load coverage of `weather` to 8A, because the old shape made 30 sequential upstream calls per request and a single soak run would have exceeded Open-Meteo's free daily tier many times over. 8A already removed that at the root — the stadium routes are gone and `/signals` serves from memory, so a load test now touches no third party. What remains are three things that would each trip a load test immediately.
+
+**Scope discipline — do NOT touch these.** `tests/load/` and `docs/scale-baselines.md` do not exist on this branch; the Phase 5B PR creates them, and its scripts are `.js` files fed to an in-cluster k6 Job through a ConfigMap by `scripts/run-load.py`, with thresholds calibrated from a first measured run. Writing k6 here would guess wrong on the runner, the file format, and the thresholds, and would land unrunnable files in a directory whose conventions arrive later. Do not create either path. Do not create a `tests/load/weather/` subdirectory — that PR keeps the path flat deliberately, and whoever adds weather's scripts decides the layout once with both services in view.
+
+Likewise **do not edit `docs/architecture/phase-5-resilience-and-ai-testing.md`.** That PR is already editing it to record the deferral. 8A records its side of the obligation in its own phase doc, which that PR does not touch, so the two records point at each other and neither branch fights the other.
+
+### 1. `/refresh` must return before the capture runs
+
+**The defect.** `libs/collector-core/collector_core/routes.py` awaits the full capture before returning:
+
+```python
+async with httpx.AsyncClient(timeout=10.0) as client:
+    envelopes = await spec.capture(season, week, client=client, lake=spec.lake, now=now)
+spec.state.envelopes = envelopes
+spec.state.last_capture_at = now
+return {"refresh_id": refresh_id, ...}
+```
+
+The phase doc contracts the opposite (`docs/architecture/phase-8-data-source-collectors.md`, the `POST /refresh` section): *"Returns `202 Accepted` with a `refresh_id`; the capture runs asynchronously and lands in the lake like any other."* So the route returns 202 — meaning "accepted, working on it" — after already finishing, and the caller blocks for the whole capture. Sixteen games at a 10-second per-call timeout, sequentially, plus the current-conditions pass, is minutes under upstream failure.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `libs/collector-core/tests/test_collector_routes.py`:
+
+```python
+async def test_refresh_returns_before_the_capture_completes(client, spec):
+    """202 means accepted, not finished. A caller must not block on the
+    upstream — that is what makes /refresh unusable under load."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_capture(season, week, *, client, lake, now):
+        started.set()
+        await release.wait()
+        return {}
+
+    spec.capture = slow_capture
+    response = client.post("/refresh", json={})
+    assert response.status_code == 202
+    assert response.json()["refresh_id"]
+    assert started.is_set(), "the capture should have been dispatched"
+    release.set()
+
+
+async def test_refresh_updates_state_once_the_dispatched_capture_finishes(client, spec):
+    """The work still has to land — returning early must not drop it."""
+    ...
+
+
+async def test_a_failed_dispatched_capture_does_not_escape(client, spec, caplog):
+    """An upstream failure inside a dispatched capture must be logged, not
+    surfaced as an unhandled task exception."""
+    ...
+
+
+async def test_shutdown_cancels_an_in_flight_dispatched_capture(spec):
+    """A pending capture must not outlive the app or leak a task."""
+    ...
+```
+
+Write the bodies out fully. `TestClient` runs the app in its own event loop, so a test that needs to observe an in-flight task will need to drive the lifespan explicitly — use the pattern already in `services/weather/tests/test_routes.py` for anything involving app startup.
+
+- [ ] **Step 2: Dispatch the capture instead of awaiting it**
+
+Restructure the handler so it acquires the gate, dispatches, and returns. Hold a strong reference to every in-flight task — a bare `asyncio.create_task` result can be garbage-collected mid-flight — and discard on completion:
+
+```python
+async def _run_capture(spec, season, week, now) -> None:
+    """Run a dispatched capture. Never raises: an upstream failure must degrade
+    freshness, not surface as an unhandled task exception. `spec.capture`
+    already records the failure in its envelope and metrics."""
+    try:
+        async with spec.client_factory() as client:
+            envelopes = await spec.capture(
+                season, week, client=client, lake=spec.lake, now=now
+            )
+        spec.state.envelopes = envelopes
+        spec.state.last_capture_at = now
+    except Exception:
+        logger.exception("dispatched capture failed")
+```
+
+and in the route, after the gate check:
+
+```python
+        task = asyncio.create_task(_run_capture(spec, season, week, now))
+        spec.state.in_flight.add(task)
+        task.add_done_callback(spec.state.in_flight.discard)
+        return {"refresh_id": refresh_id, "scope": {"season": season, "week": week}}
+```
+
+Add `in_flight: set[asyncio.Task] = field(default_factory=set)` to `CaptureState`, and a `cancel_in_flight()` helper that cancels each task and awaits it suppressing `CancelledError`. Call it from weather's `lifespan` shutdown alongside the existing loop cancellation, so a pending refresh cannot outlive the app.
+
+While you are here, add `client_factory: Callable[[], httpx.AsyncClient]` to `CollectorSpec`, defaulting to `lambda: httpx.AsyncClient(timeout=10.0)`. A reviewer flagged that the router currently hardcodes transport configuration for every collector in the fleet, so a collector with a slower or rate-limited upstream cannot override it without forking the router. Defaulting to today's value means no collector's behaviour changes.
+
+### 2. A capture pass needs an aggregate deadline
+
+**The defect.** `capture_week` bounds each upstream call at 10 seconds and the pass as a whole at nothing. The per-game loop is sequential, so total upstream failure costs roughly `games x 10s` for the forecast pass and again for current conditions. In the background loop that overruns the 15-minute cadence and the next tick piles up behind it.
+
+**Enforce it inside `capture_week`, not around it.** A wrapper that cancels the whole coroutine throws away everything captured so far. Checking a deadline between games preserves the partial capture and makes the truncation an explicit, countable fact — which is the same reasoning the coverage block exists for, and consistent with "a failed capture still writes."
+
+- [ ] **Step 3: Write the failing tests**
+
+Add to `services/weather/tests/test_capture.py`:
+
+```python
+async def test_a_pass_stops_at_the_deadline_and_records_the_remainder():
+    """Truncation is a fact to record, not a silent short week."""
+    ...
+    assert envelope.coverage.present < envelope.coverage.expected
+    assert envelope.coverage.missing  # the games never attempted
+    assert any(e["reason"] == "deadline_exceeded" for e in envelope.errors)
+
+
+async def test_signals_captured_before_the_deadline_are_kept():
+    """A partial capture is worth more than none — do not discard it."""
+    ...
+
+
+async def test_no_deadline_captures_everything():
+    """Default behaviour is unchanged when no deadline is supplied."""
+    ...
+```
+
+- [ ] **Step 4: Add the deadline parameter**
+
+Give `capture_week` a `deadline: datetime | None = None` keyword. Before each game's forecast fetch, and before each venue's current-conditions fetch, check whether the deadline has passed; if it has, `acc.fail(key, "deadline_exceeded")` for every remaining key and break out of the loop. Do not raise — the envelope still gets written, with the truncation visible in `coverage.missing` and `errors`.
+
+Thread a deadline through from both callers: the scheduler passes `now + CAPTURE_DEADLINE`, and `/refresh` does the same. Put `CAPTURE_DEADLINE_SECONDS` in the collector spec or read it from env with a sane default (300s) — state which you chose and why in your report.
+
+### 3. The upstream URLs must be overridable
+
+**Why.** A load test needs to point the collector at a fake upstream rather than a third party, and the capture-model tests want the same. The convention is already established two lines below each constant: `_maybe_inject_fault` reads `FAULT_UPSTREAM_*` from the environment.
+
+- [ ] **Step 5: Write the failing tests**
+
+One test per adapter asserting the module honours an override. Note that these constants are read at import, so a test must either reload the module or assert against a helper that reads env at call time — pick one, be consistent across both adapters, and say which in your report. Whichever you choose, the existing `respx` tests must keep working: they mock whatever `FORECAST_URL`/`SCHEDULE_URL` resolve to, so the default must stay byte-identical.
+
+- [ ] **Step 6: Make them env-configurable**
+
+```python
+FORECAST_URL = os.getenv("FORECAST_URL", "https://api.open-meteo.com/v1/forecast")
+```
+
+```python
+SCHEDULE_URL = os.getenv(
+    "SCHEDULE_URL",
+    "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv",
+)
+```
+
+The defaults must be byte-identical to today's values — the schedule URL in particular will 404 if a character changes, and no unit test would catch it because they all mock the transport. Verify the resolved default equals the current constant exactly.
+
+### 4. Record the inherited obligation
+
+- [ ] **Step 7: Write it down in the phase-8 doc**
+
+Add to `docs/architecture/phase-8-data-source-collectors.md`, in the Testing section, a short subsection:
+
+```markdown
+### Load coverage — inherited from Phase 5B
+
+Phase 5B's load-test harness deliberately defers all load coverage of `weather`
+to 8A. The reason was structural: the pre-8A service made 30 sequential upstream
+calls per request, so a single soak run would have exceeded the upstream's free
+daily tier several times over. Load-testing that shape was impossible without
+either hammering a third party or building a fake upstream.
+
+8A removes the cause. The stadium routes are gone, `/signals` serves the latest
+captured envelope from memory, and no request path calls an upstream — so a load
+test against a collector now exercises the collector.
+
+8A discharges the prerequisites and no more:
+
+- `POST /refresh` returns before its capture runs, per its own `202` contract.
+  Awaiting the capture made the route unloadtestable and violated the contract.
+- A capture pass carries an aggregate deadline, so total upstream failure
+  truncates the pass and records it rather than running for `games x timeout`.
+- `FORECAST_URL` and `SCHEDULE_URL` are environment-overridable, so a load test
+  can point at a fake upstream.
+
+**Still owed, and not 8A's to write:** the k6 scripts themselves. The harness,
+the in-cluster runner, the file format, and the thresholds all arrive with Phase
+5B's load-test PR, and its `docs/scale-baselines.md` will state that `weather`
+is uncovered and why. The follow-up that adds `weather`'s scripts replaces that
+statement with measured numbers — it does not simply delete it. Layout for
+per-service scripts is decided there, with both services in view, rather than
+guessed at here.
+```
+
+- [ ] **Step 8: Verify and commit**
+
+```bash
+cd libs/collector-core && uv run pytest -v && uv run ruff check . && uv run ruff format --check .
+cd ../../services/weather && uv run pytest -v && uv run ruff check . && uv run ruff format --check .
+cd ../.. && uv run --with pyyaml==6.0.3 --with pytest==9.0.3 --with jsonschema==4.26.0 pytest tests/ -q && uv lock --check
+```
+
+All three suites green. Then:
+
+```bash
+git add libs/collector-core services/weather docs/architecture
+git commit -m "feat(collector-core): async refresh, capture deadline, configurable upstreams"
+```
+
+**Mutation-check before committing.** For each, apply, run both suites, restore:
+
+1. Make `/refresh` await the capture again. A test must fail.
+2. Remove the `try/except` inside the dispatched capture so a failure escapes as an unhandled task exception. A test must fail.
+3. Ignore the deadline in `capture_week`. A test must fail.
+4. Change a URL default by one character. A test must fail — if none does, the default is unverified and a typo would 404 in production.
+
+---
+
+## Task 20: Gateway publishes only the contract paths
 
 **Files:**
 - Modify: `helm/charts/generic-service/templates/httproute.yaml`, `helm/charts/generic-service/values.yaml`, `helm/values/weather/values.yaml`, `tests/test_helm_httproute.py`
@@ -4576,7 +4803,7 @@ git commit -m "fix(gateway): publish only the contract paths, not the auth-exemp
 
 ---
 
-## Task 20: Smoke test and documentation
+## Task 21: Smoke test and documentation
 
 **Files:**
 - Modify: `scripts/smoke-test.sh`, `docs/architecture/phase-8-data-source-collectors.md`, `CLAUDE.md`, `docs/onboarding.md`, `README.md`
@@ -4732,6 +4959,8 @@ Do not skip it.
 - [ ] `collector-core` lint+test running in CI; `build-push` builds weather from the repo root
 - [ ] CI proves every `collector_core` module imports with runtime dependencies only
 - [ ] Gateway publishes only `/catalog`, `/signals`, `/refresh`; `/health` and `/metrics` return 404 at the edge and 200 in-cluster
+- [ ] `/refresh` returns before its capture runs; a capture pass carries an aggregate deadline; `FORECAST_URL` and `SCHEDULE_URL` are env-overridable
+- [ ] Load-coverage obligation inherited from Phase 5B recorded in the phase-8 doc (NOT the phase-5 doc, and `tests/load/` untouched)
 - [ ] `uv lock --check` clean in every changed directory
 - [ ] Full suite green, coverage gates met, `integration-test` passing
 - [ ] `superpowers:pr-uat` run before the PR opens
