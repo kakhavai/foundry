@@ -21,8 +21,20 @@ otel:
 grafanaAnnotations:
   enabled: true
 
+gateway:
+  enabled: true
+  pathPrefix: /collectors/weather
+
 extraEnv:
   - name: FAULT_UPSTREAM_LATENCY_MS
     value: "0"
   - name: FAULT_UPSTREAM_ERROR_RATE
     value: "0"
+  # optional: true lets the pod start before the Secret exists. weather then
+  # answers 503 on every data route until it arrives — see weather/auth.py.
+  - name: COLLECTOR_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: weather-collector-token
+        key: token
+        optional: true

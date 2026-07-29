@@ -29,6 +29,15 @@ otel:
 
 extraEnv: []  # extra env vars injected directly (supports secretKeyRef, fieldRef, etc.)
 
+# Collector gateway. Off by default — only collectors are routed in from
+# outside the cluster. player-projections consumes the generator's output and
+# is deliberately not exposed.
+gateway:
+  enabled: false
+  name: foundry                    # the Gateway to attach to
+  namespace: envoy-gateway-system  # the Gateway's namespace
+  pathPrefix: ""                   # required when enabled, e.g. /collectors/weather
+
 grafanaAnnotations:
   enabled: false
   grafanaUrl: "http://grafana.monitoring.svc.cluster.local"
