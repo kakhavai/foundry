@@ -19,6 +19,7 @@ Exits non-zero if any shape failed.
 import argparse
 import subprocess
 import sys
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import yaml
@@ -139,6 +140,34 @@ def split_summary(log_text: str) -> tuple[str, str]:
     return text, payload
 
 
+def route_log_lines(lines: Iterable[str], show: Callable[[str], None]) -> str:
+    """Route each log line as it streams in, and return everything captured.
+
+    A callback rather than a buffer-then-return tuple: `lines` can be a live
+    iterator over a subprocess's stdout, so calling `show` from inside this
+    loop is what makes "streams k6's own output as it runs" literally true —
+    the caller's print happens as each line is consumed, not after the whole
+    Job has finished. Lines before the summary marker are shown immediately;
+    the marker line and everything after (the exported JSON) are withheld from
+    `show` — that JSON belongs in load-results/<shape>.json, not scrolling
+    past the operator for up to 50 minutes of a soak.
+
+    The full captured text is returned so the caller can pass it straight to
+    split_summary — the same marker logic doing the same job in both places,
+    not reimplemented here.
+    """
+    captured: list[str] = []
+    seen_marker = False
+    for line in lines:
+        captured.append(line)
+        if not seen_marker:
+            if SUMMARY_MARKER in line:
+                seen_marker = True
+            else:
+                show(line)
+    return "".join(captured)
+
+
 def interpret_exit(shape: str, code: int) -> tuple[bool, str]:
     """Turn a k6 exit code into (passed, verdict).
 
@@ -250,16 +279,22 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
         kubectl(["delete", "job", job_name(shape), "--ignore-not-found"])
         apply_job(render_job(shape, soak_minutes))
 
-        # Streams k6's own output as it runs. --follow returns when the pod
-        # terminates, so this is also the wait.
-        subprocess.run(
-            ["kubectl", "logs", "-f", f"job/{job_name(shape)}", "--pod-running-timeout",
-             cfg["timeout"]],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        # Streams k6's own output as it runs, live — route_log_lines prints
+        # each line as it arrives instead of buffering the whole run. --follow
+        # exits when the pod terminates, and reading its stdout to EOF is the
+        # wait; the summary JSON is withheld from the console and captured
+        # for the results file instead.
+        follow_cmd = [
+            "kubectl", "logs", "-f", f"job/{job_name(shape)}",
+            "--pod-running-timeout", cfg["timeout"],
+        ]
+        print(f"  $ {' '.join(follow_cmd)}")
+        proc = subprocess.Popen(
+            follow_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
-        logs = kubectl(["logs", f"job/{job_name(shape)}"]).stdout
+        logs = route_log_lines(proc.stdout, lambda line: print(line, end=""))
+        proc.wait()
         text, payload = split_summary(logs)
-        print(text)
 
         RESULTS_DIR.mkdir(exist_ok=True)
         (RESULTS_DIR / f"{shape}.txt").write_text(text)

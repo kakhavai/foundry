@@ -122,6 +122,51 @@ def test_split_summary_tolerates_a_missing_marker():
     assert payload == ""
 
 
+# ── route_log_lines ───────────────────────────────────────────────────────────
+
+def test_route_log_lines_shows_lines_before_the_marker():
+    lines = ["line one\n", "line two\n", f"{rl.SUMMARY_MARKER}\n", '{"metrics": {}}\n']
+    shown = []
+    rl.route_log_lines(lines, shown.append)
+    assert shown == ["line one\n", "line two\n"]
+
+
+def test_route_log_lines_withholds_the_marker_and_everything_after():
+    """The marker line itself, and the JSON that follows it, must not reach
+    the console — that's what would turn a soak's summary export into a wall
+    of JSON scrolling past the operator."""
+    lines = ["line one\n", f"{rl.SUMMARY_MARKER}\n", '{"metrics": {}}\n', "trailer\n"]
+    shown = []
+    rl.route_log_lines(lines, shown.append)
+    assert shown == ["line one\n"]
+
+
+def test_route_log_lines_returns_the_full_captured_text():
+    lines = ["line one\n", f"{rl.SUMMARY_MARKER}\n", '{"metrics": {}}\n']
+    captured = rl.route_log_lines(lines, lambda _line: None)
+    assert captured == "".join(lines)
+
+
+def test_route_log_lines_tolerates_a_missing_marker():
+    """A stream with no marker at all — k6 killed before it wrote a summary —
+    still returns its text, the same case split_summary already tolerates."""
+    lines = ["k6 crashed\n", "immediately\n"]
+    shown = []
+    captured = rl.route_log_lines(lines, shown.append)
+    assert shown == lines
+    assert captured == "".join(lines)
+
+
+def test_route_log_lines_output_feeds_split_summary():
+    """The captured text is meant to be handed straight to split_summary — the
+    same marker logic doing the same job in both places."""
+    lines = ["TOTAL RESULTS\n", f"{rl.SUMMARY_MARKER}\n", '{"metrics": {}}\n']
+    captured = rl.route_log_lines(lines, lambda _line: None)
+    text, payload = rl.split_summary(captured)
+    assert "TOTAL RESULTS" in text
+    assert payload.strip() == '{"metrics": {}}'
+
+
 # ── interpret_exit ────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("shape", ["ramp", "soak", "spike"])
