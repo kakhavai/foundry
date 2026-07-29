@@ -145,6 +145,20 @@ logging decision stays open — nothing forces it yet.
 to 81% passes silently. Deliberate: a ratcheting threshold makes unrelated PRs
 fail. Tracked as a Phase 5B follow-up, not raised here.
 
+**Failure-path metrics are proven to be emitted, not to be collected.** The
+metric tests assert against real `generate_latest()` output, so they prove
+`upstream_poll_failures_total`, `upstream_cache_age_seconds`, `upstream_healthy`,
+and `weather_upstream_{requests,failures}_total` carry the right labels and
+values in-process. Nothing in them touches scrape configuration, pod
+annotations, or the Helm chart, so "the metric exists" and "Prometheus is
+collecting the metric" remain separate claims and only the first is tested here.
+The second is proven when a chaos scenario queries these series against a live
+Prometheus in Phase 5B's chaos PR.
+
+They also fix no thresholds. What counts as an unacceptable cache age or failure
+rate is a scenario-design question, deliberately left to the chaos work rather
+than guessed at here.
+
 ## Not Covered Here
 
 Chaos scenarios, load and scale testing, and adversarial agent sessions are

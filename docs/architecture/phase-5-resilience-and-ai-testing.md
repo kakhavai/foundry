@@ -128,17 +128,28 @@ only the gate waits.
 
 **Chaos + scale CI job.** A new workflow `chaos-test.yml` runs on the `ready-for-chaos` label (separate from `ready-for-merge`). Spins up the Kind cluster, runs the full chaos suite, then runs load tests. Results published to PR as a structured report: scenario name, hypothesis, observed behavior, pass/fail.
 
-**Failure-path metrics come first.** `_poll_loop`'s bare `except Exception`
-emits nothing today — no log, no metric, no exception detail, no staleness bound
-(see `docs/testing-strategy.md`). That **blocks the chaos work**: a scenario's
-pass/fail criterion is a Prometheus query, and a failure mode that emits no
-metric cannot supply one. Add counters and gauges before writing any scenario:
+**Failure-path metrics come first — delivered.** `_poll_loop`'s bare
+`except Exception` emitted nothing: no metric, no cause, no staleness bound.
+That blocked the chaos work, because a scenario's pass/fail criterion is a
+Prometheus query and a failure mode that emits nothing cannot supply one.
+
+`weather` had the same defect and was pulled into the same PR: `/weather/stadiums`
+swallows per-stadium failures and returns 200 with `count: 30` whether thirty
+stadiums resolved or zero did, which is what `smoke-test.sh` asserts. The
+`latency-injection` scenario had no measurable criterion without this.
 
 ```
 upstream_poll_failures_total{format, reason}
 upstream_cache_age_seconds{format}
 upstream_healthy{format}
+weather_upstream_requests_total
+weather_upstream_failures_total{reason}
 ```
+
+`reason` is one of `http_status`, `timeout`, `transport`, `malformed`, or
+`unknown`. A format mismatch reports `malformed`: distinguishing it would have
+meant a new exception subclass, and the same person owns the producer and the
+consumer, so the exception message already carries the detail.
 
 Metrics only, deliberately. Structured logging is a separate platform-wide
 decision (plain vs JSON, OTel log bridge or not) that nothing forces yet — no
