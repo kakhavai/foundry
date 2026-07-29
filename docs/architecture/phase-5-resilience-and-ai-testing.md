@@ -109,8 +109,10 @@ against whichever shape is live when it runs.
 | Auth enforcement | In each service. The gateway routes and terminates TLS; it does not authenticate. |
 | `chaos-test.yml` trigger | `workflow_dispatch` only. No label — CLAUDE.md's no-manual-gate rule governs required merge checks, and a label additionally needs a human to remember it. No nightly schedule either: **chaos coverage therefore exists only when somebody runs it, and will decay silently between sessions.** Accepted, not overlooked. |
 
-Full rationale, including the rejected alternatives and the AWS-native options,
-is in `docs/plans/2026-07-28-phase-5b-collector-gateway.md`.
+Full rationale, including the rejected alternatives (`ingress-nginx`, Traefik, a
+hand-rolled nginx pod) and why the AWS-native Gateway API implementations were
+not candidates — none of them run on Kind — is in the pull request that
+delivered this stage.
 
 ### What Gets Built — chaos and scale
 

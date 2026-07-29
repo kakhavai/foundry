@@ -118,10 +118,12 @@ jobs:
             --all -n monitoring --timeout=180s
           kubectl wait --for=condition=ready pod \
             -n envoy-gateway-system --all --timeout=180s
-          kubectl wait --for=condition=ready pod \
-            -l app.kubernetes.io/name=weather --timeout=120s
-          kubectl wait --for=condition=ready pod \
-            -l app.kubernetes.io/name=player-projections --timeout=120s
+          # `rollout status`, not `wait --for=condition=ready pod -l <label>`:
+          # the label selector also matches pods left Terminating by a rollout,
+          # which never reach Ready, so the wait times out on a Deployment that
+          # is in fact healthy.
+          kubectl rollout status deployment/weather --timeout=120s
+          kubectl rollout status deployment/player-projections --timeout=120s
 
       - name: Smoke test services
         run: bash scripts/smoke-test.sh

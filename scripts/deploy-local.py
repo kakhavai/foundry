@@ -24,6 +24,15 @@ def run(cmd: list[str], env: dict | None = None) -> None:
         sys.exit(result.returncode)
 
 
+def deployment_exists(service: str) -> bool:
+    result = subprocess.run(
+        ["kubectl", "get", "deployment", service],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def ensure_collector_secret(name: str) -> None:
     """Create or update the collector's bearer-token Secret.
 
@@ -65,6 +74,9 @@ def main() -> None:
 
     port = SERVICES[service]["port"]
 
+    # Checked before the upgrade, because the upgrade is what creates it.
+    already_deployed = deployment_exists(service)
+
     run(["docker", "build", "-t", f"{service}:local", f"services/{service}/"], env=_BUILD_ENV)
     run(["kind", "load", "docker-image", f"{service}:local", "--name", "foundry"])
 
@@ -83,9 +95,15 @@ def main() -> None:
 
     # image.tag is pinned to "local" on every deploy, so a rebuilt image (or a
     # just-updated token Secret) produces a byte-identical PodSpec and
-    # Kubernetes never restarts the pod on its own. Force it unconditionally
-    # rather than trying to detect "did anything actually change".
-    run(["kubectl", "rollout", "restart", f"deployment/{service}"])
+    # Kubernetes never restarts the pod on its own.
+    #
+    # Only when a Deployment was already running, though. Restarting one the
+    # upgrade just created starts a second ReplicaSet immediately, and the old
+    # pod lingers Terminating — where `kubectl wait --for=condition=ready pod -l
+    # <label>` matches it and waits for a readiness it will never reach. That is
+    # a fresh-cluster CI failure, not a local-dev inconvenience.
+    if already_deployed:
+        run(["kubectl", "rollout", "restart", f"deployment/{service}"])
     run(["kubectl", "rollout", "status", f"deployment/{service}", "--timeout=180s"])
 
     print(f"\n{'=' * 50}")
