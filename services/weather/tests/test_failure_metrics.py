@@ -1,13 +1,9 @@
 import httpx
 import pytest
 import respx
-from fastapi.testclient import TestClient
 
 from weather import metrics as weather_metrics
-from weather.main import app
 from weather.stadiums import STADIUMS
-
-client = TestClient(app)
 
 WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -34,7 +30,7 @@ _GOOD_BODY = {
 )
 @respx.mock
 def test_each_failure_class_increments_its_own_reason(
-    metric_value, mock_kwargs, reason
+    metric_value, client, mock_kwargs, reason
 ):
     respx.get(WEATHER_URL).mock(**mock_kwargs)
 
@@ -58,7 +54,7 @@ def test_each_failure_class_increments_its_own_reason(
 
 @respx.mock
 def test_every_stadium_failure_is_counted_even_though_the_response_is_200(
-    metric_value,
+    metric_value, client
 ):
     """The blind spot this metric exists to close.
 
@@ -95,7 +91,7 @@ def test_every_stadium_failure_is_counted_even_though_the_response_is_200(
 
 
 @respx.mock
-def test_successful_calls_count_as_attempts_but_not_failures(metric_value):
+def test_successful_calls_count_as_attempts_but_not_failures(metric_value, client):
     respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json=_GOOD_BODY))
 
     attempts_before = (

@@ -1,9 +1,7 @@
 import asyncio
 
 import httpx
-import pytest
 import respx
-from fastapi.testclient import TestClient
 
 from weather.client import WEATHER_URL
 from weather.main import app
@@ -32,12 +30,6 @@ MALFORMED_CURRENT = {
         "time": "2026-09-30T14:00",
     }
 }
-
-
-@pytest.fixture
-def client():
-    with TestClient(app) as c:
-        yield c
 
 
 @respx.mock
@@ -154,7 +146,7 @@ def test_unknown_stadium_returns_404(client):
 
 
 @respx.mock
-def test_concurrent_requests_are_independent(client):
+def test_concurrent_requests_are_independent(client, collector_token):
     """Twenty concurrent requests through the ASGI stack return identical bodies.
 
     `weather/main.py` holds no shared mutable state today — each request builds
@@ -167,7 +159,11 @@ def test_concurrent_requests_are_independent(client):
 
     async def hammer():
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            headers={"Authorization": f"Bearer {collector_token}"},
+        ) as ac:
             return await asyncio.gather(
                 *(ac.get(f"/weather/stadiums/{stadium_id}") for _ in range(20))
             )

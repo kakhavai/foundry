@@ -1,8 +1,11 @@
 import pytest
+from fastapi.testclient import TestClient
 from opentelemetry import metrics as otel_metrics
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider
 from prometheus_client import REGISTRY, generate_latest
+
+from weather.main import app
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -59,3 +62,32 @@ def metric_value():
         return None
 
     return read
+
+
+TEST_TOKEN = "test-collector-token"
+
+
+@pytest.fixture(autouse=True)
+def _collector_token(monkeypatch):
+    """Every route except /health and /metrics needs a token.
+
+    Set one for the whole suite so tests exercise the authenticated path.
+    test_auth.py overrides it where it needs a different value.
+    """
+    monkeypatch.setenv("COLLECTOR_TOKEN", TEST_TOKEN)
+
+
+@pytest.fixture
+def collector_token(_collector_token) -> str:
+    return TEST_TOKEN
+
+
+@pytest.fixture
+def client(_collector_token):
+    """A TestClient carrying a valid bearer token.
+
+    Tests that need the unauthenticated path build their own client — see
+    test_auth.py's `anonymous()`.
+    """
+    with TestClient(app, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as c:
+        yield c

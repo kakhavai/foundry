@@ -31,6 +31,10 @@ _failures = _meter.create_counter(
     "collector_capture_failures",
     description="Upstream capture calls that failed, by collector and cause.",
 )
+_auth_failures = _meter.create_counter(
+    "collector_auth_failures",
+    description="Collector API requests rejected by the token check, by cause.",
+)
 
 
 def _reason(exc: BaseException) -> str:
@@ -56,3 +60,9 @@ def record_upstream_attempt() -> None:
 
 def record_upstream_failure(exc: BaseException) -> None:
     _failures.add(1, {"collector": COLLECTOR, "reason": _reason(exc)})
+
+
+def record_auth_failure(reason: str) -> None:
+    """A rejection must be observable — `unconfigured` in particular, since it
+    means the Secret never arrived and every caller is being turned away."""
+    _auth_failures.add(1, {"collector": COLLECTOR, "reason": reason})

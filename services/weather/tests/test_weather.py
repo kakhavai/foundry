@@ -1,10 +1,5 @@
 import httpx
 import respx
-from fastapi.testclient import TestClient
-
-from weather.main import app
-
-client = TestClient(app)
 
 MOCK_WEATHER = {
     "current": {
@@ -19,7 +14,7 @@ MOCK_WEATHER = {
 
 
 @respx.mock
-def test_stadiums_returns_all_stadiums():
+def test_stadiums_returns_all_stadiums(client):
     respx.get("https://api.open-meteo.com/v1/forecast").mock(
         return_value=httpx.Response(200, json=MOCK_WEATHER)
     )
@@ -38,7 +33,7 @@ def test_stadiums_returns_all_stadiums():
 
 
 @respx.mock
-def test_stadium_weather_returns_specific_stadium():
+def test_stadium_weather_returns_specific_stadium(client):
     respx.get("https://api.open-meteo.com/v1/forecast").mock(
         return_value=httpx.Response(200, json=MOCK_WEATHER)
     )
@@ -51,13 +46,13 @@ def test_stadium_weather_returns_specific_stadium():
     assert data["weather"]["temperature_c"] == 18.5
 
 
-def test_stadium_weather_returns_404_for_unknown_stadium():
+def test_stadium_weather_returns_404_for_unknown_stadium(client):
     response = client.get("/weather/stadiums/nowhere-stadium")
     assert response.status_code == 404
 
 
 @respx.mock
-def test_stadiums_returns_502_when_weather_api_fails_for_single():
+def test_stadiums_returns_502_when_weather_api_fails_for_single(client):
     respx.get("https://api.open-meteo.com/v1/forecast").mock(
         return_value=httpx.Response(500)
     )
