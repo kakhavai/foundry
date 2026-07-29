@@ -18,7 +18,9 @@
 - **Python** `>=3.12` everywhere. Line length 88, ruff lint `select = ["E", "F", "I"]`.
 - **Coverage gate is 80%** line + branch, no omitted files. Applies to `libs/collector-core/` as well as `services/weather/`.
 - **Do not use the term "NFL" anywhere** in code, comments, docs, or test names. The project does not hold those rights. Use "pro football", "the league", or "stadium". **Exemption (ruled 2026-07-29):** third-party proper nouns we do not control — the `nflverse`/`nfldata` URL in the schedule adapter, package names, upstream field names — are exempt, because they are identifiers rather than prose. Do not rewrite the schedule URL; it will 404.
-- **Every `pyproject.toml` dependency change must be followed by `uv lock` in that directory**, with the regenerated `uv.lock` committed in the same commit. Verify with `uv lock --check` (exit 0 = current, exit 1 = stale).
+- **Every `pyproject.toml` dependency change must be followed by `uv lock`**, with the regenerated lock committed in the same commit. Verify with `uv lock --check` (exit 0 = current, exit 1 = stale).
+
+  **Discovered during Task 1:** a uv workspace has **one lockfile at the workspace root**, not one per member. `services/weather/uv.lock` was deleted and `uv.lock` at the repo root replaces it. Running `uv lock`, `uv lock --check`, or `uv sync --frozen` from inside a member directory resolves to the root lock — verified working for the `python-test` composite action and for `platform-tests`. `services/player-projections/uv.lock` stays where it is; that service is not a workspace member.
 - **No new GitHub Actions workflow or composite-action FILES.** Existing `weather.yml` and the existing composite actions are extended in place (Task 16 steps 9-10): a `collector-core` lint+test job inside `weather.yml`, `libs/**` added to its path filters, and an optional `context` input on `.github/actions/build-push`. Adding a new `.yml` under `.github/workflows/` or `.github/actions/` is out of scope.
 - **`/health` and `/metrics` stay auth-exempt.** The kubelet's probes and Prometheus's annotation scrape cannot carry a token.
 - **The lake is append-only.** Never mutate or delete an object in place. A correction is a new object with a later `captured_at`.
@@ -3634,18 +3636,20 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-# The workspace member must be present before dependency resolution, because
-# weather declares collector-core as a path dependency. Copying it here rather
-# than bind-mounting keeps the layer cached until the library actually changes.
+# A uv workspace has ONE lockfile, at the workspace root — there is no
+# services/weather/uv.lock (Task 1 deleted it). The root pyproject.toml and
+# root uv.lock both come in, plus every member's manifest, because uv resolves
+# the whole workspace graph before it can sync any single member.
+COPY pyproject.toml uv.lock ./
 COPY libs/collector-core/ ./libs/collector-core/
-COPY services/weather/pyproject.toml services/weather/uv.lock ./
+COPY services/weather/pyproject.toml ./services/weather/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-install-project
+    uv sync --locked --no-dev --no-install-project --package weather
 
-COPY services/weather/weather/ ./weather/
+COPY services/weather/weather/ ./services/weather/weather/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable
+    uv sync --locked --no-dev --no-editable --package weather
 
 FROM python:3.12-slim
 
