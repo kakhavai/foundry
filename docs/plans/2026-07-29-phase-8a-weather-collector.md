@@ -1858,8 +1858,16 @@ git commit -m "feat(weather): environment resolver that refuses rather than gues
 
 **Files:**
 - Create: `services/weather/weather/adapters/forecast.py`, `services/weather/tests/test_forecast_adapter.py`
-- Delete: `services/weather/weather/client.py`
-- Modify: `services/weather/tests/test_weather.py`, `services/weather/tests/test_faults.py` (retarget imports)
+
+**This task is purely additive.** `services/weather/weather/client.py` STAYS. An
+earlier draft of this plan deleted it here; that was a sequencing error. `main.py`
+still imports `fetch_weather_for_coords` from it and is not rewritten until Task
+13, and six files import the old module — including `test_properties.py`, whose
+Hypothesis suites exercise `fetch_current_weather` and `GEOCODE_URL`, neither of
+which has a counterpart in the new adapter, and `test_weather.py`, whose
+assertions target the old Celsius schema. A module cannot be deleted before its
+consumer is rewritten. **Task 13 deletes `client.py`** as part of replacing the
+routes that use it, and retires the old-surface tests in the same commit.
 
 **Interfaces:**
 - Consumes: nothing
@@ -2163,17 +2171,9 @@ async def fetch_current_conditions(
     return result
 ```
 
-Then delete the old client and retarget its importers:
-
-```bash
-git rm services/weather/weather/client.py
-```
-
-In `services/weather/tests/test_weather.py` and `services/weather/tests/test_faults.py`,
-replace `from weather.client import WEATHER_URL` with
-`from weather.adapters.forecast import FORECAST_URL as WEATHER_URL` and replace
-`weather.client._maybe_inject_fault` patch targets with
-`weather.adapters.forecast._maybe_inject_fault`.
+`client.py` is left in place — see the note under **Files** above. The two
+modules coexist until Task 13. `_maybe_inject_fault` is duplicated rather than
+moved for the same reason; Task 13 removes the original along with `client.py`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -2778,6 +2778,23 @@ git commit -m "feat(weather): capture orchestration with both signal types and c
 - Modify: `services/weather/weather/main.py`
 - Create: `services/weather/tests/test_routes.py`
 - Modify: `services/weather/tests/test_auth.py`, `services/weather/tests/conftest.py`
+- **Delete: `services/weather/weather/client.py`** — deferred here from Task 10,
+  because `main.py` consumed it until this task rewrote the routes.
+- **Retire the old-surface tests** that only exist to cover the deleted routes and
+  the deleted client: `services/weather/tests/test_weather.py` and
+  `services/weather/tests/test_properties.py` (its Hypothesis suites target
+  `fetch_current_weather` / `GEOCODE_URL`, which no longer exist). Rewrite
+  `services/weather/tests/test_faults.py` against
+  `weather.adapters.forecast._maybe_inject_fault`. Fix the now-stale
+  `weather.client` imports in `services/weather/tests/test_auth.py`,
+  `services/weather/tests/test_contract.py`, and
+  `services/weather/tests/integration/test_app.py`.
+
+  Deleting a Hypothesis property suite is a real loss of coverage, not
+  bookkeeping. `test_properties.py` fuzzes the old parser; the new adapters need
+  equivalent property coverage. Port what still applies to
+  `weather.adapters.forecast` rather than dropping it silently, and say in the
+  report what was ported and what was genuinely obsolete.
 
 **Interfaces:**
 - Consumes: `capture_week`, `CaptureState`, `SIGNAL_TYPES`, `CADENCE_CLASS` from Task 12; `RefreshGate` from Task 6
