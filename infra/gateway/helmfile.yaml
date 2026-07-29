@@ -1,0 +1,17 @@
+# The collector gateway: one path-routed front door for the whole collector
+# fleet. See docs/plans/2026-07-28-phase-5b-collector-gateway.md for why Gateway
+# API over ingress-nginx, Traefik, or a hand-rolled nginx pod.
+helmDefaults:
+  createNamespace: true
+  wait: true
+  kubeContext: kind-foundry
+
+releases:
+  - name: envoy-gateway
+    namespace: envoy-gateway-system
+    # OCI chart, so no repositories block. The chart installs the Gateway API
+    # CRDs itself.
+    chart: oci://docker.io/envoyproxy/gateway-helm
+    version: v1.4.2
+    values:
+      - values/envoy-gateway.yaml

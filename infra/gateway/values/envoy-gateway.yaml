@@ -1,0 +1,4 @@
+# Defaults are close to what we want. Kept as a file anyway so the next override
+# has an obvious home, matching infra/grafana-stack/values/.
+deployment:
+  replicas: 1

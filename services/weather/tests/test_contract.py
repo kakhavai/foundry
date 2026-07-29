@@ -3,7 +3,6 @@ from pathlib import Path
 
 import httpx
 import respx
-from fastapi.testclient import TestClient
 
 from weather.client import WEATHER_URL
 from weather.main import app
@@ -80,19 +79,18 @@ SHAPE_HINT = (
 
 
 @respx.mock
-def test_response_shapes_match_committed_contract():
+def test_response_shapes_match_committed_contract(client):
     """Catches renamed or dropped response fields at any nesting depth."""
     respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json=VALID_CURRENT))
     committed = json.loads(RESPONSES.read_text())
     stadium_id = next(iter(STADIUMS))
 
-    with TestClient(app) as client:
-        actual = {
-            "/health": response_shape(client.get("/health").json()),
-            "/weather/stadiums": response_shape(client.get("/weather/stadiums").json()),
-            "/weather/stadiums/{stadium_id}": response_shape(
-                client.get(f"/weather/stadiums/{stadium_id}").json()
-            ),
-        }
+    actual = {
+        "/health": response_shape(client.get("/health").json()),
+        "/weather/stadiums": response_shape(client.get("/weather/stadiums").json()),
+        "/weather/stadiums/{stadium_id}": response_shape(
+            client.get(f"/weather/stadiums/{stadium_id}").json()
+        ),
+    }
 
     assert actual == committed, SHAPE_HINT

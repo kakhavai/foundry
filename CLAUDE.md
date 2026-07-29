@@ -75,8 +75,49 @@ that works. Revisit if the generator ever becomes multi-tenant, or if a token
 leaking into a log becomes a realistic concern — mTLS removes the bearer secret
 entirely, and OIDC removes the long-lived one.
 
-`weather` is the first collector and today feeds nothing; it gets the gateway
-path and token treatment in Phase 5B.
+`weather` is the first collector. It is served at `/collectors/weather/` through
+the gateway and enforces a bearer token in-process.
+
+**Gateway:** Envoy Gateway (pinned, `infra/gateway/`) implementing Gateway API.
+One `Gateway` named `foundry` in `envoy-gateway-system` holds the front door;
+each collector's Helm chart templates its own `HTTPRoute` via `gateway.enabled`
+and `gateway.pathPrefix` in its values file. On Kind it is reachable at
+`http://localhost:8080` through the NodePort 30080 mapping in
+`infra/kind/cluster.yaml`.
+
+The gateway strips `/collectors/<name>` and passes the rest through — one rule
+for the whole fleet, no per-collector rewrite target. Because `weather`'s own
+routes are namespaced under `/weather/`, the external path today reads
+`/collectors/weather/weather/stadiums`. The doubled segment is expected, not a
+bug; Phase 8's 8A replaces those routes with `/signals` and it disappears.
+
+**Auth is enforced in the service, not at the gateway** (`weather/auth.py`).
+Middleware, so a route added later is protected by default. `/health` and
+`/metrics` are exempt because the kubelet's probes and Prometheus's annotation
+scrape cannot carry a token. An absent or empty `COLLECTOR_TOKEN` returns 503
+on every data route — it fails closed, so a Secret that never syncs is loud
+rather than an open collector.
+
+Gateway-only enforcement was rejected because `scripts/smoke-test.sh`
+port-forwards `svc/weather` directly: it would have left the required
+`integration-test` check green over an unprotected path.
+
+**Rotation requires a rollout.** `secretKeyRef` injects the token as an env var
+captured at pod start, so updating the Secret takes effect only after
+`kubectl rollout restart deploy/<service>`.
+
+**Local development:** `scripts/deploy-local.py` creates the Secret with the
+literal `local-dev-token`. That value is Kind-only and committed deliberately;
+real tokens are created out of band and never enter Git.
+
+**The Secret is not managed by GitOps — nothing in `infra/gitops/` creates it.**
+On a local Kind cluster, `scripts/deploy-local.py` creates it, as above. On an
+ArgoCD-managed cluster (or Phase 6's EKS, where it is backed by AWS Secrets
+Manager) it must be created before or alongside the first sync — `argocd-deploy.py`
+does not do this. Because `optional: true` lets the pod start without it, and
+`/health` doesn't check for it, the symptom is not a failed deploy: the ArgoCD
+Application reports **Healthy** while every data route 503s. Recognize that
+combination for what it is before assuming the deploy itself is broken.
 
 ---
 
@@ -229,6 +270,25 @@ if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
 ```
 
 Each service has a `telemetry.py` with traces (OTLP gRPC → OTel Collector → Tempo) and metrics (`PrometheusMetricReader` → `/metrics` → Prometheus).
+
+**`setup_telemetry` must rebuild the middleware stack.** `setup_telemetry` runs
+inside the lifespan handler, and `FastAPIInstrumentor.instrument_app` only
+patches `app.build_middleware_stack`. Starlette builds and caches that stack on
+its first `__call__` — which *is* the lifespan scope — so the patch arrives too
+late and `OpenTelemetryMiddleware` is never installed. Every `telemetry.py`
+therefore ends with:
+
+```python
+FastAPIInstrumentor.instrument_app(app)
+app.middleware_stack = app.build_middleware_stack()
+```
+
+Omit that line and the failure is **silent**: `_is_instrumented_by_opentelemetry`
+still reads `True`, `/metrics` still works, and the service simply produces no
+server spans while its httpx client spans arrive in Tempo with no parent.
+`test_server_middleware_is_actually_installed` in each service's
+`tests/test_telemetry.py` guards it by walking the real middleware chain —
+asserting `instrument_app` was *called* does not catch this.
 
 **Collector service name:** The Helmfile release is named `otel-collector`, but the Helm chart appends `-opentelemetry-collector`, making the in-cluster DNS name `otel-collector-opentelemetry-collector.monitoring.svc.cluster.local`. This is set in `helm/charts/generic-service/values.yaml`. If traces/logs stop flowing while `/metrics` still works, this is the first thing to check — Prometheus scrapes pod annotations directly and is unaffected by a broken OTel endpoint.
 

@@ -98,6 +98,15 @@ jobs:
           helmfile repos
           helmfile apply
 
+      - name: Deploy collector gateway
+        run: |
+          cd infra/gateway
+          helmfile apply
+          cd ../..
+          kubectl apply -f infra/gateway/manifests/
+          kubectl wait --for=condition=Programmed gateway/foundry \
+            -n envoy-gateway-system --timeout=180s
+
       - name: Deploy services
         run: |
           python3 scripts/deploy-local.py weather
@@ -108,9 +117,13 @@ jobs:
           kubectl wait --for=condition=ready pod \
             --all -n monitoring --timeout=180s
           kubectl wait --for=condition=ready pod \
-            -l app.kubernetes.io/name=weather --timeout=120s
-          kubectl wait --for=condition=ready pod \
-            -l app.kubernetes.io/name=player-projections --timeout=120s
+            -n envoy-gateway-system --all --timeout=180s
+          # `rollout status`, not `wait --for=condition=ready pod -l <label>`:
+          # the label selector also matches pods left Terminating by a rollout,
+          # which never reach Ready, so the wait times out on a Deployment that
+          # is in fact healthy.
+          kubectl rollout status deployment/weather --timeout=120s
+          kubectl rollout status deployment/player-projections --timeout=120s
 
       - name: Smoke test services
         run: bash scripts/smoke-test.sh

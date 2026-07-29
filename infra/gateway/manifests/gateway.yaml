@@ -1,0 +1,56 @@
+# Applied with `kubectl apply -f`, not Helm: these are three singleton objects
+# for the whole cluster, not a templated per-service release.
+#
+# NodePort 30080 is claimed deliberately — infra/kind/cluster.yaml already maps
+# containerPort 30080 to hostPort 8080, so the gateway is reachable at
+# http://localhost:8080 with no port-forward.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: foundry-proxy
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        # Default is LoadBalancer, which stays Pending forever on Kind.
+        type: NodePort
+        patch:
+          type: StrategicMerge
+          value:
+            spec:
+              ports:
+                - name: http-80
+                  port: 80
+                  nodePort: 30080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: foundry
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: foundry-proxy
+    namespace: envoy-gateway-system
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: foundry
+  namespace: envoy-gateway-system
+spec:
+  gatewayClassName: foundry
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      # No hostname: Kind has no DNS, and TLS plus a real hostname land in
+      # Phase 6 with the EKS move.
+      allowedRoutes:
+        namespaces:
+          # Collectors live in `default`; the Gateway lives here.
+          from: All

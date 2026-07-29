@@ -23,7 +23,6 @@ SERVICES = {
         "local_port": 8000,
         "remote_port": 8000,
         "url": "http://localhost:8000",
-        "pod_label": "app.kubernetes.io/name=weather",
     },
     "player-projections": {
         "svc": "player-projections",
@@ -31,7 +30,6 @@ SERVICES = {
         "local_port": 8001,
         "remote_port": 8001,
         "url": "http://localhost:8001",
-        "pod_label": "app.kubernetes.io/name=player-projections",
     },
 }
 
@@ -109,26 +107,39 @@ def main() -> None:
         run(["helmfile", "repos"], cwd=grafana_stack)
         run(["helmfile", "apply"], cwd=grafana_stack)
 
-        # 3. Services
+        # 3. Collector gateway
+        gateway = ROOT / "infra/gateway"
+        run(["helmfile", "apply"], cwd=gateway)
+        run(["kubectl", "apply", "-f", str(gateway / "manifests")])
+        run([
+            "kubectl", "wait", "--for=condition=Programmed",
+            "gateway/foundry", "-n", "envoy-gateway-system", "--timeout=180s",
+        ])
+
+        # 4. Services
         for service in requested:
             run([sys.executable, ROOT / "scripts/deploy-local.py", service])
 
-        # 4. Wait for pods to be ready
+        # 5. Wait for pods to be ready
         print("\nWaiting for pods to be ready...")
         run([
             "kubectl", "wait", "--for=condition=ready", "pod",
             "--all", "-n", "monitoring", "--timeout=180s",
         ])
+        # `rollout status`, not `wait --for=condition=ready pod -l <label>`: the
+        # label selector also matches pods left Terminating by a rollout, which
+        # never reach Ready, so the wait times out on a healthy Deployment.
+        # deploy-local.py already waits per service; this re-checks cheaply
+        # after all of them are deployed.
         for service in requested:
-            label = SERVICES[service]["pod_label"]
             run([
-                "kubectl", "wait", "--for=condition=ready", "pod",
-                "-l", label, "--timeout=120s",
+                "kubectl", "rollout", "status", f"deployment/{service}",
+                "--timeout=120s",
             ])
     else:
         print("\nSkipping deploy — starting port-forwards only.")
 
-    # 5. Start port-forwards in background
+    # 6. Start port-forwards in background
     print("\nStarting port-forwards...")
     procs = []
 
@@ -154,7 +165,7 @@ def main() -> None:
     # Give forwards a moment to bind
     time.sleep(2)
 
-    # 6. Print access URLs
+    # 7. Print access URLs
     print("\n" + "=" * 50)
     print("Stack is up. Access your services at:\n")
     for service in requested:
@@ -162,11 +173,12 @@ def main() -> None:
         print(f"  {service:<20} {cfg['url']}")
     for fwd in OBS_FORWARDS:
         print(f"  {fwd['name']:<20} {fwd['url']}")
+    print(f"  {'Collector gateway':<20} http://localhost:8080/collectors/<name>/")
     print("\n" + "=" * 50)
     print("Press Ctrl+C to stop port-forwards (cluster stays running).")
     print("To tear everything down: kind delete cluster --name foundry")
 
-    # 7. Wait for Ctrl+C
+    # 8. Wait for Ctrl+C
     try:
         while True:
             time.sleep(1)

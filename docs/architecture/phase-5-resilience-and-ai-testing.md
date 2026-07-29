@@ -101,6 +101,19 @@ load-bearing for the chaos scenarios below, but for `weather` they are
 transitional; the chaos scenario that exercises its upstream must be written
 against whichever shape is live when it runs.
 
+**Decisions taken in the gateway PR.**
+
+| Question | Decision |
+|---|---|
+| Gateway component | Gateway API, implemented by Envoy Gateway. `ingress-nginx` is dominated — it still needs a controller and an annotation vocabulary, so it is not the simple option, and the project is winding down, so it is not the durable one. A plain nginx pod is genuinely simpler but makes every collector edit one shared config rather than shipping its own route. |
+| Auth enforcement | In each service. The gateway routes and terminates TLS; it does not authenticate. |
+| `chaos-test.yml` trigger | `workflow_dispatch` only. No label — CLAUDE.md's no-manual-gate rule governs required merge checks, and a label additionally needs a human to remember it. No nightly schedule either: **chaos coverage therefore exists only when somebody runs it, and will decay silently between sessions.** Accepted, not overlooked. |
+
+Full rationale, including the rejected alternatives (`ingress-nginx`, Traefik, a
+hand-rolled nginx pod) and why the AWS-native Gateway API implementations were
+not candidates — none of them run on Kind — is in the pull request that
+delivered this stage.
+
 ### What Gets Built — chaos and scale
 
 **Chaos engineering with Chaos Mesh.** Chaos Mesh is deployed to the Kind cluster. A `chaos/` directory contains scenario manifests:
@@ -165,8 +178,9 @@ stadiums resolved or zero did, which is what `smoke-test.sh` asserts. The
 upstream_poll_failures_total{format, reason}
 upstream_cache_age_seconds{format}
 upstream_healthy{format}
-weather_upstream_requests_total
-weather_upstream_failures_total{reason}
+collector_capture_requests_total{collector}
+collector_capture_failures_total{collector, reason}
+collector_auth_failures_total{collector, reason}
 ```
 
 `reason` is one of `http_status`, `timeout`, `transport`, `malformed`, or
@@ -187,12 +201,7 @@ service logs anything today — and chaos criteria need metrics, not prose.
 - `infra/chaos-mesh/` — Chaos Mesh helmfile installation
 - `chaos/scenarios/` — Chaos Mesh scenario manifests with documented hypotheses
 - `tests/load/` — k6 scripts per service
-- `.github/workflows/chaos-test.yml` — chaos + load test job. **Note:** the
-  original design specified a `ready-for-chaos` label, which contradicts the CI
-  philosophy settled in 5A ("no label or manual gate" — see CLAUDE.md). Chaos and
-  30-minute soak runs are genuinely expensive in a way `integration-test` is not,
-  so a manual trigger may be the right exception — but decide it explicitly and
-  record the reasoning. `workflow_dispatch` is worth considering over a label.
+- `.github/workflows/chaos-test.yml` — **decided: `workflow_dispatch` only** — see the decisions table above.
 - `docs/chaos-runbook.md` — how to run scenarios manually, how to read results, known failure modes
 - `docs/scale-baselines.md` — documented performance baselines per service, updated after each phase
 

@@ -7,6 +7,7 @@ from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import metrics
+from .auth import require_bearer_token
 from .client import fetch_weather_for_coords
 from .stadiums import STADIUMS
 
@@ -21,6 +22,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+# Registered as a call rather than a decorator so auth.py never imports main —
+# the dependency runs one way only.
+app.middleware("http")(require_bearer_token)
 
 
 @app.get("/health")
