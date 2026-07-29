@@ -52,8 +52,16 @@ spec:
   stressors:
     memory:
       workers: 1
-      # 49MiB idle + 190MB ≈ 239MiB of the 256Mi limit ≈ 0.93 — high enough
-      # to press hard and sustain it for the whole window, but low enough
-      # that the OOM killer never fires and the container survives.
+      # Sized to SURVIVE, not to be OOM-killed. weather idles at ~49 MiB
+      # against a 256 MiB limit, so 190 MB holds working-set at ~239 MiB
+      # (ratio ~0.93) — high enough to prove real pressure, low enough that
+      # the stressor is not killed on contact.
+      #
+      # An earlier version used 400MB, expecting the cgroup to OOM-kill it.
+      # It did — in about ONE SECOND. cadvisor is scraped every 60s (global
+      # scrape_interval: 1m), so that spike fell between samples and the ratio
+      # never rose above ~0.20. Verified across 120s, 210s, and 450s runs.
+      # A sub-second pulse cannot be caught by a 60s scrape no matter how long
+      # the scenario runs.
       size: 190MB
   duration: 180s
