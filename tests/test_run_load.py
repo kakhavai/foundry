@@ -38,6 +38,15 @@ def test_only_breakpoint_expects_a_threshold_breach():
     assert breaching == {"breakpoint"}
 
 
+def test_every_shape_has_a_script_file():
+    """A shape whose .js file is missing must be a loud error, not a silently
+    shorter --all run. Held back from Part A on purpose: there, it could only
+    have passed against placeholder files."""
+    for shape, cfg in rl.SHAPES.items():
+        path = ROOT / "tests" / "load" / cfg["script"]
+        assert path.exists(), f"{shape} names a missing script: {cfg['script']}"
+
+
 # ── render_job ────────────────────────────────────────────────────────────────
 
 def test_render_job_runs_the_shape_s_own_script():
