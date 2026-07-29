@@ -17,9 +17,9 @@
 
 - **Python** `>=3.12` everywhere. Line length 88, ruff lint `select = ["E", "F", "I"]`.
 - **Coverage gate is 80%** line + branch, no omitted files. Applies to `libs/collector-core/` as well as `services/weather/`.
-- **Do not use the term "NFL" anywhere** in code, comments, docs, or test names. The project does not hold those rights. Use "pro football", "the league", or "stadium".
+- **Do not use the term "NFL" anywhere** in code, comments, docs, or test names. The project does not hold those rights. Use "pro football", "the league", or "stadium". **Exemption (ruled 2026-07-29):** third-party proper nouns we do not control — the `nflverse`/`nfldata` URL in the schedule adapter, package names, upstream field names — are exempt, because they are identifiers rather than prose. Do not rewrite the schedule URL; it will 404.
 - **Every `pyproject.toml` dependency change must be followed by `uv lock` in that directory**, with the regenerated `uv.lock` committed in the same commit. Verify with `uv lock --check` (exit 0 = current, exit 1 = stale).
-- **No new GitHub Actions workflows or composite actions.** Existing `weather.yml` and `platform-tests` cover this work.
+- **No new GitHub Actions workflow or composite-action FILES.** Existing `weather.yml` and the existing composite actions are extended in place (Task 16 steps 9-10): a `collector-core` lint+test job inside `weather.yml`, `libs/**` added to its path filters, and an optional `context` input on `.github/actions/build-push`. Adding a new `.yml` under `.github/workflows/` or `.github/actions/` is out of scope.
 - **`/health` and `/metrics` stay auth-exempt.** The kubelet's probes and Prometheus's annotation scrape cannot carry a token.
 - **The lake is append-only.** Never mutate or delete an object in place. A correction is a new object with a later `captured_at`.
 - **A collector never proxies.** `/signals` reads the in-memory cache only. An upstream outage degrades freshness, never availability.
@@ -89,6 +89,8 @@ open     -> retractable_open     closed -> retractable_closed
 | `helm/values/weather/values.yaml` | Lake + cadence env vars |
 | `scripts/deploy-local.py` | MinIO credentials Secret |
 | `scripts/smoke-test.sh` | Assertions rewritten against `/signals` |
+| `.github/workflows/weather.yml` | `libs/**` path filter, collector-core lint+test jobs, repo-root build context |
+| `.github/actions/build-push/action.yml` | Optional `context` and `dockerfile` inputs, defaulting to today's behaviour |
 | `docs/architecture/phase-8-data-source-collectors.md` | Amend coverage window + 8A dependencies |
 | `CLAUDE.md`, `docs/onboarding.md` | Workspace-member Dockerfile pattern |
 | `pyproject.toml` (repo root) | Declare the uv workspace |
@@ -3807,7 +3809,114 @@ Any place in `scripts/deploy-local.py` or `scripts/stack-up.py` that runs
          "-t", f"{service}:local", "."])
 ```
 
-- [ ] **Step 7: Verify end to end on Kind**
+- [ ] **Step 7: Teach `build-push` about the build context**
+
+Without this the image build breaks **after merge to main**, not in the PR —
+`integration-test` never exercises `build-push`. Add an optional input to
+`.github/actions/build-push/action.yml` so existing callers are unaffected:
+
+```yaml
+inputs:
+  service:
+    required: true
+    description: Service name, used as the build context path (e.g. weather)
+  context:
+    required: false
+    default: ''
+    description: >-
+      Docker build context. Defaults to services/<service>. Collectors that
+      depend on the libs/collector-core workspace member must pass '.' so the
+      library is inside the context.
+  dockerfile:
+    required: false
+    default: ''
+    description: Dockerfile path. Defaults to <context>/Dockerfile.
+```
+
+and replace the `docker/build-push-action@v6` step's `context`:
+
+```yaml
+    - uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.context || format('services/{0}', inputs.service) }}
+        file: ${{ inputs.dockerfile || format('services/{0}/Dockerfile', inputs.service) }}
+        push: true
+        tags: ${{ inputs.image-name }}:${{ inputs.tag }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+```
+
+`player-projections` and `foundry-cli` pass neither input and keep their current
+behaviour exactly.
+
+- [ ] **Step 8: Point weather's build at the repo root**
+
+In `.github/workflows/weather.yml`, the `build-push` job's step becomes:
+
+```yaml
+      - uses: ./.github/actions/build-push
+        with:
+          service: weather
+          context: .
+          dockerfile: services/weather/Dockerfile
+          image-name: ghcr.io/kakhavai/foundry/weather
+          tag: ${{ github.sha }}
+```
+
+- [ ] **Step 9: Run the shared library's tests in CI**
+
+Still in `.github/workflows/weather.yml`, add `libs/**` to **both** the
+`pull_request` and `push` path filters:
+
+```yaml
+      - 'libs/**'
+```
+
+and add two jobs reusing the existing composite actions:
+
+```yaml
+  collector-core-lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-lint
+        with:
+          working-directory: libs/collector-core
+
+  collector-core-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-test
+        with:
+          working-directory: libs/collector-core
+```
+
+Then gate the image build on them:
+
+```yaml
+  build-push:
+    needs: [lint, test, helm-lint, collector-core-lint, collector-core-test]
+```
+
+The library's tests living under a workflow named for a service is a known
+oddity, accepted to avoid a new workflow file. When a second collector consumes
+`collector-core`, revisit.
+
+- [ ] **Step 10: Verify the composite action still resolves**
+
+```bash
+python -c "import yaml,sys; yaml.safe_load(open('.github/actions/build-push/action.yml')); yaml.safe_load(open('.github/workflows/weather.yml')); print('workflow YAML OK')"
+docker build -f services/weather/Dockerfile -t weather:ci-context-test .
+```
+
+Expected: YAML parses; the build succeeds from the repo root.
+
+- [ ] **Step 11: Verify end to end on Kind**
 
 ```bash
 python scripts/stack-up.py
@@ -3818,10 +3927,10 @@ curl -sf -H "Authorization: Bearer local-dev-token" \
 
 Expected: MinIO `Running`; `/catalog` returns the collector description.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
-git add services/weather/Dockerfile helm/ infra/ scripts/
+git add services/weather/Dockerfile helm/ infra/ scripts/ .github/
 git commit -m "feat(infra): workspace-aware image build, MinIO lake for the local stack"
 ```
 
@@ -3980,6 +4089,7 @@ Do not skip it.
 - [ ] Both contract snapshots regenerated; `smoke-test.sh` green against the new paths
 - [ ] Phase 8 doc amended on the coverage window and 8A dependencies
 - [ ] `CLAUDE.md` and `docs/onboarding.md` document the workspace-member build
+- [ ] `collector-core` lint+test running in CI; `build-push` builds weather from the repo root
 - [ ] `uv lock --check` clean in every changed directory
 - [ ] Full suite green, coverage gates met, `integration-test` passing
 - [ ] `superpowers:pr-uat` run before the PR opens
