@@ -71,7 +71,10 @@ open     -> retractable_open     closed -> retractable_closed
 | `services/weather/weather/environment.py` | Roof + venue -> `environment` enum |
 | `services/weather/weather/playability.py` | Derived `kicking_difficulty`, `deep_pass_penalty`, `ball_security_risk` |
 | `services/weather/weather/capture.py` | Orchestration: schedule -> environment -> forecast -> envelope -> lake + cache |
-| `services/weather/weather/scheduler.py` | The capture loop and the T−90 min perishable escalation |
+| `libs/collector-core/collector_core/auth.py` | Shared bearer-token middleware |
+| `libs/collector-core/collector_core/metrics.py` | Shared fleet metrics, parameterized by collector |
+| `libs/collector-core/collector_core/routes.py` | Mountable router for the five standard routes |
+| `libs/collector-core/collector_core/scheduler.py` | The capture loop and the perishable escalation |
 | `infra/grafana-stack/values/minio.yaml` | MinIO release values for the local stack |
 | `tests/test_signal_envelope_conformance.py` | Platform-level envelope conformance |
 
@@ -3211,11 +3214,349 @@ git commit -m "feat(weather): five contract routes plus convergence; remove stad
 
 ---
 
-## Task 14: Background capture scheduler
+## Task 14: Extract auth and metrics into `collector-core`
 
 **Files:**
-- Create: `services/weather/weather/scheduler.py`, `services/weather/tests/test_scheduler.py`
+- Create: `libs/collector-core/collector_core/metrics.py`, `libs/collector-core/collector_core/auth.py`, `libs/collector-core/tests/test_metrics.py`, `libs/collector-core/tests/test_auth.py`
+- Modify: `services/weather/weather/metrics.py` (becomes a thin binding), `services/weather/weather/auth.py` (becomes a thin binding), call sites in `services/weather/weather/capture.py` and `main.py`
+
+**Interfaces:**
+- Consumes: nothing
+- Produces:
+  - `CollectorMetrics(collector: str)` with `.capture_attempt()`, `.capture_failure(exc)`, `.auth_failure(reason)`, `.coverage(signal_type, ratio)`, `.staleness(seconds)`, and the static classifier `CollectorMetrics.reason_for(exc) -> str`
+  - `build_bearer_middleware(metrics: CollectorMetrics, exempt_paths: frozenset[str])` returning the ASGI middleware callable
+  - `DEFAULT_EXEMPT_PATHS: frozenset[str] = frozenset({"/health", "/metrics"})`
+
+**Why this moves.** Both are identical across every collector by definition rather than by coincidence. `weather/metrics.py`'s own docstring promises that every collector reports `collector_capture_*` with a `collector` label "so one Prometheus query spans the fleet instead of twenty-six service-specific series" — a promise a per-service copy cannot keep, because nothing stops copy number seven from renaming an instrument. Auth is the same shape: middleware so a route added later is protected by default, and that default deserves exactly one implementation.
+
+**This is a behaviour-preserving refactor.** The existing weather auth, telemetry, and failure-metric tests must keep passing with import-path changes only. If a test needs its *assertions* altered, something has gone wrong — stop and report rather than editing the assertion.
+
+- [ ] **Step 1: Write the failing tests for the shared modules**
+
+`libs/collector-core/tests/test_metrics.py`:
+
+```python
+import httpx
+import pytest
+
+from collector_core.metrics import CollectorMetrics
+
+
+def test_reason_for_classifies_http_status():
+    request = httpx.Request("GET", "https://example.invalid")
+    response = httpx.Response(503, request=request)
+    exc = httpx.HTTPStatusError("boom", request=request, response=response)
+    assert CollectorMetrics.reason_for(exc) == "http_status"
+
+
+def test_timeout_is_classified_before_transport():
+    """TimeoutException subclasses RequestError. It must be tested first or
+    every timeout is mislabelled `transport` and the two collapse into one
+    bucket, hiding a rate-limited upstream behind a connectivity story."""
+    assert CollectorMetrics.reason_for(httpx.TimeoutException("x")) == "timeout"
+
+
+def test_reason_for_classifies_transport():
+    assert CollectorMetrics.reason_for(httpx.ConnectError("x")) == "transport"
+
+
+def test_reason_for_classifies_malformed():
+    for exc in (KeyError("x"), TypeError("x"), ValueError("x")):
+        assert CollectorMetrics.reason_for(exc) == "malformed"
+
+
+def test_reason_for_falls_back_to_unknown():
+    assert CollectorMetrics.reason_for(RuntimeError("x")) == "unknown"
+
+
+def test_each_instance_carries_its_own_collector_label():
+    assert CollectorMetrics("weather").collector == "weather"
+    assert CollectorMetrics("betting-lines").collector == "betting-lines"
+
+
+def test_recording_is_inert_without_a_meter_provider():
+    """OTel is not initialised in tests. Recording must be a no-op, not raise —
+    a service that crashes when unobserved is worse than an unobserved one."""
+    m = CollectorMetrics("weather")
+    m.capture_attempt()
+    m.capture_failure(httpx.TimeoutException("x"))
+    m.auth_failure("missing")
+    m.coverage("venue_forecast_kickoff", 0.5)
+    m.staleness(12.0)
+```
+
+`libs/collector-core/tests/test_auth.py`:
+
+```python
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from collector_core.auth import DEFAULT_EXEMPT_PATHS, build_bearer_middleware
+from collector_core.metrics import CollectorMetrics
+
+TOKEN = "test-token"
+
+
+def build_app(monkeypatch, token: str | None = TOKEN) -> FastAPI:
+    if token is None:
+        monkeypatch.delenv("COLLECTOR_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("COLLECTOR_TOKEN", token)
+    app = FastAPI()
+    app.middleware("http")(
+        build_bearer_middleware(CollectorMetrics("weather"), DEFAULT_EXEMPT_PATHS)
+    )
+
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
+    @app.get("/signals")
+    async def signals():
+        return {"envelopes": []}
+
+    return app
+
+
+def test_exempt_path_needs_no_token(monkeypatch):
+    with TestClient(build_app(monkeypatch)) as c:
+        assert c.get("/health").status_code == 200
+
+
+def test_missing_token_is_rejected(monkeypatch):
+    with TestClient(build_app(monkeypatch)) as c:
+        assert c.get("/signals").status_code == 401
+
+
+def test_correct_token_is_accepted(monkeypatch):
+    with TestClient(build_app(monkeypatch)) as c:
+        r = c.get("/signals", headers={"Authorization": f"Bearer {TOKEN}"})
+        assert r.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "header", ["", "Bearer", "Bearer ", "Basic abc", TOKEN, "Bearer  "]
+)
+def test_malformed_authorization_header_is_rejected(monkeypatch, header):
+    with TestClient(build_app(monkeypatch)) as c:
+        r = c.get("/signals", headers={"Authorization": header})
+        assert r.status_code == 401
+
+
+def test_extra_spaces_between_scheme_and_token_are_tolerated(monkeypatch):
+    """RFC 7235 permits more than one space. Folding the extras into the token
+    would reject a well-formed header."""
+    with TestClient(build_app(monkeypatch)) as c:
+        r = c.get("/signals", headers={"Authorization": f"Bearer   {TOKEN}"})
+        assert r.status_code == 200
+
+
+def test_wrong_token_is_rejected(monkeypatch):
+    with TestClient(build_app(monkeypatch)) as c:
+        r = c.get("/signals", headers={"Authorization": "Bearer wrong"})
+        assert r.status_code == 401
+
+
+def test_rejection_carries_the_www_authenticate_header(monkeypatch):
+    with TestClient(build_app(monkeypatch)) as c:
+        r = c.get("/signals")
+        assert r.headers["WWW-Authenticate"] == "Bearer"
+
+
+def test_unconfigured_token_fails_closed_with_503(monkeypatch):
+    """An absent or empty secret must close the collector, never open it. A
+    Secret that never syncs is then loud rather than an open data route."""
+    with TestClient(build_app(monkeypatch, token=None)) as c:
+        assert c.get("/signals").status_code == 503
+
+
+def test_unconfigured_still_serves_exempt_paths(monkeypatch):
+    """The kubelet probe and the metrics scrape cannot carry a token, so a
+    missing secret must be a loud 503 on data routes rather than a crash loop
+    with no metrics to explain it."""
+    with TestClient(build_app(monkeypatch, token=None)) as c:
+        assert c.get("/health").status_code == 200
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `cd libs/collector-core && uv run pytest tests/test_metrics.py tests/test_auth.py -v`
+Expected: FAIL — `ModuleNotFoundError` for `collector_core.metrics` and `collector_core.auth`.
+
+The library now needs `fastapi` and the OTel API. Add to `libs/collector-core/pyproject.toml` `[project] dependencies`: `fastapi`, `opentelemetry-api`. Add `httpx` to `[dependency-groups] dev` if not already resolvable (FastAPI's `TestClient` requires it). Then run `uv lock` from the **repo root** — one workspace lockfile — and commit the regenerated root `uv.lock` in the same commit.
+
+- [ ] **Step 3: Move metrics into the library, parameterized by collector**
+
+Port `services/weather/weather/metrics.py` into `libs/collector-core/collector_core/metrics.py` as a `CollectorMetrics` class. Instrument names, descriptions, label keys, and the `_reason` branch **ordering** carry over unchanged — the comment explaining that `TimeoutException` must be tested before `RequestError` moves with the code, because it documents a real ordering hazard. The only change is that `collector` becomes an instance attribute rather than a module constant.
+
+Keep the module docstring's explanation of why `player-projections` is deliberately excluded from the collector metric names — it consumes a generator's output rather than capturing a signal, so it is not a collector.
+
+- [ ] **Step 4: Move auth into the library**
+
+Port `services/weather/weather/auth.py` into `libs/collector-core/collector_core/auth.py` as `build_bearer_middleware(metrics, exempt_paths)`. Carry over verbatim: `secrets.compare_digest`, the `.encode()` before comparison and its comment, the `split(None, 1)` header parse with its RFC 7235 comment, the 503-on-unconfigured behaviour, and the `WWW-Authenticate: Bearer` response header.
+
+The docstring explaining why enforcement lives in-process rather than at the gateway moves too — that reasoning is fleet-wide, not weather-specific. So does the note that the guarantee is HTTP-scoped and a future WebSocket route would need its own check.
+
+- [ ] **Step 5: Reduce the weather modules to bindings**
+
+`services/weather/weather/metrics.py`:
+
+```python
+"""weather's binding to the shared collector metrics."""
+
+from collector_core.metrics import CollectorMetrics
+
+COLLECTOR = "weather"
+metrics = CollectorMetrics(COLLECTOR)
+```
+
+`services/weather/weather/auth.py`:
+
+```python
+"""weather's binding to the shared bearer-token middleware."""
+
+from collector_core.auth import DEFAULT_EXEMPT_PATHS, build_bearer_middleware
+
+from .metrics import metrics
+
+EXEMPT_PATHS = DEFAULT_EXEMPT_PATHS
+require_bearer_token = build_bearer_middleware(metrics, EXEMPT_PATHS)
+```
+
+Update every call site in `services/weather/weather/` that used the old module-level functions — `capture.py` and `main.py` — to call methods on `metrics` instead.
+
+- [ ] **Step 6: Confirm the weather suite passes on assertions alone**
+
+Run: `cd services/weather && uv run pytest -v`
+
+The existing auth, telemetry, and failure-metric tests must pass with import-path changes only. **If any assertion needs altering, stop and report** — that means behaviour changed, and this task is a refactor.
+
+Two contract tests are expected to fail on stale snapshots (Task 17's job). Confirm those are the only failures.
+
+- [ ] **Step 7: Mutation-check the moved security code**
+
+The auth logic just changed files; prove it still bites. For each, apply to `libs/collector-core/collector_core/auth.py`, run **both** suites, note which tests fail, restore:
+
+1. Return `None` (allow) instead of a rejection when the token header is absent.
+2. Return 200 instead of 503 when the token is unconfigured.
+3. Add `/signals` to `DEFAULT_EXEMPT_PATHS`.
+
+Each must fail tests in **both** `libs/collector-core` and `services/weather`. If any fails in neither suite, stop and report.
+
+Also try replacing `secrets.compare_digest` with `==`. No test will fail — timing-safety is not observable from a test — so record that as a known limitation rather than a finding, and do not weaken the code.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add libs/collector-core services/weather uv.lock
+git commit -m "refactor(collector-core): share bearer auth and fleet metrics"
+```
+
+---
+
+## Task 15: Extract the standard collector routes into a mountable router
+
+**Files:**
+- Create: `libs/collector-core/collector_core/routes.py`, `libs/collector-core/tests/test_collector_routes.py`
+- Modify: `services/weather/weather/main.py` (mounts the shared router, keeps only its own extra route), `services/weather/weather/capture.py` (`CaptureState` moves out)
+
+**Interfaces:**
+- Consumes: `CollectorMetrics` (Task 14), `Envelope`, `CadenceClass`, `RefreshGate`, `LakeWriter`
+- Produces:
+  - `CaptureState` — moved here from `weather.capture`; holds `.envelopes: dict[str, Envelope]` and `.last_capture_at: datetime | None`
+  - `CollectorSpec(name, cadence_class, signal_types, supported_filters, capture, state, lake, metrics, refresh_gate, signal_matches)`
+  - `build_collector_router(spec: CollectorSpec) -> APIRouter` serving `/health`, `/metrics`, `/catalog`, `/signals`, `/refresh`
+  - `UNIVERSAL_FILTERS: tuple[str, ...] = ("season", "week", "signal_type")`
+
+**Scope boundary — the five standard routes only.** `/signals/convergence` is weather's own extra route and **stays in `services/weather/weather/main.py`**. The phase doc lists it under weather's "extra routes beyond the standard five"; reading a lake series for one game is not fleet-general behaviour. Do not move it.
+
+**How per-collector filtering works.** The router applies the universal filters itself — `season` and `week` against the envelope's `scope`, `signal_type` against the envelope's type. Collector-specific row filtering (weather's `game_id` and `team`) comes from the spec as a predicate:
+
+```python
+signal_matches: Callable[[dict, Mapping[str, str]], bool]
+```
+
+The router hands it each signal row plus the collector-specific query parameters and lets the collector decide. A query parameter that is neither universal nor listed in `supported_filters` returns **422**. That is what makes `player_id` fail loudly against a collector emitting no players, rather than being ignored and returning everything — the same reasoning `player-projections` already applies to `pos=FLEX`.
+
+- [ ] **Step 1: Write the failing test**
+
+`libs/collector-core/tests/test_collector_routes.py`. Build a fake two-signal-type collector with a stub capture and a spy lake, then cover:
+
+```python
+def test_catalog_reports_the_spec(client): ...
+def test_catalog_last_capture_at_is_null_before_any_capture(client): ...
+def test_catalog_reports_coverage_per_signal_type(client): ...
+def test_signals_returns_all_types_by_default(client): ...
+def test_signals_filters_by_signal_type(client): ...
+def test_unknown_signal_type_is_422_not_empty(client): ...
+def test_unsupported_filter_is_422(client): ...
+def test_supported_collector_filter_is_delegated_to_the_predicate(client): ...
+def test_season_and_week_filter_against_envelope_scope(client): ...
+def test_refresh_returns_202_and_a_refresh_id(client): ...
+def test_second_refresh_inside_the_floor_is_429_with_retry_after(client): ...
+def test_refresh_updates_state_and_last_capture_at(client): ...
+def test_health_returns_ok(client): ...
+def test_metrics_returns_prometheus_text(client): ...
+```
+
+Write every body out in full. `services/weather/tests/test_routes.py` is the working reference this abstraction is being extracted from — follow the shapes it already proves, including exact status codes and body keys.
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cd libs/collector-core && uv run pytest tests/test_collector_routes.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'collector_core.routes'`
+
+- [ ] **Step 3: Write the router**
+
+Move the handler bodies out of `services/weather/weather/main.py` into `build_collector_router`, replacing weather-specific references with `spec` lookups. Preserve exactly: the 422 on unknown `signal_type`, the 422 on an unsupported filter, the 202-with-`refresh_id` body, the 429 carrying a `Retry-After` header, and `/catalog`'s field set including `last_capture_at` and the per-signal-type coverage block.
+
+`CaptureState` moves from `weather/capture.py` into this module; `capture.py` imports it from here so there is one definition.
+
+- [ ] **Step 4: Rewrite weather's `main.py` to mount it**
+
+`services/weather/weather/main.py` retains only: the lifespan with its OTel guard, the auth middleware binding, its `CollectorSpec` construction (including a `signal_matches` predicate for `game_id` and `team`), the mounted router, and `/signals/convergence`. Everything else moves out. It should land well under a hundred lines.
+
+- [ ] **Step 5: Confirm weather's route tests pass unchanged**
+
+Run: `cd services/weather && uv run pytest -v`
+
+`services/weather/tests/test_routes.py` asserts behaviour rather than implementation, so it must pass **without assertion changes**. That is the proof the extraction preserved semantics. Import-path and fixture-wiring changes are fine; a changed expected status code or body shape is not — stop and report if you find yourself needing one.
+
+Two contract tests remain expected-failing until Task 17.
+
+- [ ] **Step 6: Mutation-check across the boundary**
+
+Apply each to `libs/collector-core/collector_core/routes.py`, run **both** suites, note failures, restore:
+
+1. Accept an unknown `signal_type` and return an empty list.
+2. Accept an unsupported filter silently.
+3. Drop the `Retry-After` header from the 429.
+4. Skip updating `last_capture_at` on a successful refresh.
+
+Each must fail tests in `libs/collector-core`. Mutations 1 and 2 must **also** fail in `services/weather` — that is what proves the shared guard still protects the real service rather than only its own unit tests.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add libs/collector-core services/weather
+git commit -m "refactor(collector-core): mountable router for the standard collector routes"
+```
+
+---
+
+## Task 16: Background capture scheduler (in collector-core)
+
+**Files:**
+- Create: `libs/collector-core/collector_core/scheduler.py`, `libs/collector-core/tests/test_scheduler.py`
 - Modify: `services/weather/weather/main.py` (start and stop the loop in `lifespan`)
+
+**The loop is fleet machinery, not weather's.** The phase doc names cadence
+scheduling as shared capture machinery. `next_kickoff` is the only weather-shaped
+piece — it reads `forecast_valid_at` out of signal rows — so it is supplied by the
+caller as a `next_event_at` callable rather than baked in. Everything else (the
+loop, the escalation decision, staleness recording, surviving a failed capture)
+is identical for every collector.
 
 **Interfaces:**
 - Consumes: `next_interval` / `CadenceClass` (Task 5), `capture_week` / `CaptureState` (Task 12)
@@ -3477,7 +3818,7 @@ git commit -m "feat(weather): background capture loop with perishable escalation
 
 ---
 
-## Task 15: Regenerate contracts and add platform envelope conformance
+## Task 17: Regenerate contracts and add platform envelope conformance
 
 **Files:**
 - Modify: `contracts/openapi/weather.json`, `contracts/responses/weather.json`, `services/weather/tests/test_contract.py`
@@ -3677,7 +4018,7 @@ git commit -m "feat(contracts): regenerate weather snapshots, add envelope confo
 
 ---
 
-## Task 16: Docker, Helm, MinIO, and local deploy
+## Task 18: Docker, Helm, MinIO, and local deploy
 
 **Files:**
 - Modify: `services/weather/Dockerfile`, `helm/values/weather/values.yaml`, `infra/grafana-stack/helmfile.yaml`, `scripts/deploy-local.py`, `scripts/stack-up.py`
@@ -4007,7 +4348,7 @@ git commit -m "feat(infra): workspace-aware image build, MinIO lake for the loca
 
 ---
 
-## Task 17: Smoke test and documentation
+## Task 19: Smoke test and documentation
 
 **Files:**
 - Modify: `scripts/smoke-test.sh`, `docs/architecture/phase-8-data-source-collectors.md`, `CLAUDE.md`, `docs/onboarding.md`, `README.md`
