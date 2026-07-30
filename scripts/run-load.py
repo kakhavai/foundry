@@ -265,15 +265,15 @@ def interpret_exit(shape: str, code: int) -> tuple[bool, str]:
     if code == 0:
         if expects_breach:
             return False, (
-                "NO-BREAKPOINT — the top rung never crossed 1% errors, so this "
+                "NO-BREAKPOINT -- the top rung never crossed 1% errors, so this "
                 "run measured nothing; raise the rungs in breakpoint.js"
             )
         return True, "PASS"
     if code == K6_EXIT_THRESHOLD_CROSSED:
         if expects_breach:
-            return True, "MEASURED — threshold crossed as designed"
-        return False, "FAIL — a threshold was crossed"
-    return False, f"ERROR — k6 exited {code}"
+            return True, "MEASURED -- threshold crossed as designed"
+        return False, "FAIL -- a threshold was crossed"
+    return False, f"ERROR -- k6 exited {code}"
 
 
 def first_breached_threshold(summary: dict) -> str | None:
@@ -483,7 +483,7 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
             if needs_fallback(proc.returncode, SUMMARY_MARKER in logs):
                 print(
                     f"  follow stream looked incomplete (exit {proc.returncode}, "
-                    f"marker seen: {SUMMARY_MARKER in logs}) — re-fetching settled logs"
+                    f"marker seen: {SUMMARY_MARKER in logs}) -- re-fetching settled logs"
                 )
                 logs = kubectl(["logs", f"job/{job_name(shape)}"]).stdout
         else:
@@ -493,13 +493,13 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
             # attach to a stream with nothing left to send, so this is the
             # normal path for a quick run, not a failure; go straight to the
             # checked fetch.
-            print("  pod already terminated before follow would have attached — fetching settled logs directly")
+            print("  pod already terminated before follow would have attached -- fetching settled logs directly")
             logs = kubectl(["logs", f"job/{job_name(shape)}"]).stdout
 
         text, payload = split_summary(logs)
         if SUMMARY_MARKER not in logs:
             print(
-                f"  WARNING: no summary marker in logs for {shape} — "
+                f"  WARNING: no summary marker in logs for {shape} -- "
                 f"{shape}.json will not be written"
             )
 
@@ -515,8 +515,8 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
         if restarts_after != restarts_before:
             passed = False
             verdict += (
-                f" | RESTARTED — player-projections restart count moved "
-                f"{restarts_before} → {restarts_after}"
+                f" | RESTARTED -- player-projections restart count moved "
+                f"{restarts_before} -> {restarts_after}"
             )
         else:
             print(f"  restart count unchanged at {restarts_after}")
