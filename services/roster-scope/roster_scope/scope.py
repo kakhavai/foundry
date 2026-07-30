@@ -24,6 +24,7 @@ Three decisions here are load-bearing and none are obvious:
    entire fleet pins against.
 """
 
+import asyncio
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -537,8 +538,25 @@ def signal_matches(row: dict, params) -> bool:
     return True
 
 
-def _membership_rows(spec, scope_version: int | None) -> tuple[int | None, list[dict]]:
-    """Rows for a version: from memory for the latest, from the lake otherwise."""
+def _read_version_from_lake(spec, scope_version: int, season: int, week: int):
+    """The blocking half of the lookup, run in a worker thread by the caller."""
+    keys = spec.lake.list_keys(spec.name, MEMBERSHIP_SIGNAL, season, week)
+    for key in reversed(keys):
+        body = spec.lake.read(key)
+        if int(body.get("scope", {}).get("scope_version", -1)) == scope_version:
+            return list(body.get("signals", []))
+    return None
+
+
+async def _membership_rows(
+    spec, scope_version: int | None
+) -> tuple[int | None, list[dict]]:
+    """Rows for a version: from memory for the latest, from the lake otherwise.
+
+    The lake branch goes through `asyncio.to_thread` for the same reason
+    `capture.py` does — boto3 is synchronous, and a slow object store must not
+    freeze the event loop and take `/health` down with it.
+    """
     envelope = spec.state.envelopes.get(MEMBERSHIP_SIGNAL)
     latest = None if envelope is None else envelope.scope.get("scope_version")
 
@@ -548,21 +566,23 @@ def _membership_rows(spec, scope_version: int | None) -> tuple[int | None, list[
     season = spec.default_scope["season"]
     week = spec.default_scope["week"]
     try:
-        keys = spec.lake.list_keys(spec.name, MEMBERSHIP_SIGNAL, season, week)
-        for key in reversed(keys):
-            body = spec.lake.read(key)
-            if int(body.get("scope", {}).get("scope_version", -1)) == scope_version:
-                return scope_version, list(body.get("signals", []))
+        rows = await asyncio.to_thread(
+            _read_version_from_lake, spec, scope_version, season, week
+        )
     except Exception:  # noqa: BLE001 — an unreadable lake is a 404, not a 500
-        pass
+        rows = None
+    if rows is not None:
+        return scope_version, rows
     raise HTTPException(
         status_code=404, detail=f"no resolved scope for version {scope_version}"
     )
 
 
-def scope_players_view(spec, *, scope_version: int | None, status: str | None) -> dict:
+async def scope_players_view(
+    spec, *, scope_version: int | None, status: str | None
+) -> dict:
     """`GET /scope/players` — the list every other collector calls for."""
-    version, rows = _membership_rows(spec, scope_version)
+    version, rows = await _membership_rows(spec, scope_version)
     if status is not None:
         rows = [r for r in rows if r.get("membership_status") == status]
     return {
@@ -611,7 +631,15 @@ def scope_rules_view(spec) -> dict:
     }
 
 
-def scope_diff_view(spec, *, version_from: int, version_to: int) -> dict:
+def _read_change_events(spec, season: int, week: int) -> list[dict]:
+    """The blocking half, run in a worker thread by the caller."""
+    events: list[dict] = []
+    for key in spec.lake.list_keys(spec.name, CHANGE_SIGNAL, season, week):
+        events.extend(spec.lake.read(key).get("signals", []))
+    return events
+
+
+async def scope_diff_view(spec, *, version_from: int, version_to: int) -> dict:
     """`GET /scope/diff` — transitions in `(from, to]`.
 
     Half-open deliberately: a diff from 4 to 6 answers "what changed since I
@@ -625,10 +653,8 @@ def scope_diff_view(spec, *, version_from: int, version_to: int) -> dict:
 
     season = spec.default_scope["season"]
     week = spec.default_scope["week"]
-    events: list[dict] = []
     try:
-        for key in spec.lake.list_keys(spec.name, CHANGE_SIGNAL, season, week):
-            events.extend(spec.lake.read(key).get("signals", []))
+        events = await asyncio.to_thread(_read_change_events, spec, season, week)
     except Exception:  # noqa: BLE001 — fall back to what this process captured
         events = []
     if not events:

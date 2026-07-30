@@ -5,7 +5,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from collector_core.coverage import CoverageAccumulator
 
-from roster_scope.adapters.depth_chart import parse_depth_chart_csv
+from roster_scope.adapters.depth_chart import (
+    DepthChart,
+    DepthChartRow,
+    parse_depth_chart_csv,
+)
 from roster_scope.adapters.identity import (
     PlayerRef,
     StubPlayerIdentityResolver,
@@ -38,14 +42,12 @@ from .conftest import (
 )
 
 
-def charts_from(rows, *, season=2026, week=1, fetched_at=NOW):
-    return parse_depth_chart_csv(
-        depth_csv(rows), season=season, week=week, fetched_at=fetched_at
-    )
+def charts_from(rows, *, fetched_at=NOW):
+    return parse_depth_chart_csv(depth_csv(rows), fetched_at=fetched_at)
 
 
-def charts_from_csv(text, *, season=2026, week=1, fetched_at=NOW):
-    return parse_depth_chart_csv(text, season=season, week=week, fetched_at=fetched_at)
+def charts_from_csv(text, *, fetched_at=NOW):
+    return parse_depth_chart_csv(text, fetched_at=fetched_at)
 
 
 async def run_resolve(
@@ -124,14 +126,27 @@ def test_ordered_candidates_collapses_media_position_labels():
     assert names == ["First Receiver", "Second Receiver", "Third Receiver"]
 
 
-def test_ordered_candidates_expands_a_co_listing_in_place():
-    charts = charts_from(
-        [
-            depth_row("KC", "WR", 1, "Solo Starter", jersey="10"),
-            depth_row("KC", "WR", 2, "Zed Young OR Abe Older", jersey="88"),
-        ]
+def _chart_with_jerseys() -> DepthChart:
+    """Built directly rather than parsed.
+
+    The nflverse feed carries no jersey column, so a parsed chart can only
+    ever produce `None` and would make the co-listing rule below vacuous. The
+    rule is about what `ordered_candidates` does with a number when it *has*
+    one, so the number has to come from somewhere — a future adapter, or a
+    different upstream.
+    """
+    return DepthChart(
+        team="KC",
+        captured_at=NOW,
+        rows=(
+            DepthChartRow("KC", "WR", 1, "Solo Starter", 10),
+            DepthChartRow("KC", "WR", 2, "Zed Young OR Abe Older", 88),
+        ),
     )
-    candidates = ordered_candidates(charts["KC"], "WR")
+
+
+def test_ordered_candidates_expands_a_co_listing_in_place():
+    candidates = ordered_candidates(_chart_with_jerseys(), "WR")
     assert [c.name for c in candidates] == [
         "Solo Starter",
         "Abe Older",
@@ -142,13 +157,9 @@ def test_ordered_candidates_expands_a_co_listing_in_place():
 def test_co_listed_rows_drop_the_jersey_number():
     """Which of `A OR B` owns the number the chart printed is genuinely
     ambiguous, and guessing is worse than absent."""
-    charts = charts_from(
-        [
-            depth_row("KC", "WR", 1, "Solo Starter", jersey="10"),
-            depth_row("KC", "WR", 2, "Zed Young OR Abe Older", jersey="88"),
-        ]
-    )
-    numbers = {c.name: c.jersey_number for c in ordered_candidates(charts["KC"], "WR")}
+    numbers = {
+        c.name: c.jersey_number for c in ordered_candidates(_chart_with_jerseys(), "WR")
+    }
     assert numbers == {"Solo Starter": 10, "Abe Older": None, "Zed Young": None}
 
 
@@ -189,10 +200,12 @@ async def test_a_complete_chart_fills_every_slot():
 async def test_a_short_chart_contributes_one_missing_slot():
     """The spec's own worked example: a team whose chart yields only three
     receivers under a `WR<=4` rule contributes one entry to coverage.missing."""
-    text = full_league_csv()
-    lines = [
-        line for line in text.splitlines() if line != "2026,1,KC,WR,4,KC WR Player4,14,"
-    ]
+    dropped = depth_row("KC", "WR", 4, "KC WR Player4")
+    lines = [line for line in full_league_csv().splitlines() if line != dropped]
+    assert len(lines) == len(full_league_csv().splitlines()) - 1, (
+        "the row this test means to drop was not found — the fixture's shape "
+        "changed and this test would otherwise assert nothing"
+    )
     rows, acc = await run_resolve(charts_from_csv("\n".join(lines) + "\n"))
     coverage = acc.result()
     assert coverage.expected == 416
@@ -298,7 +311,7 @@ async def test_a_manual_override_fills_the_slot_and_is_recorded(monkeypatch):
 
 
 async def test_rows_carry_the_depth_source_freshness():
-    charts = charts_from_csv(full_league_csv(last_updated="2026-09-14T08:00:00Z"))
+    charts = charts_from_csv(full_league_csv(dt="2026-09-14T08:00:00Z"))
     rows, _ = await run_resolve(charts)
     human = next(r for r in rows if r["entity_type"] == "player")
     assert human["depth_source_captured_at"] == "2026-09-14T08:00:00Z"
@@ -488,7 +501,7 @@ async def test_a_real_resolution_never_violates_the_rank_invariant():
 
 def test_stale_depth_charts_counts_teams_not_an_average():
     charts = charts_from_csv(
-        full_league_csv(last_updated="2026-09-15T00:00:00Z"),
+        full_league_csv(dt="2026-09-15T00:00:00Z"),
         fetched_at=NOW,
     )
     assert count_stale_depth_charts(charts, NOW) == 0

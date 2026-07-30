@@ -1,5 +1,8 @@
 """Capture orchestration: versions, the outage paths, and the lake."""
 
+import asyncio
+import contextlib
+import time
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -29,6 +32,73 @@ async def run_capture(lake, *, week=1, now=NOW, deadline=None):
         return await capture_scope(
             2026, week, client=client, lake=lake, now=now, deadline=deadline
         )
+
+
+class BlockingLake(SpyLake):
+    """A lake whose every call blocks the calling thread for `delay` seconds.
+
+    Stands in for an object store that is reachable but not answering —
+    botocore's default connect timeout is 60s and it retries, so "slow" is
+    minutes, not milliseconds.
+    """
+
+    def __init__(self, delay: float = 0.4) -> None:
+        super().__init__()
+        self.delay = delay
+
+    def list_keys(self, *args, **kwargs):
+        time.sleep(self.delay)
+        return super().list_keys(*args, **kwargs)
+
+    def write(self, envelope):
+        time.sleep(self.delay)
+        return super().write(envelope)
+
+
+@respx.mock
+async def test_capture_never_blocks_the_event_loop_on_the_lake():
+    """The regression test for the failure that broke this service's first
+    deploy.
+
+    `capture_scope` is started as a task by `build_collector_app`'s lifespan.
+    Its first statement used to be a *synchronous* boto3 ledger read, so the
+    task ran to completion on the event loop before uvicorn could finish
+    starting — `/health` never answered, readiness never passed, and
+    `kubectl rollout status` timed out at 180s.
+
+    This asserts the property directly rather than the symptom: while a
+    capture against a slow lake is in flight, the event loop must still be
+    servicing other coroutines. A heartbeat that cannot tick is a frozen
+    process, whatever the HTTP layer happens to report.
+    """
+    mock_feed(full_league_csv())
+    slow = BlockingLake(delay=0.4)
+
+    ticks = 0
+
+    async def heartbeat():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    beat = asyncio.create_task(heartbeat())
+    try:
+        await run_capture(slow)
+    finally:
+        beat.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await beat
+
+    # Three blocking calls at 0.4s each (one list_keys, two writes) = ~1.2s of
+    # blocking work. On the event loop the heartbeat would be starved through
+    # all of it; off it, the loop keeps ticking throughout.
+    assert ticks > 10, (
+        f"the event loop only ticked {ticks} times during a capture against a "
+        f"slow lake — the lake I/O is running on the event loop and will "
+        f"freeze /health, exactly as it did on the first deploy"
+    )
+    assert len(slow.writes) == 2, "the capture must still have written"
 
 
 @respx.mock
@@ -90,7 +160,7 @@ async def test_the_version_carries_across_a_week_boundary(lake):
     mock_feed(full_league_csv())
     await run_capture(lake)
     respx.get("https://feed.test/2026.csv").mock(
-        return_value=httpx.Response(200, text=full_league_csv(week=2))
+        return_value=httpx.Response(200, text=full_league_csv())
     )
     second = await run_capture(lake, week=2, now=NOW + timedelta(days=7))
     assert second[MEMBERSHIP_SIGNAL].scope["scope_version"] == 2
@@ -102,9 +172,22 @@ async def test_a_rank_change_between_captures_emits_one_event(lake):
     mock_feed(full_league_csv())
     await run_capture(lake)
 
-    swapped = full_league_csv().replace(
-        "2026,1,KC,WR,1,KC WR Player1,11,\n2026,1,KC,WR,2,KC WR Player2,12,",
-        "2026,1,KC,WR,1,KC WR Player2,11,\n2026,1,KC,WR,2,KC WR Player1,12,",
+    original = depth_csv(
+        [
+            depth_row("KC", "WR", 1, "KC WR Player1"),
+            depth_row("KC", "WR", 2, "KC WR Player2"),
+        ]
+    ).split("\n", 1)[1]
+    flipped = depth_csv(
+        [
+            depth_row("KC", "WR", 1, "KC WR Player2"),
+            depth_row("KC", "WR", 2, "KC WR Player1"),
+        ]
+    ).split("\n", 1)[1]
+    swapped = full_league_csv().replace(original, flipped)
+    assert swapped != full_league_csv(), (
+        "the rows this test means to swap were not found — the fixture's "
+        "shape changed and this test would otherwise assert nothing"
     )
     respx.get(FEED_2026).mock(return_value=httpx.Response(200, text=swapped))
     second = await run_capture(lake, now=NOW + timedelta(hours=1))

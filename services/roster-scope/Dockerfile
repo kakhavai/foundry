@@ -30,8 +30,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project --package roster-scope
 
 COPY services/roster-scope/roster_scope/ ./services/roster-scope/roster_scope/
+# `--reinstall-package` is not optional, and the reason is nasty: the package
+# version never changes (0.1.0), so uv's build cache under the mount above can
+# serve a PREVIOUSLY BUILT WHEEL even though the source just changed. The
+# image then silently ships stale code — it built, it ran, it passed a health
+# check, and it was executing a different revision than the tree it was built
+# from. That happened twice while debugging this service, and it invalidated a
+# whole round of container measurements before it was spotted.
+#
+# Dropping the cache mount would also fix it, at the cost of re-downloading
+# every dependency on every build. Reinstalling just this one package keeps
+# the dependency cache and removes the hazard.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable --package roster-scope
+    uv sync --locked --no-dev --no-editable --package roster-scope \
+        --reinstall-package roster-scope
 
 FROM python:3.12-slim
 

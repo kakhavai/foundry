@@ -41,7 +41,7 @@ app = build_collector_app(
 @app.get("/scope/players")
 async def scope_players(scope_version: int | None = None, status: str | None = None):
     """The concrete resolved list — the route every other collector calls."""
-    return scope_players_view(
+    return await scope_players_view(
         app.state.collector_spec, scope_version=scope_version, status=status
     )
 
@@ -57,6 +57,6 @@ async def scope_diff(
     version_from: int = Query(..., alias="from"), to: int = Query(...)
 ):
     """Membership transitions between two versions."""
-    return scope_diff_view(
+    return await scope_diff_view(
         app.state.collector_spec, version_from=version_from, version_to=to
     )

@@ -22,8 +22,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project --package player-identity
 
 COPY services/player-identity/player_identity/ ./services/player-identity/player_identity/
+# --reinstall-package: the package version never changes, so uv's build cache
+# under the mount can serve a previously built wheel even though the source
+# just changed — the image then silently ships stale code. Observed twice
+# while debugging roster-scope; see that service's Dockerfile for the full
+# write-up.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable --package player-identity
+    uv sync --locked --no-dev --no-editable --package player-identity \
+        --reinstall-package player-identity
 
 FROM python:3.12-slim
 

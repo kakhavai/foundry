@@ -196,10 +196,18 @@ def lake() -> SpyLake:
     return SpyLake()
 
 
+# The real nflverse depth-chart schema, verified against the live asset.
+# Deliberately carries the columns the adapter ignores (espn_id, pos_grp,
+# pos_name, pos_slot) as well as the five it reads, so a test document
+# exercises the same column-indexing the live feed does rather than a
+# convenient subset. Note there is no season or week column: the feed is a
+# current snapshot stamped with `dt`.
 DEPTH_HEADER = (
-    "season,week,club_code,depth_position,depth_team,full_name,"
-    "jersey_number,last_updated"
+    "dt,team,player_name,espn_id,gsis_id,pos_grp_id,pos_grp,"
+    "pos_id,pos_name,pos_abb,pos_slot,pos_rank"
 )
+
+DEFAULT_DT = "2026-09-15T09:00:00Z"
 
 
 def depth_row(
@@ -208,12 +216,12 @@ def depth_row(
     order: int,
     name: str,
     *,
-    season: int = 2026,
-    week: int = 1,
-    jersey: str = "",
-    last_updated: str = "",
+    dt: str = DEFAULT_DT,
 ) -> str:
-    return f"{season},{week},{team},{position},{order},{name},{jersey},{last_updated}"
+    return (
+        f"{dt},{team},{name},1,00-0000001,1,Group,1,Position Name,"
+        f"{position},{order},{order}"
+    )
 
 
 def depth_csv(rows: list[str], header: str = DEPTH_HEADER) -> str:
@@ -228,9 +236,7 @@ _CHART_SHAPE = tuple(
 )
 
 
-def full_league_csv(
-    *, season: int = 2026, week: int = 1, last_updated: str = "", teams=TEAMS
-) -> str:
+def full_league_csv(*, dt: str = DEFAULT_DT, teams=TEAMS) -> str:
     """A chart that satisfies every human slot for every team.
 
     416 expected slots = 384 human + 32 config-derived team defenses, so a
@@ -243,14 +249,7 @@ def full_league_csv(
             for rank in range(1, depth + 1):
                 rows.append(
                     depth_row(
-                        team,
-                        position,
-                        rank,
-                        f"{team} {position} Player{rank}",
-                        season=season,
-                        week=week,
-                        jersey=str(10 + rank),
-                        last_updated=last_updated,
+                        team, position, rank, f"{team} {position} Player{rank}", dt=dt
                     )
                 )
     return depth_csv(rows)

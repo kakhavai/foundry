@@ -7,6 +7,16 @@ image:
 
 containerPort: 8003
 
+# The chart defaults, kept deliberately and now backed by a measurement rather
+# than by nobody having checked.
+#
+# The first deploy OOM-killed this pod at 256Mi (exit 137, CrashLoopBackOff):
+# the candidate upstream publishes a ~37 MB document, the adapter buffered it
+# three times over, and it retained every row of a season-long snapshot
+# series. Both are fixed in the adapter — it streams, and it keeps only the
+# newest row per in-scope slot. A full fetch-and-parse of the real feed now
+# peaks at **38.5 MiB RSS** and retains 983 rows, so 256Mi has ample headroom
+# and raising it would have hidden the bug rather than fixed it.
 resources:
   limits:
     cpu: 250m
@@ -58,10 +68,25 @@ extraEnv:
     value: "http://minio.monitoring.svc.cluster.local:9000"
   - name: REFRESH_MIN_INTERVAL_SECONDS
     value: "300"
-  # Off by default in code so tests and bare uvicorn runs stay hermetic; the
-  # deployed collector is the only place the loop actually runs.
+  # DELIBERATELY false, matching player-identity rather than weather.
+  #
+  # The candidate upstream's published asset is ~37 MB — seven times the
+  # document that led player-identity to the same decision — and this
+  # collector's cadence class is `weekly`. weather's precedent would pull
+  # 37 MB from a third party on every PR push and every pod restart, from a
+  # cluster that is recreated per CI run.
+  #
+  # This is a third-party-load decision, NOT a workaround for the OOM that
+  # broke the first deploy. That bug is fixed in the adapter and verified
+  # against the real feed at 38.5 MiB peak inside the 256Mi limit above —
+  # the memory limit is unchanged. Flipping this to "true" in an environment
+  # that should actually be polling is a one-line change, not a re-run of
+  # that investigation.
+  #
+  # Consequence for the smoke test: it must not POST /refresh either, since a
+  # dispatched refresh reaches the upstream regardless of this flag.
   - name: CAPTURE_ENABLED
-    value: "true"
+    value: "false"
   - name: CAPTURE_SEASON
     value: "2026"
   - name: CAPTURE_WEEK
