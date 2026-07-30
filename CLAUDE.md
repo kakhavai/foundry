@@ -501,6 +501,42 @@ Requires: `kind`, `kubectl`, `helm`, `helmfile`, `docker`.
 
 ---
 
+## Local Environment Gotchas (Windows)
+
+These have each cost real debugging time more than once. They are environment
+facts, not preferences.
+
+**Git Bash mangles paths containing `:`.** MSYS path conversion rewrites
+`git cat-file -e origin/main:some/file` into `origin\main;some\file`, and the
+command then reports the file as missing. This produced a false "the merge
+dropped a file" alarm during Phase 5B. Use `git ls-tree` for existence checks,
+or set `MSYS_NO_PATHCONV=1`. The same conversion breaks `docker run -v` with
+container-absolute paths (`-v "$PWD/x:/scripts"`).
+
+**`python` and `python3` are Windows binaries and resolve `/tmp` to `C:\tmp`,
+which does not exist.** A shell heredoc can write to `/tmp` happily and the
+Python that reads it back will not find the file. Use an explicit Windows path.
+
+**`jq` is not installed.** `gh ... --json | jq` fails silently inside a loop.
+Use `python3 -m json.tool`, or `gh`'s own `--jq` flag, which is built in.
+
+**Argo CD's application controller is a `StatefulSet`, not a Deployment.**
+`kubectl scale deploy/argocd-application-controller -n argocd` fails with
+NotFound. Scale the StatefulSet if you need Argo to stop reconciling briefly —
+and scale it back, since the cluster is shared between concurrent sessions.
+
+**Do not background a wait and return before it finishes.** Long operations
+(a cluster build, a load shape, a chaos scenario) must be blocked on in the
+foreground. Agents that spawn a background sleep and return have stalled here
+repeatedly, and the stall is invisible until the wall-clock budget is gone.
+
+**`kubectl port-forward` survives `pkill -f port-forward` on Windows** — that
+matches the shell wrapper, not `kubectl.exe`. Use `Get-CimInstance Win32_Process`
+plus `Stop-Process`, or avoid port-forwards entirely: `kubectl get --raw` reaches
+Prometheus through the API proxy and behaves identically on Windows and in CI.
+
+---
+
 ## PR Workflow
 
 **Before opening any final PR** (not just a review request — the PR that goes to main), you MUST run the `superpowers:pr-uat` skill. This walks through unit tests, service startup, HTTP endpoints, Docker build, container runtime, Helm render, Helm lint, and CI action reference resolution. Do not skip it.
