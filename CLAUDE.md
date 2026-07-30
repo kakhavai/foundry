@@ -95,8 +95,10 @@ and `/metrics` are exempt from bearer auth in-process (so the kubelet's probes
 and Prometheus's scrape work) but are deliberately **not** in `publicPaths`, so
 they 404 at the gateway and only answer in-cluster.
 
-**Auth is enforced in the service, not at the gateway** (`weather/auth.py`).
-Middleware, so a route added later is protected by default. `/health` and
+**Auth is enforced in the service, not at the gateway**
+(`libs/collector-core/collector_core/auth.py`, mounted by every collector's
+`build_collector_app` call — see `collector_core/app.py`). Middleware, so a
+route added later is protected by default. `/health` and
 `/metrics` are exempt because the kubelet's probes and Prometheus's annotation
 scrape cannot carry a token. An absent or empty `COLLECTOR_TOKEN` returns 503
 on every data route — it fails closed, so a Secret that never syncs is loud
@@ -182,10 +184,13 @@ order — not keyed by `id` — and the frontend does the grouping.
 services/<name>/        Python service (FastAPI, uv, pyproject.toml)
 libs/collector-core/     Shared library for the collector fleet: bearer auth,
                         the five-route contract surface, the capture loop,
-                        the append-only S3 lake, the signal envelope. Every
-                        collector (weather is the first) depends on it via
-                        the uv workspace; changes here fall under the
-                        `weather` CI workflow AND the integration-test gate.
+                        the append-only S3 lake, the signal envelope, and
+                        `app.py`'s `build_collector_app` -- the process
+                        wiring (env parsing, lifespan, auth, routes) every
+                        collector's `main.py` calls instead of assembling by
+                        hand. Every collector (weather is the first) depends
+                        on it via the uv workspace; changes here fall under
+                        the `weather` CI workflow AND the integration-test gate.
 helm/charts/generic-service/    Base Helm chart all services share
 helm/values/<name>/     Per-service value overrides
 .github/actions/        Composite CI actions: python-lint, python-test, helm-lint, build-push
@@ -232,6 +237,40 @@ See `docs/onboarding.md`. Short version:
 6. Register in `scripts/deploy-local.py` and `scripts/stack-up.py`
 
 If the service needs secrets: add `extraEnv` to the values file with a `secretKeyRef` (see the Helm Chart — Secret Support section below for the pattern).
+
+### Adding a New Collector
+
+A collector's process wiring is not written by hand — `libs/collector-core/collector_core/app.py`
+owns it. `services/weather/` (the first collector) is the reference: its
+`main.py` is under 60 lines and contains only the four things that are
+genuinely weather's.
+
+1. Build `services/<name>/` per the steps above, depending on `collector-core`
+   via the uv workspace (see `services/weather/pyproject.toml`'s
+   `[tool.uv.sources]`).
+2. Write a `capture(season, week, *, client, lake, now, deadline=None)`
+   function returning `dict[str, Envelope]` — one envelope per signal type —
+   and a `CollectorMetrics(name)` instance for it to record against.
+3. Write a `signal_matches(row, params) -> bool` predicate for whatever
+   filters beyond `season`/`week`/`signal_type` the collector's rows support.
+4. In `main.py`, build a `CollectorDescriptor` (name, cadence class, signal
+   types, supported filters, `capture`, `signal_matches`, `metrics`, and
+   optionally `next_event_at`/`setup_telemetry`/`client_factory`) and pass it
+   to `build_collector_app`. That call gets you environment parsing
+   (`REFRESH_MIN_INTERVAL_SECONDS`, `CAPTURE_DEADLINE_SECONDS`,
+   `CAPTURE_SEASON`, `CAPTURE_WEEK`, `CAPTURE_ENABLED`), `CaptureState`,
+   `RefreshGate`, the lake writer, the lifespan (capture loop start/stop,
+   OTel guard, graceful shutdown), bearer auth, and the standard five routes
+   — all without writing any of it again.
+5. There is no `auth.py` and no `scheduler.py` wrapper to copy — the shared
+   loop and the bearer middleware are mounted by `build_collector_app`
+   itself. A collector only writes a `scheduler.py` if it has its own
+   `next_event_at` lookup (weather's `next_kickoff` is the model); most
+   collectors will not need one.
+6. Any route beyond the standard five (weather's `/signals/convergence` is
+   the example) is a plain `@app.get`/`@app.post` added to `main.py` after
+   the `build_collector_app` call, reaching the lake and collector name via
+   `app.state.collector_spec` rather than a module-level global.
 
 ---
 
@@ -355,7 +394,7 @@ cd libs/collector-core
 uv run pytest -v
 ```
 
-Tests use `respx` to mock `httpx` calls. OTel not initialized in tests. State-based endpoint tests pre-populate the in-memory cache via `_state` directly. `libs/collector-core`'s own suite (`libs/collector-core/tests/`) proves the shared router and capture loop against a fake two-signal-type collector, independent of `weather`; `services/weather/tests/` pins the same shapes against the real service and additionally validates real capture output against `contracts/signal-envelope/collectors/weather.json`.
+Tests use `respx` to mock `httpx` calls. OTel not initialized in tests. State-based endpoint tests pre-populate the in-memory cache via `app.state.collector_spec.state` directly. `libs/collector-core`'s own suite (`libs/collector-core/tests/`) proves the shared router, capture loop, and `build_collector_app` wiring against a fake collector, independent of `weather`; `services/weather/tests/` pins the same shapes against the real service and additionally validates real capture output against `contracts/signal-envelope/collectors/weather.json`.
 
 ---
 

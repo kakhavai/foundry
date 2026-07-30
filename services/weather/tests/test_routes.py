@@ -3,8 +3,9 @@
 are gone.
 
 State-based tests use the `seeded_state` fixture from conftest.py, which
-pre-populates `main._state` directly rather than driving a real capture — the
-routes under test never call an upstream themselves, only `/refresh` does.
+pre-populates `app.state.collector_spec.state` directly rather than driving a
+real capture — the routes under test never call an upstream themselves, only
+`/refresh` does.
 """
 
 import httpx
@@ -13,6 +14,7 @@ from collector_core.envelope import ENVELOPE_VERSION
 
 from weather.adapters.forecast import FORECAST_URL
 from weather.adapters.schedule import SCHEDULE_URL
+from weather.main import app
 
 NOW_ISO = "2026-09-11T12:00:00Z"
 
@@ -232,7 +234,7 @@ def test_convergence_orders_snapshots_and_computes_deltas(client, monkeypatch):
             ],
         },
     ]
-    monkeypatch.setattr("weather.main._lake", _FakeLakeWriter(bodies))
+    monkeypatch.setattr(app.state.collector_spec, "lake", _FakeLakeWriter(bodies))
 
     body = client.get("/signals/convergence?game_id=2026_01_CHI_CAR").json()
 
@@ -260,7 +262,7 @@ def test_convergence_skips_snapshots_missing_the_requested_game(client, monkeypa
             ],
         }
     ]
-    monkeypatch.setattr("weather.main._lake", _FakeLakeWriter(bodies))
+    monkeypatch.setattr(app.state.collector_spec, "lake", _FakeLakeWriter(bodies))
 
     body = client.get("/signals/convergence?game_id=2026_01_CHI_CAR").json()
 

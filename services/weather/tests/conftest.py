@@ -8,7 +8,6 @@ from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider
 from prometheus_client import REGISTRY, generate_latest
 
-from weather import main
 from weather.main import app
 
 
@@ -99,10 +98,11 @@ def client(_collector_token):
 
 @pytest.fixture(autouse=True)
 def _reset_collector_singletons():
-    """`main._state` and `main._refresh_gate` are module-level singletons —
-    that's what lets `/signals` serve from a cache and `/refresh` enforce an
-    interval floor across requests in production — but it makes them a
-    shared-state hazard between tests unless something resets them.
+    """`app.state.collector_spec.state` and `.refresh_gate` are process-level
+    singletons — that's what lets `/signals` serve from a cache and
+    `/refresh` enforce an interval floor across requests in production — but
+    it makes them a shared-state hazard between tests unless something
+    resets them.
 
     Autouse (unlike `seeded_state`) because leaving this to opt-in would let
     one test's `/refresh` call leak a populated cache, or an armed interval
@@ -112,13 +112,14 @@ def _reset_collector_singletons():
     it tears that data down, so either way the baseline here is what a test
     with no fixture at all should see: empty.
     """
-    main._state.envelopes = {}
-    main._state.last_capture_at = None
-    main._refresh_gate._last_allowed_at = None
+    spec = app.state.collector_spec
+    spec.state.envelopes = {}
+    spec.state.last_capture_at = None
+    spec.refresh_gate._last_allowed_at = None
     yield
-    main._state.envelopes = {}
-    main._state.last_capture_at = None
-    main._refresh_gate._last_allowed_at = None
+    spec.state.envelopes = {}
+    spec.state.last_capture_at = None
+    spec.refresh_gate._last_allowed_at = None
 
 
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
@@ -144,11 +145,12 @@ def seeded_state():
     existing convention — the routes never call an upstream.
 
     Not autouse: most of the suite (auth, telemetry, metrics) never touches
-    `main._state`, and forcing it into every test would make the fixture's own
-    teardown a hidden dependency for unrelated tests. Tests that need seeded
-    data request it by name.
+    `app.state.collector_spec.state`, and forcing it into every test would
+    make the fixture's own teardown a hidden dependency for unrelated tests.
+    Tests that need seeded data request it by name.
     """
-    main._state.envelopes = {
+    state = app.state.collector_spec.state
+    state.envelopes = {
         "venue_forecast_kickoff": make_envelope(
             "venue_forecast_kickoff",
             [
@@ -161,7 +163,7 @@ def seeded_state():
             [{"venue_id": "CAR00", "team": "CAR"}],
         ),
     }
-    main._state.last_capture_at = NOW
+    state.last_capture_at = NOW
     yield
-    main._state.envelopes = {}
-    main._state.last_capture_at = None
+    state.envelopes = {}
+    state.last_capture_at = None

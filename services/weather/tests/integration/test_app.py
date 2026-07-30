@@ -5,7 +5,8 @@ The old version of this file drove `/weather/stadiums` (deleted in Task 13)
 directly against a real `weather.client` upstream client (also deleted). The
 concurrency guarantee it was protecting — that concurrent requests through the
 ASGI stack don't corrupt shared state — still matters, retargeted at `/signals`
-reading `weather.main._state`, which is now genuinely shared mutable state
+reading `app.state.collector_spec.state`, which is now genuinely shared
+mutable state
 (the old routes built their own response dict per request and held nothing in
 common).
 """
@@ -28,7 +29,7 @@ def test_health_and_metrics_are_live(client):
 def test_concurrent_signals_requests_are_independent(collector_token, seeded_state):
     """Twenty concurrent requests through the ASGI stack return identical bodies.
 
-    `/signals` reads `weather.main._state`, a module-level singleton shared
+    `/signals` reads `app.state.collector_spec.state`, a process-level singleton shared
     across every request — this is a genuine regression guard: if a request
     ever mutated that state instead of only reading it, this starts catching
     real races instead of passing vacuously.
