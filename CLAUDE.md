@@ -242,8 +242,8 @@ If the service needs secrets: add `extraEnv` to the values file with a `secretKe
 
 A collector's process wiring is not written by hand — `libs/collector-core/collector_core/app.py`
 owns it. `services/weather/` (the first collector) is the reference: its
-`main.py` is under 60 lines and contains only the four things that are
-genuinely weather's.
+`main.py` is under 50 lines and contains only the things that are genuinely
+weather's.
 
 1. Build `services/<name>/` per the steps above, depending on `collector-core`
    via the uv workspace (see `services/weather/pyproject.toml`'s
@@ -255,13 +255,24 @@ genuinely weather's.
    filters beyond `season`/`week`/`signal_type` the collector's rows support.
 4. In `main.py`, build a `CollectorDescriptor` (name, cadence class, signal
    types, supported filters, `capture`, `signal_matches`, `metrics`, and
-   optionally `next_event_at`/`setup_telemetry`/`client_factory`) and pass it
+   optionally `next_event_at`/`telemetry_module`/`client_factory`) and pass it
    to `build_collector_app`. That call gets you environment parsing
    (`REFRESH_MIN_INTERVAL_SECONDS`, `CAPTURE_DEADLINE_SECONDS`,
    `CAPTURE_SEASON`, `CAPTURE_WEEK`, `CAPTURE_ENABLED`), `CaptureState`,
    `RefreshGate`, the lake writer, the lifespan (capture loop start/stop,
    OTel guard, graceful shutdown), bearer auth, and the standard five routes
    — all without writing any of it again.
+   `telemetry_module` is a **dotted module path string**, e.g.
+   `telemetry_module="<pkg>.telemetry"` — not a callable, and not
+   `from .telemetry import setup_telemetry` anywhere in `main.py`.
+   `build_collector_app` is the only thing that imports it, via
+   `importlib.import_module`, and only once `OTEL_EXPORTER_OTLP_ENDPOINT` is
+   actually set. Passing a callable instead (importing `<pkg>.telemetry` at
+   `main.py`'s own top level and handing the function in already bound) is
+   legal Python and every test stays green, but it silently reintroduces the
+   eager import the guard exists to prevent — that is exactly why the field
+   takes a string, not a function. If the collector has no telemetry wired
+   yet, leave it `None`; the app still builds and starts fine.
 5. There is no `auth.py` and no `scheduler.py` wrapper to copy — the shared
    loop and the bearer middleware are mounted by `build_collector_app`
    itself. A collector only writes a `scheduler.py` if it has its own

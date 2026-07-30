@@ -12,8 +12,10 @@ they work in isolation.
 """
 
 import asyncio
+import sys
 import threading
 import time
+import types
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -164,27 +166,46 @@ def test_catalog_reflects_the_descriptor(monkeypatch):
 
 
 # --- telemetry -----------------------------------------------------------
+#
+# `telemetry_module` is a dotted string, not a callable, precisely so a
+# collector author cannot defeat the "don't import OTel unless it's
+# configured" guarantee by importing their telemetry module at their own
+# file's top level and handing the already-bound function in -- legal
+# Python, every test green, invariant silently gone. These tests exercise
+# `importlib.import_module` itself, the same call `build_collector_app`
+# makes, not a stand-in for it.
 
 
-def test_setup_telemetry_is_not_called_without_an_otel_endpoint():
-    calls = []
-    app = build_collector_app(make_descriptor(setup_telemetry=calls.append))
+def test_telemetry_module_is_never_imported_without_the_otel_endpoint(monkeypatch):
+    """Names a module that does not exist anywhere on the import path. If
+    `build_collector_app` ever imported it outside the env guard -- the
+    exact regression a plain callable allowed -- this fails loudly with
+    `ModuleNotFoundError` instead of merely leaving a call list empty."""
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    app = build_collector_app(
+        make_descriptor(telemetry_module="collector_core_tests_no_such_module")
+    )
     with TestClient(app):
-        pass
-    assert calls == []
+        pass  # must not raise ModuleNotFoundError
 
 
-def test_setup_telemetry_is_called_once_when_the_endpoint_is_set(monkeypatch):
+def test_telemetry_module_is_imported_and_called_when_the_endpoint_is_set(monkeypatch):
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317")
     calls = []
-    app = build_collector_app(make_descriptor(setup_telemetry=calls.append))
+    module_name = "collector_core_tests_fake_telemetry_module"
+    fake_module = types.ModuleType(module_name)
+    fake_module.setup_telemetry = calls.append
+    monkeypatch.setitem(sys.modules, module_name, fake_module)
+
+    app = build_collector_app(make_descriptor(telemetry_module=module_name))
     with TestClient(app):
         pass
+
     assert calls == [app]
 
 
-def test_a_missing_setup_telemetry_is_a_noop_even_with_the_endpoint_set(monkeypatch):
-    """`setup_telemetry` is optional -- a collector that has not wired
+def test_a_missing_telemetry_module_is_a_noop_even_with_the_endpoint_set(monkeypatch):
+    """`telemetry_module` is optional -- a collector that has not wired
     telemetry yet must still start cleanly."""
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317")
     app = build_collector_app(make_descriptor())

@@ -12,6 +12,7 @@ genuinely differ per collector; `build_collector_app` is everything else.
 
 import asyncio
 import contextlib
+import importlib
 import os
 from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
@@ -58,7 +59,15 @@ class CollectorDescriptor:
     # perishable moment). `None` means the loop never escalates -- it is not
     # required.
     next_event_at: NextEventAt | None = None
-    setup_telemetry: Callable[[FastAPI], None] | None = None
+    # A dotted module path (e.g. "weather.telemetry"), not a callable. A
+    # callable would let a collector author import its telemetry module at
+    # their own file's top level and hand the function in already bound --
+    # legal Python, every test green, and it silently defeats the whole
+    # point of the OTel guard below. A string cannot import anything by
+    # itself: `importlib.import_module` only runs, and only inside the env
+    # check, so the deferred-import invariant is structural, not a
+    # convention every collector has to independently reinvent.
+    telemetry_module: str | None = None
     client_factory: Callable[[], httpx.AsyncClient] | None = None
 
 
@@ -111,8 +120,12 @@ def build_collector_app(descriptor: CollectorDescriptor) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") and descriptor.setup_telemetry:
-            descriptor.setup_telemetry(app)
+        # The import happens here, inside the guard, and nowhere else --
+        # `descriptor.telemetry_module` being a string rather than a
+        # pre-imported callable is what makes that non-negotiable.
+        if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") and descriptor.telemetry_module:
+            telemetry = importlib.import_module(descriptor.telemetry_module)
+            telemetry.setup_telemetry(app)
 
         # Guarded so tests and local runs do not reach an upstream on import.
         task: asyncio.Task | None = None

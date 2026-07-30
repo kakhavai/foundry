@@ -9,7 +9,13 @@ from weather.main import app
 
 
 def test_telemetry_not_imported_without_endpoint(monkeypatch):
-    """The OTel guard: no endpoint set means telemetry is never even imported."""
+    """The OTel guard, now structural rather than conventional:
+    `CollectorDescriptor.telemetry_module` is the dotted string
+    `"weather.telemetry"`, not a pre-imported callable, so
+    `build_collector_app` is the only thing that can ever import it -- and
+    only inside this env check. Starting from a forced-clean `sys.modules`
+    (not just "nothing else happened to import it yet") is what makes the
+    negative assertion below trustworthy."""
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     sys.modules.pop("weather.telemetry", None)
 
@@ -20,8 +26,16 @@ def test_telemetry_not_imported_without_endpoint(monkeypatch):
 
 
 def test_setup_telemetry_called_when_endpoint_set(monkeypatch):
-    """With an endpoint set, lifespan wires telemetry up."""
+    """With an endpoint set, `build_collector_app`'s lifespan resolves
+    `telemetry_module` via `importlib.import_module` and calls its
+    `setup_telemetry` -- the other half of the guard above. Starts from the
+    same forced-clean `sys.modules` state so the `in sys.modules` assertion
+    below cannot pass merely because some earlier test already imported the
+    module; `monkeypatch.setattr` on the dotted string below re-imports it
+    fresh from that clean state before patching its attribute.
+    """
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317")
+    monkeypatch.delitem(sys.modules, "weather.telemetry", raising=False)
     calls = []
     monkeypatch.setattr(
         "weather.telemetry.setup_telemetry", lambda app: calls.append(app)
@@ -31,6 +45,7 @@ def test_setup_telemetry_called_when_endpoint_set(monkeypatch):
         pass
 
     assert len(calls) == 1
+    assert "weather.telemetry" in sys.modules
 
 
 @pytest.fixture

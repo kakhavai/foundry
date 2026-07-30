@@ -22,13 +22,6 @@ def _signal_matches(row: dict, params: dict) -> bool:
     return True
 
 
-def _setup_telemetry(app) -> None:
-    # Deferred: `weather.telemetry` loads only once OTel is actually on.
-    from .telemetry import setup_telemetry
-
-    setup_telemetry(app)
-
-
 app = build_collector_app(
     CollectorDescriptor(
         name=COLLECTOR_NAME,
@@ -39,7 +32,7 @@ app = build_collector_app(
         signal_matches=_signal_matches,
         metrics=metrics,
         next_event_at=next_kickoff,
-        setup_telemetry=_setup_telemetry,
+        telemetry_module="weather.telemetry",
     )
 )
 
