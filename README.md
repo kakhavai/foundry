@@ -62,7 +62,7 @@ foundry/
 
 ## Phases
 
-**Currently here: Phase 5 in progress — Stage 1 (rigorous testing) delivered; chaos/scale and the adversarial agent layer remain.** Status is verified against the tree, not doc-presence. Milestone tags follow [`docs/tagging-policy.md`](docs/tagging-policy.md).
+**Currently here: Phase 5 in progress — Stages 1 and 2 (rigorous testing, chaos + scale) delivered; the AI agent adversarial layer (Stage 3) remains.** Status is verified against the tree, not doc-presence. Milestone tags follow [`docs/tagging-policy.md`](docs/tagging-policy.md).
 
 | Phase | Goal | Status | Landed |
 |---|---|---|---|
@@ -70,7 +70,7 @@ foundry/
 | 2 | Golden path — reusable conventions, second service | ✅ Done | [#12](https://github.com/kakhavai/foundry/pull/12) · `phase-2` |
 | 3 | GitOps + safe deployment, rollback, release observability | ✅ Done | `b68a58f` · `phase-3` |
 | 4 | Incident Detection and Triage Engine (4A detector + 4B narrator) | ✅ Done | [#36](https://github.com/kakhavai/foundry/pull/36) · `phase-4` |
-| 5 | Resilience testing + AI agent adversarial layer | 🚧 In progress | Stage 1 delivered; no tag until all stages land |
+| 5 | Resilience testing + AI agent adversarial layer | 🚧 In progress | Stages 1 and 2 delivered; no tag until all stages land |
 | 6 | AWS deployment — EKS via Terraform, ECR, ALB ingress, IRSA + OIDC | 📋 Planned | — |
 | 7 | AI observability & governance — instrument runtime AI (triage narrator) + developer AI (Claude Code) into the OTel/Grafana stack | 📋 Planned | — |
 | 8 | Data source collectors — the 26-collector catalog feeding the projections generator, on a uniform contract + signal lake (8A–8F) | 🚧 In progress | 8A delivered — `weather` retrofitted onto the capture model; 8B–8F not started |

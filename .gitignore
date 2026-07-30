@@ -40,3 +40,5 @@ docs/superpowers/
 .coverage.*
 htmlcov/
 .hypothesis/
+load-results/
+load-report.txt

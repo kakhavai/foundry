@@ -47,9 +47,34 @@ spec:
               port: {{ .Values.containerPort }}
             initialDelaySeconds: 5
             periodSeconds: 10
+            # A liveness probe must detect a hung process, not a busy one. With
+            # Kubernetes' default timeoutSeconds: 1, a saturated event loop
+            # fails /health within one second and the kubelet kills a container
+            # that is merely overloaded — turning a slow service into an
+            # unavailable one, and producing a restart loop during exactly the
+            # traffic spike that caused it. Found by tests/load/spike.js, which
+            # restarted player-projections reproducibly at 500 RPS against a
+            # 250m CPU limit.
+            timeoutSeconds: 5
+            failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /health
               port: {{ .Values.containerPort }}
             initialDelaySeconds: 5
             periodSeconds: 10
+            # Loosened to match liveness, deliberately, not by default: every
+            # service here runs replicaCount: 1, so this is the only pod behind
+            # the Service. The textbook purpose of a tight readiness probe is
+            # to shed traffic onto a healthy sibling — there is no sibling
+            # here, so tripping it under load does not shed load, it removes
+            # the only Endpoint and turns a slow response into a hard
+            # connection error for every in-flight and new request. A single
+            # replica staying in rotation and answering slowly (what this
+            # spike actually showed: 98.4% of requests still completed, just
+            # with high tail latency) is strictly more useful to a caller than
+            # 100% connection failures. Revisit if replicaCount ever exceeds 1
+            # — with real siblings to shed load onto, a tight readiness probe
+            # regains its textbook value.
+            timeoutSeconds: 5
+            failureThreshold: 3

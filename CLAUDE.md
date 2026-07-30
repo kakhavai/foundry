@@ -404,6 +404,39 @@ exercises `main`'s images rather than your branch's.
 
 ---
 
+## Load and Scale Testing
+
+```bash
+uv run --with pyyaml==6.0.3 python scripts/run-load.py --list
+uv run --with pyyaml==6.0.3 python scripts/run-load.py ramp
+uv run --with pyyaml==6.0.3 python scripts/run-load.py --all --soak-minutes 30
+```
+
+k6 runs **in-cluster as a Job**, built from a ConfigMap of `tests/load/*.js` and
+hitting `http://player-projections:8001` over ClusterIP. There is no NodePort
+path to `player-projections` — it is deliberately not routed through the
+gateway — and an in-cluster Job needs no k6 binary on the CI runner or on a
+developer's machine.
+
+**Only `player-projections` is covered, in stub mode.** `weather` was excluded
+because it was then a synchronous proxy to a rate-limited free API — one ramp
+would have exceeded Open-Meteo's daily budget. **8A has since removed that
+blocker**: `weather` now captures on a cadence and serves from memory, so
+covering it needs a k6 script against its `/signals` surface, not a waiver. It
+is the immediate follow-up. See
+[`docs/scale-baselines.md`](docs/scale-baselines.md) for every number's
+conditions and the caveats that go with them.
+
+**k6 exits `99` when a threshold with `abortOnFail` is crossed.** Only the
+`breakpoint` shape treats that as success, and only that code — any other
+non-zero is a broken script or an unreachable target, not a measurement.
+
+**The >20% P95 regression gate is not implemented.** Stub-mode numbers would make
+it fire on noise. `load-test.yml` is `workflow_dispatch` only and is **not** a
+required check.
+
+---
+
 ## Local Stack
 
 ```bash
