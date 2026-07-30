@@ -129,6 +129,16 @@ combination for what it is before assuming the deploy itself is broken.
 
 ## Current Services
 
+**This table is documentation, not registration.** The inventory of collectors
+is `contracts/collector-registry.yaml`, and the local/CI tooling reads *that* —
+nothing reads this table. A new collector is **not required** to add a row, and
+the drift gate deliberately does not ask for one: twenty-four collectors each
+editing one markdown table is twenty-four merge conflicts on a file that no
+machine consumes. The rows below are the services with a bespoke story worth
+reading before you touch them. Add one only when a collector has something
+genuinely surprising to say; the registry already carries name, gateway path,
+cadence class and signal types for every collector, surprising or not.
+
 | Service | Port | Status | Purpose |
 |---|---|---|---|
 | `weather` | 8000 | Live | First data-source collector (Phase 8's 8A retrofit). Captures forecast-at-kickoff and current conditions per pro football stadium on a cadence, into the shared signal lake. Exposes `/health`, `/metrics`, `/catalog`, `/signals`, `/signals/convergence`, `/refresh` — bearer-token auth on every route except `/health` and `/metrics`; the stadium routes are gone |
@@ -199,7 +209,13 @@ helm/values/<name>/     Per-service value overrides
 .github/workflows/      Per-service CI callers (one file per service)
 infra/grafana-stack/    Helmfile: OTel Collector, Prometheus, Loki, Tempo, Grafana
 infra/kind/             Kind cluster config for local dev
-scripts/                deploy-local.py, stack-up.py
+scripts/                collectors.py (the fleet list every other script and
+                        the integration workflow derives from — reads the
+                        registry + each service's Helm values, and is the
+                        reason adding a collector edits neither), then
+                        deploy-local.py, stack-up.py, smoke-test.sh,
+                        check-registry.py, rollback.py, run-chaos.py,
+                        run-load.py, argocd-deploy.py
 docs/                   Architecture, onboarding, service contract
 tests/                  Platform tests — things no single service can see: scripts/
                         (rollback, argocd-deploy) and Helm chart render assertions.
@@ -238,9 +254,26 @@ See `docs/onboarding.md`. Short version:
 3. `infra/gitops/envs/local/<name>/values.yaml` — initial image tag (`0.1.0`)
 4. `infra/gitops/argo/<name>.yaml` — Argo CD Application manifest (copy from `infra/gitops/argo/weather.yaml`, update name and value paths)
 5. Copy `.github/workflows/player-projections.yml` → `.github/workflows/<name>.yml`, update service name in update-gitops-tag job
-6. Register in `scripts/deploy-local.py` and `scripts/stack-up.py`
+6. **Collectors: nothing.** The registry entry from step 7 of *Adding a New
+   Collector* below is the registration — `scripts/deploy-local.py`,
+   `scripts/stack-up.py`, `scripts/smoke-test.sh` and both service-list steps
+   of `.github/workflows/integration-test.yml` derive from it via
+   `scripts/collectors.py`. A **non-collector** service (there is one,
+   `player-projections`) has no registry entry, so it is named in
+   `scripts/collectors.py`'s `NON_COLLECTOR_SERVICES`.
 
 If the service needs secrets: add `extraEnv` to the values file with a `secretKeyRef` (see the Helm Chart — Secret Support section below for the pattern).
+
+**The values file is where the tooling reads a service's deployment facts
+from** — its port (`service.port`), its bearer-token Secret (whatever
+`COLLECTOR_TOKEN`'s `secretKeyRef` names), its lake-credentials Secret
+(`AWS_ACCESS_KEY_ID`'s), and `CAPTURE_ENABLED`. None of those are duplicated
+into the registry or into a deploy file, on purpose: the values file is the
+artifact Kubernetes actually applies, so a second copy could only ever drift
+away from it. Concretely, `deploy-local.py` creates *the Secret the pod
+references* rather than one named by convention — a values file naming a
+Secret the tooling never creates would otherwise give you a pod that starts,
+reports Healthy, and 503s on every data route.
 
 ### Adding a New Collector
 
@@ -287,7 +320,20 @@ weather's.
    the `build_collector_app` call, reaching the lake and collector name via
    `app.state.collector_spec` rather than a module-level global.
 7. Append an entry to `contracts/collector-registry.yaml` — **in the same PR
-   as the service**. See the next section.
+   as the service**. See the next section. That entry is the *only* shared
+   file a new collector touches: the deploy scripts, the smoke test and the
+   integration workflow all derive their service lists from it.
+8. **Optional** — if the collector has routes beyond the standard five, add an
+   executable `services/<name>/smoke.sh`. `scripts/smoke-test.sh` runs it after
+   the standard contract surface passes, with `SMOKE_COLLECTOR`,
+   `SMOKE_BASE_URL` (direct to the Service), `SMOKE_GATEWAY_URL`,
+   `SMOKE_TOKEN` and `SMOKE_CAPTURE_ENABLED` in the environment.
+   `services/weather/smoke.sh` is the model. A collector with no extra routes
+   writes no file — the standard surface is asserted for every registered
+   collector automatically, so `scripts/smoke-test.sh` is never edited.
+   **Do not POST `/refresh` from a hook when the collector runs with
+   `CAPTURE_ENABLED=false`**: a dispatched refresh reaches the upstream
+   regardless of that flag, so it would hit a third party on every PR.
 
 ---
 
@@ -316,6 +362,7 @@ reformat existing entries.
 | | Where | What it can see |
 |---|---|---|
 | `tests/test_collector_registry.py` | `platform-tests`, no cluster | schema, uniqueness, `services/<name>/` exists, Helm `gateway.pathPrefix` == `path`, Argo + GitOps manifests exist, both reverse directions, `depends_on` resolution / self-dependency / cycles, and the entry vs. the service's own `CollectorDescriptor` **read by AST** |
+| `tests/test_collector_tooling.py` | `platform-tests`, no cluster | that the *tooling* derives from the registry: a synthetic entry in a tmpdir reaches every derived list, and **no collector name appears literally** in `deploy-local.py`, `stack-up.py`, `smoke-test.sh` or `integration-test.yml` |
 | `scripts/check-registry.py` | `scripts/smoke-test.sh`, inside the required `integration-test` | each collector's **live** `GET /catalog`, fetched through the gateway |
 
 **Why AST and not an import:** `platform-tests` installs only pytest, pyyaml
@@ -560,7 +607,18 @@ python scripts/stack-up.py --forward-only     # Port-forwards only (skip build/d
 python scripts/deploy-local.py <name>         # Redeploy a single service
 ```
 
-Requires: `kind`, `kubectl`, `helm`, `helmfile`, `docker`.
+Requires: `kind`, `kubectl`, `helm`, `helmfile`, `docker`, **and PyYAML on the
+interpreter you run these with** — both scripts derive their service list from
+`contracts/collector-registry.yaml` via `scripts/collectors.py`. If your
+`python` has no PyYAML, or you are on the CI runner image (which ships a bare
+`python3`), use the form CI uses:
+
+```bash
+uv run --no-project --with pyyaml==6.0.3 python3 scripts/deploy-local.py <name>
+```
+
+`--no-project` keeps `uv` from building the whole workspace to run a script
+that imports none of it.
 
 **When ArgoCD is running:** `deploy-local.py` will fail with a Server-Side Apply conflict because ArgoCD already owns the Deployment fields (`image`, `imagePullPolicy`). Use `--forward-only` when the cluster is already up and you just need to re-bind port-forward tunnels after a restart or session change.
 

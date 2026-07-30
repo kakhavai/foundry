@@ -3,7 +3,11 @@ Bring up the full local stack: cluster, observability, services, port-forwards.
 
 Usage:
   python scripts/stack-up.py                  # all services
-  python scripts/stack-up.py weather           # specific services only
+  python scripts/stack-up.py <name> [<name>]  # specific services only
+
+The service list is derived from `contracts/collector-registry.yaml` plus each
+service's Helm values by `scripts/collectors.py` — adding a collector means
+appending a registry entry, not editing this file.
 
 Ctrl+C stops all port-forwards. The cluster and Helm releases are left running.
 Use `kind delete cluster --name foundry` to tear everything down.
@@ -14,38 +18,15 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import collectors as fleet  # noqa: E402  (needs the path insert above)
+
 ROOT = Path(__file__).parent.parent
 
-SERVICES = {
-    "weather": {
-        "svc": "weather",
-        "namespace": "default",
-        "local_port": 8000,
-        "remote_port": 8000,
-        "url": "http://localhost:8000",
-    },
-    "player-projections": {
-        "svc": "player-projections",
-        "namespace": "default",
-        "local_port": 8001,
-        "remote_port": 8001,
-        "url": "http://localhost:8001",
-    },
-    "player-identity": {
-        "svc": "player-identity",
-        "namespace": "default",
-        "local_port": 8002,
-        "remote_port": 8002,
-        "url": "http://localhost:8002",
-    },
-    "roster-scope": {
-        "svc": "roster-scope",
-        "namespace": "default",
-        "local_port": 8003,
-        "remote_port": 8003,
-        "url": "http://localhost:8003",
-    },
-}
+# Every service is port-forwarded from the `default` namespace on its own
+# service port; nothing per-service is configured here.
+SERVICE_NAMESPACE = "default"
 
 OBS_FORWARDS = [
     {
@@ -98,15 +79,21 @@ def cluster_running() -> bool:
 
 
 def main() -> None:
+    try:
+        services = fleet.by_name()
+    except fleet.FleetError as exc:
+        print(f"FAIL: {exc}")
+        sys.exit(2)
+
     args = sys.argv[1:]
     forward_only = "--forward-only" in args
     requested_raw = [a for a in args if not a.startswith("--")]
-    requested = requested_raw or list(SERVICES.keys())
+    requested = requested_raw or list(services)
 
-    unknown = [s for s in requested if s not in SERVICES]
+    unknown = [s for s in requested if s not in services]
     if unknown:
         print(f"Unknown service(s): {', '.join(unknown)}")
-        print(f"Available: {', '.join(SERVICES.keys())}")
+        print(f"Available: {', '.join(services)}")
         sys.exit(1)
 
     if not forward_only:
@@ -114,7 +101,10 @@ def main() -> None:
         if cluster_running():
             print("\nKind cluster 'foundry' already running — skipping create.")
         else:
-            run(["kind", "create", "cluster", "--config", ROOT / "infra/kind/cluster.yaml"])
+            run([
+                "kind", "create", "cluster",
+                "--config", ROOT / "infra/kind/cluster.yaml",
+            ])
 
         # 2. Observability stack
         grafana_stack = ROOT / "infra/grafana-stack"
@@ -167,12 +157,12 @@ def main() -> None:
         procs.append(proc)
 
     for service in requested:
-        cfg = SERVICES[service]
+        port = services[service].port
         proc = subprocess.Popen([
             "kubectl", "port-forward",
-            "-n", cfg["namespace"],
-            f"svc/{cfg['svc']}",
-            f"{cfg['local_port']}:{cfg['remote_port']}",
+            "-n", SERVICE_NAMESPACE,
+            f"svc/{service}",
+            f"{port}:{port}",
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         procs.append(proc)
 
@@ -183,8 +173,7 @@ def main() -> None:
     print("\n" + "=" * 50)
     print("Stack is up. Access your services at:\n")
     for service in requested:
-        cfg = SERVICES[service]
-        print(f"  {service:<20} {cfg['url']}")
+        print(f"  {service:<20} http://localhost:{services[service].port}")
     for fwd in OBS_FORWARDS:
         print(f"  {fwd['name']:<20} {fwd['url']}")
     print(f"  {'Collector gateway':<20} http://localhost:8080/collectors/<name>/")

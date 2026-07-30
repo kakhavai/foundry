@@ -119,12 +119,24 @@ jobs:
           kubectl wait --for=condition=Programmed gateway/foundry \
             -n envoy-gateway-system --timeout=180s
 
+      # Both of the steps below derive their service list from
+      # contracts/collector-registry.yaml plus each service's Helm values, via
+      # scripts/collectors.py. They used to be two hand-maintained lists that
+      # had to be kept in step with each other, with deploy-local.py, with
+      # stack-up.py and with smoke-test.sh; a collector missing from the second
+      # list is deployed but never waited for, and the smoke test then fails
+      # against a pod that simply was not ready yet.
+      #
+      # `uv run --no-project --with pyyaml`: the ci-runner image ships a bare
+      # python3 with no PyYAML, and --no-project keeps uv from building the
+      # whole workspace to run a script that imports none of it.
       - name: Deploy services
         run: |
-          python3 scripts/deploy-local.py weather
-          python3 scripts/deploy-local.py player-projections
-          python3 scripts/deploy-local.py player-identity
-          python3 scripts/deploy-local.py roster-scope
+          for svc in $(uv run --no-project --with pyyaml==6.0.3 \
+              python3 scripts/collectors.py --names); do
+            uv run --no-project --with pyyaml==6.0.3 \
+              python3 scripts/deploy-local.py "$svc"
+          done
 
       - name: Wait for pods ready
         run: |
@@ -136,10 +148,10 @@ jobs:
           # the label selector also matches pods left Terminating by a rollout,
           # which never reach Ready, so the wait times out on a Deployment that
           # is in fact healthy.
-          kubectl rollout status deployment/weather --timeout=120s
-          kubectl rollout status deployment/player-projections --timeout=120s
-          kubectl rollout status deployment/player-identity --timeout=120s
-          kubectl rollout status deployment/roster-scope --timeout=120s
+          for svc in $(uv run --no-project --with pyyaml==6.0.3 \
+              python3 scripts/collectors.py --names); do
+            kubectl rollout status "deployment/$svc" --timeout=120s
+          done
 
       - name: Smoke test services
         run: bash scripts/smoke-test.sh
