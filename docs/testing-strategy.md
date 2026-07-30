@@ -281,8 +281,8 @@ work rather than a standing exclusion. All of this is stated in
 
 ## Not Covered Here
 
-Adversarial agent sessions are Phase 5 Stage 3. See
-`docs/architecture/phase-5-resilience-and-ai-testing.md`.
+See `docs/architecture/phase-5-resilience-testing.md` for what each stage of
+Phase 5 set out to prove.
 
 Load and scale testing now exists — `tests/load/` with a k6 harness — but covers
 `player-projections` only, in stub mode. See `docs/scale-baselines.md` for what

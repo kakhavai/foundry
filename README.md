@@ -62,7 +62,7 @@ foundry/
 
 ## Phases
 
-**Currently here: Phase 5 in progress — Stages 1 and 2 (rigorous testing, chaos + scale) delivered; the AI agent adversarial layer (Stage 3) remains.** Status is verified against the tree, not doc-presence. Milestone tags follow [`docs/tagging-policy.md`](docs/tagging-policy.md).
+**Currently here: Phase 5 complete — rigorous testing, chaos engineering, and load/scale validation all delivered. Phase 8 in progress.** Status is verified against the tree, not doc-presence. Milestone tags follow [`docs/tagging-policy.md`](docs/tagging-policy.md).
 
 | Phase | Goal | Status | Landed |
 |---|---|---|---|
@@ -70,7 +70,7 @@ foundry/
 | 2 | Golden path — reusable conventions, second service | ✅ Done | [#12](https://github.com/kakhavai/foundry/pull/12) · `phase-2` |
 | 3 | GitOps + safe deployment, rollback, release observability | ✅ Done | `b68a58f` · `phase-3` |
 | 4 | Incident Detection and Triage Engine (4A detector + 4B narrator) | ✅ Done | [#36](https://github.com/kakhavai/foundry/pull/36) · `phase-4` |
-| 5 | Resilience testing + AI agent adversarial layer | 🚧 In progress | Stages 1 and 2 delivered; no tag until all stages land |
+| 5 | Resilience testing — rigorous test coverage, chaos engineering, load + scale | ✅ Done | [#48](https://github.com/kakhavai/foundry/pull/48) · `phase-5` |
 | 6 | AWS deployment — EKS via Terraform, ECR, ALB ingress, IRSA + OIDC | 📋 Planned | — |
 | 7 | AI observability & governance — instrument runtime AI (triage narrator) + developer AI (Claude Code) into the OTel/Grafana stack | 📋 Planned | — |
 | 8 | Data source collectors — the 26-collector catalog feeding the projections generator, on a uniform contract + signal lake (8A–8F) | 🚧 In progress | 8A delivered — `weather` retrofitted onto the capture model; 8B–8F not started |
@@ -272,7 +272,7 @@ See [docs/deployment-lifecycle.md](docs/deployment-lifecycle.md) for the full de
 - [Phase 2 — Golden Path](docs/architecture/phase-2-golden-path.md)
 - [Phase 3 — GitOps Deployment](docs/architecture/phase-3-gitops-deployment.md)
 - [Phase 4 — Incident Detection and Triage Engine](docs/architecture/phase-4-incident-detection-triage.md)
-- [Phase 5 — Resilience Testing & AI Adversarial Layer](docs/architecture/phase-5-resilience-and-ai-testing.md)
+- [Phase 5 — Resilience Testing](docs/architecture/phase-5-resilience-testing.md)
 - [Phase 6 — AWS Deployment](docs/architecture/phase-6-aws-deployment.md)
 - [Phase 7 — AI Observability & Governance](docs/architecture/phase-7-ai-observability.md)
 - [Phase 8 — Data Source Collectors](docs/architecture/phase-8-data-source-collectors.md)
