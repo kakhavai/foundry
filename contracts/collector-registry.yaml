@@ -80,3 +80,19 @@ collectors:
     # Foundational, and the only entry that can be. Every other collector
     # emits a player_id, and this is the collector that decides what one is.
     depends_on: []
+
+  - name: roster-scope
+    path: /collectors/roster-scope
+    stage: 8A
+    cadence_class: weekly
+    envelope_version: 1
+    signal_types: [scope_membership_weekly, scope_change_event]
+    # It defines the scope rather than consuming it.
+    scope_aware: false
+    # Conceptual today, not yet a runtime call: `PLAYER_IDENTITY_URL` ships
+    # empty and the in-process stub resolver is used, so nothing here reaches
+    # player-identity over HTTP until that value is set. Declared anyway
+    # because the seam exists and the phase doc names the dependency — and
+    # because this is the merge-order gate that kept this PR behind
+    # player-identity's, which is the gate working as designed.
+    depends_on: [player-identity]

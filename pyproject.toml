@@ -1,2 +1,7 @@
 [tool.uv.workspace]
-members = ["libs/*", "services/weather", "services/player-identity"]
+members = [
+    "libs/*",
+    "services/weather",
+    "services/player-identity",
+    "services/roster-scope",
+]

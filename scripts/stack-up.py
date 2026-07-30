@@ -38,6 +38,13 @@ SERVICES = {
         "remote_port": 8002,
         "url": "http://localhost:8002",
     },
+    "roster-scope": {
+        "svc": "roster-scope",
+        "namespace": "default",
+        "local_port": 8003,
+        "remote_port": 8003,
+        "url": "http://localhost:8003",
+    },
 }
 
 OBS_FORWARDS = [

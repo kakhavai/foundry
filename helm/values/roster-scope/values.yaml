@@ -1,0 +1,89 @@
+service:
+  name: roster-scope
+  port: 8003
+
+image:
+  repository: ghcr.io/kakhavai/foundry/roster-scope
+
+containerPort: 8003
+
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+otel:
+  resourceAttributes: "service.name=roster-scope,service.namespace=foundry"
+
+grafanaAnnotations:
+  enabled: true
+
+gateway:
+  enabled: true
+  pathPrefix: /collectors/roster-scope
+  # The chart's default publishes only /catalog, /signals and /refresh. This
+  # collector's whole point is the resolved list every other collector fetches,
+  # so /scope is published too. /health and /metrics stay unrouted: they are
+  # exempt from bearer auth in-process (the kubelet's probes and Prometheus's
+  # scrape cannot carry a token) and that is not a reason to expose them at
+  # the edge.
+  publicPaths:
+    - /catalog
+    - /signals
+    - /refresh
+    - /scope
+
+extraEnv:
+  # optional: true lets the pod start before the Secret exists. roster-scope
+  # then answers 503 on every data route until it arrives — see
+  # libs/collector-core/collector_core/auth.py, mounted by collector_core.app.
+  - name: COLLECTOR_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: roster-scope-collector-token
+        key: token
+        optional: true
+  # Empty means the built-in stub resolver: deterministic `fdy-` ids minted
+  # from (normalized name, team, position). Point this at the real collector
+  # once `player-identity` is deployed AND its /resolve contract is agreed —
+  # the shape assumed in adapters/identity.py is PROVISIONAL.
+  - name: PLAYER_IDENTITY_URL
+    value: ""
+  - name: LAKE_BUCKET
+    value: "foundry-signals"
+  - name: LAKE_ENDPOINT_URL
+    value: "http://minio.monitoring.svc.cluster.local:9000"
+  - name: REFRESH_MIN_INTERVAL_SECONDS
+    value: "300"
+  # Off by default in code so tests and bare uvicorn runs stay hermetic; the
+  # deployed collector is the only place the loop actually runs.
+  - name: CAPTURE_ENABLED
+    value: "true"
+  - name: CAPTURE_SEASON
+    value: "2026"
+  - name: CAPTURE_WEEK
+    value: "1"
+  # Wall-clock ceiling for one capture pass, checked between teams; a run over
+  # budget records deadline_exceeded per remaining slot instead of discarding
+  # what it already resolved.
+  - name: CAPTURE_DEADLINE_SECONDS
+    value: "300"
+  # Same optional:true pattern as COLLECTOR_TOKEN — the pod starts before the
+  # Secret exists and the lake simply has no credentials until it arrives.
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: roster-scope-lake-credentials
+        key: access-key-id
+        optional: true
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: roster-scope-lake-credentials
+        key: secret-access-key
+        optional: true
+  - name: AWS_DEFAULT_REGION
+    value: "us-east-1"

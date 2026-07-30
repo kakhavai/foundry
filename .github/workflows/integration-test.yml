@@ -124,6 +124,7 @@ jobs:
           python3 scripts/deploy-local.py weather
           python3 scripts/deploy-local.py player-projections
           python3 scripts/deploy-local.py player-identity
+          python3 scripts/deploy-local.py roster-scope
 
       - name: Wait for pods ready
         run: |
@@ -138,9 +139,42 @@ jobs:
           kubectl rollout status deployment/weather --timeout=120s
           kubectl rollout status deployment/player-projections --timeout=120s
           kubectl rollout status deployment/player-identity --timeout=120s
+          kubectl rollout status deployment/roster-scope --timeout=120s
 
       - name: Smoke test services
         run: bash scripts/smoke-test.sh
+
+      # Runs only when something above failed, and never fails the job itself.
+      # Without it a rollout timeout reports "0 of 1 updated replicas are
+      # available" and nothing else — no pod phase, no container state, no
+      # logs, no events — so the single most common integration failure is
+      # also the one the log tells you least about. Diagnosing it otherwise
+      # costs a full push/wait cycle per hypothesis.
+      - name: Diagnose failure
+        if: failure()
+        run: |
+          echo "::group::pods"
+          kubectl get pods -A -o wide || true
+          echo "::endgroup::"
+          echo "::group::describe non-running pods"
+          kubectl get pods -A --no-headers 2>/dev/null \
+            | awk '$4 != "Running" && $4 != "Completed" {print $1, $2}' \
+            | while read -r ns pod; do
+                echo "--- describe $ns/$pod"
+                kubectl describe pod -n "$ns" "$pod" || true
+              done
+          echo "::endgroup::"
+          echo "::group::logs (current and previous) for default namespace"
+          for pod in $(kubectl get pods -n default -o name 2>/dev/null); do
+            echo "--- logs $pod"
+            kubectl logs -n default "$pod" --tail=120 --all-containers || true
+            echo "--- previous logs $pod (empty unless it restarted)"
+            kubectl logs -n default "$pod" --tail=120 --all-containers -p || true
+          done
+          echo "::endgroup::"
+          echo "::group::recent events"
+          kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true
+          echo "::endgroup::"
 
       - name: Tear down cluster
         if: always()

@@ -16,6 +16,7 @@ COPY pyproject.toml uv.lock ./
 COPY libs/collector-core/ ./libs/collector-core/
 COPY services/weather/pyproject.toml ./services/weather/
 COPY services/player-identity/pyproject.toml ./services/player-identity/
+COPY services/roster-scope/pyproject.toml ./services/roster-scope/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project --package player-identity

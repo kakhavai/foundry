@@ -21,6 +21,13 @@ SERVICES = {
         "lake_secret": "player-identity-lake-credentials",
         "build_context_root": True,
     },
+    "roster-scope": {
+        "port": 8003,
+        "secret": "roster-scope-collector-token",
+        "lake_secret": "roster-scope-lake-credentials",
+        # Also a uv workspace member depending on libs/collector-core/ by path.
+        "build_context_root": True,
+    },
 }
 
 # Kind-only. A real token is created out of band and never enters Git; on EKS
