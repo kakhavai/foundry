@@ -74,9 +74,7 @@ def cap_errors(errors: Iterable[dict], *, max_errors: int = MAX_ERRORS) -> list[
         *entries[:max_errors],
         {
             "reason": ERRORS_TRUNCATED,
-            "detail": (
-                f"{omitted} of {total} error(s) omitted; cap is {max_errors}"
-            ),
+            "detail": (f"{omitted} of {total} error(s) omitted; cap is {max_errors}"),
             "omitted": omitted,
             "total": total,
         },

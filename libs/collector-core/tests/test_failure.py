@@ -168,9 +168,7 @@ async def test_a_per_signal_type_floor_is_honoured():
     lake, metrics = _SpyLake(), _SpyMetrics()
 
     with pytest.raises(RuntimeError):
-        await _fail(
-            RuntimeError("boom"), lake, metrics, expected={"alpha": 2900}
-        )
+        await _fail(RuntimeError("boom"), lake, metrics, expected={"alpha": 2900})
 
     by_type = {e.signal_type: e.coverage.expected for e in lake.writes}
     assert by_type["alpha"] == 2900
@@ -257,9 +255,7 @@ async def test_health_still_answers_while_a_failure_envelope_is_being_written():
         await asyncio.sleep(0)
         return asyncio.get_running_loop().time() - started
 
-    failing = asyncio.create_task(
-        _fail(RuntimeError("boom"), _SlowLake(), metrics)
-    )
+    failing = asyncio.create_task(_fail(RuntimeError("boom"), _SlowLake(), metrics))
     await asyncio.sleep(0.05)
     elapsed = await health()
 

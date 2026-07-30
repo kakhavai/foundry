@@ -7,7 +7,14 @@ from collector_core.lake import NullLakeWriter, lake_key
 
 from weather.adapters.forecast import FORECAST_URL
 from weather.adapters.schedule import SCHEDULE_URL
-from weather.capture import assert_forecast_hour, capture_week
+from weather.capture import (
+    REGULAR_SEASON_GAMES_FLOOR,
+    REGULAR_SEASON_WEEKS,
+    SIGNAL_TYPES,
+    assert_forecast_hour,
+    capture_week,
+    games_floor,
+)
 
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
 
@@ -31,6 +38,19 @@ MUNICH_GAME = (
 
 def schedule_csv(*rows: str) -> str:
     return "\n".join([HEADER, *rows]) + "\n"
+
+
+# The scope tests use when they are asserting exact counts rather than the
+# floor. `games_floor` floors a *regular-season* week at 13 (32 teams, at most
+# six on bye), which is right in production and swamps a one- or two-row
+# fixture. Postseason weeks floor to 1, so these tests can pin the accounting
+# without switching off the floor they are not about -- and the floor gets its
+# own tests below rather than being incidentally asserted here.
+POSTSEASON_WEEK = 19
+
+
+def postseason_csv(*rows: str) -> str:
+    return schedule_csv(*(row.replace(",REG,1,", ",POST,19,") for row in rows))
 
 
 def hourly_payload() -> dict:
@@ -77,10 +97,10 @@ async def test_emits_both_signal_types():
 
 @respx.mock
 async def test_forecast_coverage_counts_every_game_that_week():
-    mock_upstreams(schedule_csv(HOME_GAME))
+    mock_upstreams(postseason_csv(HOME_GAME))
     async with httpx.AsyncClient() as client:
         result = await capture_week(
-            2026, 1, client=client, lake=NullLakeWriter(), now=NOW
+            2026, POSTSEASON_WEEK, client=client, lake=NullLakeWriter(), now=NOW
         )
     coverage = result["venue_forecast_kickoff"].coverage
     assert coverage.expected == 1
@@ -91,10 +111,10 @@ async def test_forecast_coverage_counts_every_game_that_week():
 @respx.mock
 async def test_neutral_site_lands_in_missing_and_emits_no_signal():
     """The whole point: never resolve to the designated home team's venue."""
-    mock_upstreams(schedule_csv(HOME_GAME, MUNICH_GAME))
+    mock_upstreams(postseason_csv(HOME_GAME, MUNICH_GAME))
     async with httpx.AsyncClient() as client:
         result = await capture_week(
-            2026, 1, client=client, lake=NullLakeWriter(), now=NOW
+            2026, POSTSEASON_WEEK, client=client, lake=NullLakeWriter(), now=NOW
         )
 
     envelope = result["venue_forecast_kickoff"]
@@ -160,13 +180,15 @@ async def test_a_total_forecast_outage_does_not_zero_current_conditions_expected
     resolution and forecast fetching are separate concerns.
     """
     respx.get(SCHEDULE_URL).mock(
-        return_value=httpx.Response(200, text=schedule_csv(HOME_GAME, SECOND_HOME_GAME))
+        return_value=httpx.Response(
+            200, text=postseason_csv(HOME_GAME, SECOND_HOME_GAME)
+        )
     )
     respx.get(FORECAST_URL).mock(return_value=httpx.Response(503))
 
     async with httpx.AsyncClient() as client:
         result = await capture_week(
-            2026, 1, client=client, lake=NullLakeWriter(), now=NOW
+            2026, POSTSEASON_WEEK, client=client, lake=NullLakeWriter(), now=NOW
         )
 
     forecast = result["venue_forecast_kickoff"]
@@ -351,11 +373,11 @@ async def test_a_pass_stops_at_the_deadline_during_current_conditions(monkeypatc
 @respx.mock
 async def test_no_deadline_captures_everything():
     """Default behaviour is unchanged when no deadline is supplied."""
-    mock_upstreams(schedule_csv(HOME_GAME, SECOND_HOME_GAME))
+    mock_upstreams(postseason_csv(HOME_GAME, SECOND_HOME_GAME))
 
     async with httpx.AsyncClient() as client:
         result = await capture_week(
-            2026, 1, client=client, lake=NullLakeWriter(), now=NOW
+            2026, POSTSEASON_WEEK, client=client, lake=NullLakeWriter(), now=NOW
         )
 
     envelope = result["venue_forecast_kickoff"]
@@ -499,3 +521,115 @@ def test_forecast_hour_assertion_rejects_a_different_hour():
     kickoff = datetime(2026, 9, 13, 17, 0, tzinfo=UTC)
     with pytest.raises(ValueError, match="forecast_valid_at"):
         assert_forecast_hour(kickoff - timedelta(hours=3), kickoff)
+
+
+# --- the failed-capture path ------------------------------------------------
+#
+# `capture_week` used to re-raise a schedule-fetch failure WITHOUT writing
+# anything, which left the gap in the lake to be inferred from the absence of
+# an object -- the one thing the Phase 8 contract says must never be inferred.
+# The fix is `collector_core.failure.fail_capture`; these tests pin weather's
+# use of it against the real service, while `libs/collector-core/tests/
+# test_failure.py` pins the helper itself against a fake collector.
+
+
+@respx.mock
+async def test_a_schedule_outage_still_writes_an_envelope_per_signal_type():
+    """A gap must be explicit -- `present: 0` with populated `errors` -- never
+    inferred from an absent object."""
+    lake = SpyLakeWriter()
+    respx.get(SCHEDULE_URL).mock(return_value=httpx.Response(503))
+
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await capture_week(2026, 1, client=client, lake=lake, now=NOW)
+
+    written = list(lake.written.values())
+    assert len(written) == 2
+    assert {e.signal_type for e in written} == set(SIGNAL_TYPES)
+    for envelope in written:
+        assert envelope.coverage.present == 0
+        assert envelope.signals == []
+        assert len(envelope.errors) == 1
+        assert envelope.errors[0]["reason"] == "http_status"
+        assert envelope.scope == {"season": 2026, "week": 1}
+
+
+@respx.mock
+async def test_a_schedule_outage_reports_a_zero_ratio_not_a_perfect_one():
+    """THE property. `Coverage.ratio` reads 1.0 when `expected` is 0, so a
+    total outage that reported `expected: 0` would look identical to a healthy
+    collector on `collector_coverage_ratio` -- the one metric built to catch
+    exactly this."""
+    lake = SpyLakeWriter()
+    respx.get(SCHEDULE_URL).mock(return_value=httpx.Response(503))
+
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await capture_week(2026, 1, client=client, lake=lake, now=NOW)
+
+    assert lake.written, "a failed capture wrote nothing at all"
+    for envelope in lake.written.values():
+        assert envelope.coverage.expected == REGULAR_SEASON_GAMES_FLOOR
+        assert envelope.coverage.ratio == 0.0
+
+
+@respx.mock
+async def test_a_schedule_outage_re_raises_so_the_cached_capture_survives():
+    """`run_capture_loop` catches and leaves `CaptureState` untouched.
+    Returning the failure envelopes normally would install them over the last
+    good capture -- turning an upstream outage into a loss of *availability*
+    on `/signals`, when the whole point of the cache is that an outage costs
+    only freshness."""
+    respx.get(SCHEDULE_URL).mock(return_value=httpx.Response(503))
+
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await capture_week(2026, 1, client=client, lake=NullLakeWriter(), now=NOW)
+
+
+# --- the coverage floor ------------------------------------------------------
+
+
+@respx.mock
+async def test_a_truncated_schedule_does_not_report_perfect_coverage():
+    """The ratio-1.0 bug one level up: `expected` derived from the document
+    that came back. A schedule feed truncated to one game would otherwise read
+    expected=1, present=1, ratio 1.0 -- perfectly healthy, while fifteen games
+    silently vanished."""
+    mock_upstreams(schedule_csv(HOME_GAME))
+
+    async with httpx.AsyncClient() as client:
+        result = await capture_week(
+            2026, 1, client=client, lake=NullLakeWriter(), now=NOW
+        )
+
+    coverage = result["venue_forecast_kickoff"].coverage
+    assert coverage.expected == REGULAR_SEASON_GAMES_FLOOR
+    assert coverage.present == 1
+    assert coverage.ratio < 0.1
+
+
+@respx.mock
+async def test_the_shortfall_against_the_floor_is_stated_in_errors():
+    """`missing` names only the games this pass knows about, so it is short
+    while `expected` is not. That gap is real information and is recorded
+    rather than left to be inferred from arithmetic."""
+    mock_upstreams(schedule_csv(HOME_GAME))
+
+    async with httpx.AsyncClient() as client:
+        result = await capture_week(
+            2026, 1, client=client, lake=NullLakeWriter(), now=NOW
+        )
+
+    reasons = [e["reason"] for e in result["venue_forecast_kickoff"].errors]
+    assert "below_expected_floor" in reasons
+
+
+def test_the_regular_season_floor_applies_only_to_regular_season_weeks():
+    """A postseason week can legitimately hold a single game, and a 13-game
+    floor would report a false shortfall every January."""
+    assert games_floor(1) == REGULAR_SEASON_GAMES_FLOOR
+    assert games_floor(REGULAR_SEASON_WEEKS) == REGULAR_SEASON_GAMES_FLOOR
+    assert games_floor(REGULAR_SEASON_WEEKS + 1) == 1
+    assert games_floor(0) == 1
