@@ -41,3 +41,4 @@ docs/superpowers/
 htmlcov/
 .hypothesis/
 load-results/
+load-report.txt

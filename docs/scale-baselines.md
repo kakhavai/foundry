@@ -225,3 +225,9 @@ shape is provably uninformative in stub mode — nothing accumulates — running
 six times longer would have produced a more expensive version of the same
 nothing; the duration becomes worth exercising when real documents make the
 shape meaningful.
+
+If it is ever dispatched at 30 minutes, do it with `shapes=soak` on its own,
+not alongside the default `ramp,breakpoint`: 5m setup + 5m ramp + ~3.5m
+breakpoint + 30m soak comes to roughly 43 minutes against the job's 45-minute
+cap, leaving no slack for a slow runner. The `soak_minutes` input's own
+description says the same.

@@ -628,8 +628,11 @@ def main() -> None:
         return
 
     if args.all:
-        # Order matters: ramp establishes the p(95) baseline that spike's
-        # cooldown threshold is calibrated against.
+        # This is the phase doc's specified order, not a runtime dependency:
+        # spike's cooldown threshold (p(95)<10 in spike.js) is a static
+        # literal calibrated ahead of time against captured runs (see
+        # docs/scale-baselines.md), not a value ramp produces or that this
+        # tool feeds forward at run time.
         targets = list(SHAPES)
     elif args.shape:
         if args.shape not in SHAPES:
