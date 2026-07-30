@@ -565,6 +565,86 @@ async def test_a_capture_queued_behind_the_lock_gets_the_full_deadline(spec):
     assert remaining == pytest.approx(0.2, abs=0.05)
 
 
+async def test_a_loop_pass_queued_behind_the_lock_gets_the_full_deadline(spec):
+    """Mirror of `test_a_capture_queued_behind_the_lock_gets_the_full_deadline`,
+    exercising the *other* writer: `run_capture_loop` reads its own `now` (and
+    derives `deadline` from it) after acquiring `state.lock`, not before --
+    the same defect, just observed from the loop's side of the lock instead
+    of `_run_capture`'s.
+
+    Something standing in for a dispatched `/refresh` acquires `state.lock`
+    directly and holds it well past the configured deadline; the loop is
+    queued behind it. It does not need to be the real `_run_capture` --
+    only `state.lock` itself needs to be held.
+
+    Deliberately uses real wall-clock time, same reasoning as the mirror
+    test: the defect is about wall-clock time elapsing while blocked on
+    `await lock.acquire()`, which a fake/injected clock cannot observe.
+    """
+    capture_deadline = timedelta(milliseconds=200)
+
+    refresh_holds_lock = asyncio.Event()
+    refresh_release = asyncio.Event()
+
+    async def hold_lock_like_a_dispatched_refresh() -> None:
+        async with spec.state.lock:
+            refresh_holds_lock.set()
+            await refresh_release.wait()
+
+    holder_task = asyncio.create_task(hold_lock_like_a_dispatched_refresh())
+    await refresh_holds_lock.wait()
+
+    observed: dict = {}
+
+    async def loop_capture(season, week, *, client, lake, now, deadline=None):
+        observed["now"] = now
+        observed["deadline"] = deadline
+        observed["wall_clock_at_start"] = datetime.now(tz=UTC)
+        return {}
+
+    class _StopAfterOne(Exception):
+        pass
+
+    async def sleep_once(_seconds):
+        raise _StopAfterOne
+
+    loop_task = asyncio.create_task(
+        run_capture_loop(
+            spec.state,
+            capture=loop_capture,
+            lake=spec.lake,
+            season=2026,
+            week=1,
+            cadence_class=spec.cadence_class,
+            next_event_at=lambda state, now: None,
+            metrics=spec.metrics,
+            sleep=sleep_once,
+            capture_deadline=capture_deadline,
+        )
+    )
+
+    # Hold the lock for well longer than the configured deadline before
+    # releasing it, so a naive pre-lock clock read would hand the queued
+    # loop pass a deadline that has already expired by the time it actually
+    # starts running.
+    await asyncio.sleep(0.3)
+    refresh_release.set()
+
+    await holder_task
+    with contextlib.suppress(_StopAfterOne):
+        await loop_task
+
+    assert observed["deadline"] is not None
+    # `now` must describe when the loop's pass actually started running
+    # (after the wait), not when it was queued (before it).
+    assert (observed["wall_clock_at_start"] - observed["now"]).total_seconds() < 0.05
+    # The full 200ms deadline must still be ahead of it -- not the ~-100ms
+    # (already expired) a stale pre-lock `now` would have produced after a
+    # 300ms wait.
+    remaining = (observed["deadline"] - observed["wall_clock_at_start"]).total_seconds()
+    assert remaining == pytest.approx(0.2, abs=0.05)
+
+
 def test_health_returns_ok(client):
     assert client.get("/health").json() == {"status": "ok"}
 
