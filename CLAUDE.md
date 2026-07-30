@@ -201,8 +201,10 @@ libs/collector-core/     Shared library for the collector fleet: bearer auth,
                         wiring (env parsing, lifespan, auth, routes) every
                         collector's `main.py` calls instead of assembling by
                         hand. Every collector (weather is the first) depends
-                        on it via the uv workspace; changes here fall under
-                        the `weather` CI workflow AND the integration-test gate.
+                        on it via the uv workspace, so `libs/**` is in every
+                        collector's CI path filter; its own lint/test live in
+                        collector-core.yml, and it is also covered by the
+                        integration-test gate.
 helm/charts/generic-service/    Base Helm chart all services share
 helm/values/<name>/     Per-service value overrides
 .github/actions/        Composite CI actions: python-lint, python-test, helm-lint,
@@ -218,11 +220,15 @@ infra/kind/             Kind cluster config for local dev
 scripts/                collectors.py (the fleet list every other script and
                         the integration workflow derives from — reads the
                         registry + each service's Helm values, and is the
-                        reason adding a collector edits neither), then
-                        deploy-local.py, stack-up.py, smoke-test.sh,
-                        check-registry.py, rollback.py, run-chaos.py,
-                        run-load.py, argocd-deploy.py
-docs/                   Architecture, onboarding, service contract
+                        reason adding a collector edits neither),
+                        new-collector.py (the scaffolder: the ONLY supported
+                        way to start a collector, gated by
+                        tests/test_new_collector.py), then deploy-local.py,
+                        stack-up.py, smoke-test.sh, check-registry.py,
+                        rollback.py, run-chaos.py, run-load.py,
+                        argocd-deploy.py
+docs/                   Architecture, onboarding, service contract, and
+                        collectors.md — the collector authoring guide
 tests/                  Platform tests — things no single service can see: scripts/
                         (rollback, argocd-deploy) and Helm chart render assertions.
                         Per-service tests live in services/<name>/tests/, not here.
@@ -288,8 +294,18 @@ There is also a **required** `integration-test` check that gate-keeps merges. It
 
 ## Adding a New Service
 
+**If it is a collector, do not do any of this by hand — run
+`scripts/new-collector.py`.** See the next section. This list is what the
+scaffolder is doing on your behalf, and what a non-collector service still does
+manually.
+
 See `docs/onboarding.md`. Short version:
-1. `services/<name>/` — FastAPI app, Dockerfile, pyproject.toml, uv.lock
+1. `services/<name>/` — FastAPI app, Dockerfile, pyproject.toml. A **collector**
+   is a uv workspace member and shares the root `uv.lock`; the root
+   `[tool.uv.workspace]` globs `services/*`, so there is no member list to
+   append to — but you must still run `uv lock`, because the lockfile records
+   members. A **non-collector** (`player-projections`, `foundry-cli`) is named
+   in that table's `exclude` and owns its own `uv.lock`.
 2. `helm/values/<name>/values.yaml`
 3. `infra/gitops/envs/local/<name>/values.yaml` — initial image tag (`0.1.0`).
    Still needed: the generated Application references it as its second
@@ -301,8 +317,8 @@ See `docs/onboarding.md`. Short version:
    registration.
 5. **CI: nothing.** There is no `.github/workflows/<name>.yml` to copy.
    `.github/workflows/services.yml` picks the service up as a matrix leg.
-6. **Collectors: nothing.** The registry entry from step 7 of *Adding a New
-   Collector* below is the registration — `scripts/deploy-local.py`,
+6. **Collectors: nothing.** The registry entry the scaffolder appends is the
+   registration — `scripts/deploy-local.py`,
    `scripts/stack-up.py`, `scripts/smoke-test.sh` and both service-list steps
    of `.github/workflows/integration-test.yml` derive from it via
    `scripts/collectors.py`. A **non-collector** service (there is one,
@@ -324,78 +340,92 @@ reports Healthy, and 503s on every data route.
 
 ### Adding a New Collector
 
-A collector's process wiring is not written by hand — `libs/collector-core/collector_core/app.py`
-owns it. `services/weather/` (the first collector) is the reference: its
-`main.py` is under 50 lines and contains only the things that are genuinely
-weather's.
+**Run the scaffolder. Do not copy an existing collector.**
 
-1. Build `services/<name>/` per the steps above, depending on `collector-core`
-   via the uv workspace (see `services/weather/pyproject.toml`'s
-   `[tool.uv.sources]`).
-2. Write a `capture(season, week, *, client, lake, now, deadline=None)`
-   function returning `dict[str, Envelope]` — one envelope per signal type —
-   and a `CollectorMetrics(name)` instance for it to record against.
-3. Write a `signal_matches(row, params) -> bool` predicate for whatever
-   filters beyond `season`/`week`/`signal_type` the collector's rows support.
-4. In `main.py`, build a `CollectorDescriptor` (name, cadence class, signal
-   types, supported filters, `capture`, `signal_matches`, `metrics`, and
-   optionally `next_event_at`/`telemetry_module`/`client_factory`) and pass it
-   to `build_collector_app`. That call gets you environment parsing
-   (`REFRESH_MIN_INTERVAL_SECONDS`, `CAPTURE_DEADLINE_SECONDS`,
-   `CAPTURE_SEASON`, `CAPTURE_WEEK`, `CAPTURE_ENABLED`), `CaptureState`,
-   `RefreshGate`, the lake writer, the lifespan (capture loop start/stop,
-   OTel guard, graceful shutdown), bearer auth, and the standard five routes
-   — all without writing any of it again.
-   **Do not write a `telemetry.py` and do not set `telemetry_module`.** It
-   defaults to `"collector_core.telemetry"`, the fleet's shared wiring, and
-   `build_collector_app` passes your descriptor's `name` as the service name.
-   Wave 0 deleted three identical copies of that file; do not add a fourth.
-   Set it to `None` only to disable telemetry outright, or to your own dotted
-   path if the collector genuinely needs more — in which case call the shared
-   `setup_telemetry(app, service_name)` first rather than forking it.
-   It is a **dotted module path string**, never a callable, and never
-   `from .telemetry import setup_telemetry` anywhere in `main.py`.
-   `build_collector_app` is the only thing that imports it, via
-   `importlib.import_module`, and only once `OTEL_EXPORTER_OTLP_ENDPOINT` is
-   actually set. Passing a callable instead (importing the module at
-   `main.py`'s own top level and handing the function in already bound) is
-   legal Python and every test stays green, but it silently reintroduces the
-   eager import the guard exists to prevent — that is exactly why the field
-   takes a string, not a function.
-5. There is no `auth.py`, no `telemetry.py`, and no `scheduler.py` wrapper to
-   copy — the shared loop, the bearer middleware and the OTel wiring are all
-   mounted by `build_collector_app` itself. A collector only writes a
-   `scheduler.py` if it has its own `next_event_at` lookup (weather's
-   `next_kickoff` is the model); most collectors will not need one.
+```bash
+uv run --no-project --with pyyaml==6.0.3 python3 scripts/new-collector.py \
+    betting-lines --cadence volatile --signal-types game_line_snapshot
+uv lock
+cd services/betting-lines && uv run pytest -v
+```
 
-   Nor does a collector write its own coverage floor, error cap, failure
-   envelope, or lake offloading. `collector_core.coverage` supplies
-   `CoverageAccumulator(floor=...)` and `cap_errors`;
-   `collector_core.failure.fail_capture` writes the `present: 0` envelope and
-   re-raises; `collector_core.lake` supplies `awrite`/`alist_keys`/`aread`,
-   and the lake you are handed **refuses a synchronous call from the event
-   loop thread** — boto3 on the loop gates readiness on object-store latency.
-   `collector_core.streaming.stream_csv_dicts` is how a large CSV upstream is
-   read: stream and filter as you parse, never hold the response twice.
-6. Any route beyond the standard five (weather's `/signals/convergence` is
-   the example) is a plain `@app.get`/`@app.post` added to `main.py` after
-   the `build_collector_app` call, reaching the lake and collector name via
-   `app.state.collector_spec` rather than a module-level global.
-7. Append an entry to `contracts/collector-registry.yaml` — **in the same PR
-   as the service**. See the next section. That entry is the *only* shared
-   file a new collector touches: the deploy scripts, the smoke test and the
-   integration workflow all derive their service lists from it.
-8. **Optional** — if the collector has routes beyond the standard five, add an
-   executable `services/<name>/smoke.sh`. `scripts/smoke-test.sh` runs it after
-   the standard contract surface passes, with `SMOKE_COLLECTOR`,
-   `SMOKE_BASE_URL` (direct to the Service), `SMOKE_GATEWAY_URL`,
-   `SMOKE_TOKEN` and `SMOKE_CAPTURE_ENABLED` in the environment.
-   `services/weather/smoke.sh` is the model. A collector with no extra routes
-   writes no file — the standard surface is asserted for every registered
-   collector automatically, so `scripts/smoke-test.sh` is never edited.
-   **Do not POST `/refresh` from a hook when the collector runs with
-   `CAPTURE_ENABLED=false`**: a dispatched refresh reaches the upstream
-   regardless of that flag, so it would hit a third party on every PR.
+[`docs/collectors.md`](docs/collectors.md) is the authoring guide — descriptor
+fields, the five-route contract, coverage, the failure envelope, the memory
+rules, and what the five generated TODOs actually ask of you. Read it before
+writing capture logic. What follows is only what a reader of *this* file needs.
+
+`scripts/new-collector.py` generates `services/<name>/` (package, `main.py`,
+`capture.py`, `metrics.py`, `signals.py`, an adapter stub, `Dockerfile`,
+`pyproject.toml`, `README.md`, three test files, optional `smoke.sh`),
+`helm/values/<name>/values.yaml`, `infra/gitops/envs/local/<name>/values.yaml`,
+`contracts/signal-envelope/collectors/<name>.json`, and **one appended registry
+entry** — which is the only shared file it touches.
+
+It deliberately generates **no** CI workflow, **no** Argo CD Application, **no**
+`telemetry.py`, **no** `auth.py`, **no** `scheduler.py`, and **no** per-member
+Dockerfile `COPY` lines, because Wave 0 made every one of those either derived
+or shared. Copying a collector by hand is how they grow back, twenty-four times
+over.
+
+**If a new collector needs you to edit `deploy-local.py`, `stack-up.py`,
+`smoke-test.sh`, `integration-test.yml`, `services.yml`, the root
+`pyproject.toml` or the ApplicationSet, that is a bug in the tooling — report
+it rather than working around it.** `tests/test_collector_tooling.py` makes it
+a test failure, and `tests/test_new_collector.py` scaffolds a collector into a
+tmpdir and asserts the result lints, renders through Helm, satisfies the
+registry drift gate and reaches every derived list **unmodified**.
+
+Three things that fail *silently* and therefore survive review:
+
+- **`telemetry_module` is a dotted string, never a callable, and you should not
+  set it at all.** It defaults to `"collector_core.telemetry"`, the fleet's
+  shared wiring, and `build_collector_app` passes your descriptor's `name` as
+  the service name. Wave 0 deleted three identical copies of that file; do not
+  add a fourth. `build_collector_app` is the only thing that imports it, via
+  `importlib.import_module`, and only once `OTEL_EXPORTER_OTLP_ENDPOINT` is
+  set. Importing the module at `main.py`'s own top level and handing the
+  function in already bound is legal Python and every test stays green — and it
+  reintroduces exactly the eager import the guard exists to prevent. That is
+  why the field takes a string. Set it to `None` only to disable telemetry, or
+  to your own dotted path if the collector genuinely needs more, in which case
+  call the shared `setup_telemetry(app, service_name)` rather than forking it.
+- **`coverage.expected` must never derive from what succeeded.** A collector
+  that builds its expectation from the document it just fetched reports a
+  truncated upstream — 100 of 2,900 records — as `expected: 100, present: 100`,
+  ratio 1.0. `CoverageAccumulator(floor=...)` is how you avoid it, and the
+  scaffolder generates the pattern.
+- **`POST /refresh` returns 202 — accepted, not done.** A test that reads
+  `/signals` on the next line is a race. It used to be won by accident, because
+  nothing in the capture path yielded until the lake write moved to
+  `asyncio.to_thread`. Poll with a bounded, loud helper; the scaffolder
+  generates one.
+
+A collector writes none of its own coverage floor, error cap, failure envelope
+or lake offloading. `collector_core.coverage` supplies `CoverageAccumulator` and
+`cap_errors`; `collector_core.failure.fail_capture` writes the `present: 0`
+envelope and re-raises; `collector_core.lake` supplies `awrite`/`alist_keys`/
+`aread`, and the lake you are handed **refuses a synchronous call from the event
+loop thread** — boto3 on the loop gates readiness on object-store latency.
+`collector_core.streaming.stream_csv_dicts` is how a large CSV upstream is read:
+stream and filter as you parse, never hold the response twice.
+
+Any route beyond the standard five (weather's `/signals/convergence` is the
+example) is a plain `@app.get`/`@app.post` added to `main.py` after the
+`build_collector_app` call, reaching the lake and collector name via
+`app.state.collector_spec` rather than a module-level global — and it must be
+added to `gateway.publicPaths` in the values file, or it 404s at the gateway
+while working in-cluster.
+
+Extra routes are also the only reason to pass `--smoke-hook`, which generates
+`services/<name>/smoke.sh`. `scripts/smoke-test.sh` runs it after the standard
+contract surface passes, with `SMOKE_COLLECTOR`, `SMOKE_BASE_URL` (direct to
+the Service), `SMOKE_GATEWAY_URL`, `SMOKE_TOKEN` and `SMOKE_CAPTURE_ENABLED` in
+the environment; `services/weather/smoke.sh` is the model. A collector with no
+extra routes writes no file — the standard surface is asserted for every
+registered collector automatically, so `scripts/smoke-test.sh` is never edited.
+**Do not POST `/refresh` from a hook when the collector runs with
+`CAPTURE_ENABLED=false`**: a dispatched refresh reaches the upstream regardless
+of that flag, so it would hit a third party on every PR.
 
 ---
 
@@ -825,6 +855,20 @@ If you need to verify a fix that isn't merged yet, work from inside the cluster 
   keeps twenty-six of them, and keeps onboarding a copy-a-file step. `foundry-cli`
   and `libs/collector-core` stay on their own workflows — neither has Helm values,
   an image or a GitOps entry, so three of the five matrix jobs do not apply.
+- **A scaffolder, not a reference collector to copy** — `scripts/new-collector.py`
+  generates a collector; `docs/collectors.md` explains it. "Copy `weather` and
+  change the names" was fine at one collector and is the mechanism by which the
+  fleet re-acquires every file Wave 0 deleted — twenty-four times, each one
+  already buried in a service tree somebody then edits on top of. The
+  scaffolder's value is not saving typing, it is that **what it does not
+  generate is enforceable**: `tests/test_new_collector.py` asserts the exact
+  file set both directions, so an extra per-collector copy of something shared
+  reds a required check instead of merging. It also bakes in the two things
+  that fail silently — the declared coverage floor and the bounded poll after a
+  202 `/refresh` — because those are precisely what a copy-paste author drops.
+  The root `[tool.uv.workspace]` moved to a `services/*` glob with an explicit
+  `exclude` for the same reason: an enumerated member list would be a
+  twenty-fourth append to a shared file that no machine reads.
 - **OTel guard on env var** — no collector needed for local dev or tests; Kubernetes injects it.
 - **The projections generator lives outside this repo** — the ML/ranking methodology is the product's value and stays out of version control. It publishes snapshots to S3 for `player-projections` to poll, with S3 auth handled at the infrastructure level (see ADR 0002). Foundry never deploys or calls it; a file in a bucket is the whole interface.
 - **Stub mode for not-yet-built upstreams** — `PROJECTIONS_SNAPSHOT_URL` empty = service runs, returns empty data, no crashes. Lets the service be deployed and observed before its dependency exists.
