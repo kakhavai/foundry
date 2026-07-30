@@ -108,6 +108,16 @@ async def capture_week(
             forecast_acc.fail(game.game_id, exc.reason)
             continue
 
+        # Current conditions are a venue property, not a forecast property --
+        # a venue counts toward `venue_conditions_current` coverage as soon as
+        # it is known to host a game this week, independent of whether that
+        # game's *forecast* succeeds below. Recording it here, before the
+        # forecast is attempted, keeps a forecast-only outage (e.g. every
+        # kickoff beyond the provider's model horizon) from collapsing
+        # `expected` to 0 -- which `Coverage.ratio` would then read as a
+        # perfectly healthy 1.0 instead of the missing signal it is.
+        resolved[venue["stadium_id"]] = venue
+
         lead_hours = max(0.0, (game.kickoff_at - now).total_seconds() / 3600.0)
         metrics.capture_attempt()
         try:
@@ -149,7 +159,6 @@ async def capture_week(
         }
         forecast_signals.append(signal)
         forecast_acc.record(game.game_id)
-        resolved[venue["stadium_id"]] = venue
 
     current_acc = CoverageAccumulator(resolved)
     current_signals: list[dict] = []

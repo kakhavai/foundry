@@ -148,6 +148,38 @@ async def test_total_upstream_failure_still_writes_an_envelope():
     assert envelope.errors, "a failed capture must record why"
 
 
+@respx.mock
+async def test_a_total_forecast_outage_does_not_zero_current_conditions_expected():
+    """FINDING 1: `resolved` (the current-conditions expected set) used to be
+    populated only after a forecast succeeded, so a total forecast outage --
+    e.g. every kickoff beyond the provider's ~16-day model horizon -- drove
+    `venue_conditions_current` coverage to `expected: 0, present: 0`, which
+    `Coverage.ratio` reads as a healthy 1.0 rather than the missing signal it
+    actually is. A venue hosting a game must count toward current-conditions
+    `expected` regardless of whether that game's forecast succeeds -- venue
+    resolution and forecast fetching are separate concerns.
+    """
+    respx.get(SCHEDULE_URL).mock(
+        return_value=httpx.Response(200, text=schedule_csv(HOME_GAME, SECOND_HOME_GAME))
+    )
+    respx.get(FORECAST_URL).mock(return_value=httpx.Response(503))
+
+    async with httpx.AsyncClient() as client:
+        result = await capture_week(
+            2026, 1, client=client, lake=NullLakeWriter(), now=NOW
+        )
+
+    forecast = result["venue_forecast_kickoff"]
+    assert forecast.coverage.present == 0
+    assert forecast.signals == []
+
+    current = result["venue_conditions_current"]
+    assert current.coverage.expected == 2  # two distinct venues host a game
+    assert current.coverage.present == 0
+    assert current.coverage.ratio == 0.0  # not 1.0 -- this is a real outage
+    assert current.signals == []
+
+
 class _ExplodingLakeWriter:
     """Every write raises -- stands in for a bucket that is unreachable or
     whose credentials never arrived (both `optional: true` in the Helm

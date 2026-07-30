@@ -103,10 +103,12 @@ async def test_each_failure_class_increments_its_own_reason(
         or 0.0
     )
 
-    # One game -> one forecast attempt; the forecast failure short-circuits
-    # before a venue is ever resolved for current conditions, so exactly one
-    # failure of this reason is recorded, not two.
-    assert after - before == 1.0
+    # One game -> one forecast attempt. Venue resolution now happens before
+    # the forecast is attempted (FINDING 1: a venue must count toward
+    # current-conditions coverage even when its forecast fails), so the venue
+    # is still resolved and current conditions is attempted against the same
+    # broken endpoint -- two failures of this reason, not one.
+    assert after - before == 2.0
 
 
 @respx.mock

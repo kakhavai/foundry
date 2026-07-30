@@ -52,6 +52,11 @@ extraEnv:
     value: "2026"
   - name: CAPTURE_WEEK
     value: "1"
+  # Wall-clock ceiling for one capture_week pass, checked between games and
+  # between venues; a run over budget records deadline_exceeded per remaining
+  # key instead of discarding what it already captured.
+  - name: CAPTURE_DEADLINE_SECONDS
+    value: "300"
   # Same optional:true pattern as COLLECTOR_TOKEN — the pod starts before the
   # Secret exists and the lake simply has no credentials until it arrives.
   - name: AWS_ACCESS_KEY_ID
