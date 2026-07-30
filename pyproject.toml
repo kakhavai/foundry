@@ -5,3 +5,14 @@ members = [
     "services/player-identity",
     "services/roster-scope",
 ]
+
+# Applies to the Python that lives OUTSIDE a member package — tests/ and
+# scripts/. Each service and lib carries its own [tool.ruff] and is unaffected,
+# because ruff uses the nearest config walking up from the file.
+#
+# Without target-version here, ruff infers a floor old enough that `tomllib`
+# (stdlib since 3.11) is classified as a third-party import, and `ruff check`
+# demands it be sorted into the wrong block. Every service already pins py312;
+# this says the same thing for the repo-level code.
+[tool.ruff]
+target-version = "py312"

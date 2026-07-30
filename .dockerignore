@@ -1,0 +1,47 @@
+# Build-context exclusions for every image built from the REPO ROOT — which is
+# all three collectors. services/player-projections builds from its own
+# directory and is unaffected by this file (Docker reads .dockerignore from the
+# context root, not from the repo root).
+#
+# This matters more than it looks. Each collector's `workspace-manifests` stage
+# does `COPY . .` to reduce the whole tree down to the uv manifests, so
+# anything left in the context is transferred on every build. In a real clone
+# `.git` alone is tens of megabytes, and a developer with a local `.venv` under
+# services/<name>/ would otherwise have it swept into the build.
+#
+# Kept deliberately narrow: only things no Dockerfile can ever want. Directories
+# a future Dockerfile might legitimately copy (contracts/, helm/, tests/) stay
+# in the context — they are small, and excluding them buys nothing but a
+# confusing "file not found" a year from now.
+
+# Git metadata. A worktree's .git is a 74-byte pointer file; a real clone's is
+# the whole object store, and CI builds from a real clone.
+**/.git
+**/.gitignore
+
+# Python build and test detritus. A host .venv copied into the image would also
+# be the wrong platform's wheels.
+**/.venv
+**/venv
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.hypothesis
+**/.coverage
+**/.coverage.*
+**/htmlcov
+
+# Agent and editor state
+.claude
+.idea
+.vscode
+**/*.swp
+
+# Docs and generated artifacts — no Dockerfile reads these
+docs
+load-results
+load-report.txt
+**/*.tgz
