@@ -289,10 +289,12 @@ def py_tuple(values: tuple[str, ...] | list[str], indent: str = "    ") -> str:
 # point* rather than as generated output nobody edits.
 # ══════════════════════════════════════════════════════════════════════════════
 
-INIT_PY = '''"""%%name%% — a Foundry signal collector."""
+INIT_PY = '''\
+"""%%name%% — a Foundry signal collector."""
 '''
 
-MAIN_PY = '''"""%%name%%'s process wiring: the descriptor, and nothing else yet.
+MAIN_PY = '''\
+"""%%name%%'s process wiring: the descriptor, and nothing else yet.
 
 Everything else — environment parsing, `CaptureState`, the capture loop, bearer
 auth, the OTel guard and the standard five routes — lives in
@@ -344,7 +346,8 @@ app = build_collector_app(
 # `gateway.publicPaths`, or it 404s at the gateway while working in-cluster.
 '''
 
-SIGNALS_PY = '''"""Which `/signals` query parameters this collector accepts, and what they mean.
+SIGNALS_PY = '''\
+"""Which `/signals` query parameters this collector accepts, and what they mean.
 
 `season`, `week` and `signal_type` are universal — `collector_core.routes`
 applies those itself against each envelope's scope. Everything named here
@@ -387,7 +390,8 @@ def signal_matches(row: dict, params: Mapping[str, str]) -> bool:
     return True
 '''
 
-METRICS_PY = '''"""%%name%%'s binding to the shared collector metrics.
+METRICS_PY = '''\
+"""%%name%%'s binding to the shared collector metrics.
 
 A subclass rather than a bare `CollectorMetrics(COLLECTOR)` instance, and
 deliberately **not** consolidated into `collector-core`: the fleet-wide series
@@ -436,7 +440,8 @@ class %%class_prefix%%Metrics(CollectorMetrics):
 metrics = %%class_prefix%%Metrics()
 '''
 
-ADAPTER_PY = '''"""The upstream adapter — the only module that knows the wire format.
+ADAPTER_PY = '''\
+"""The upstream adapter — the only module that knows the wire format.
 
 Kept separate from `capture.py` so the orchestration (coverage accounting,
 envelopes, the lake) can be tested against a fake upstream without mocking
@@ -516,7 +521,8 @@ async def fetch_rows(
     return [{"key": row["key"], "value": row["value"]} for row in response.json()]
 '''
 
-CAPTURE_PY = '''"""%%name%%'s capture pass: fetch -> coverage -> envelopes -> lake.
+CAPTURE_PY = '''\
+"""%%name%%'s capture pass: fetch -> coverage -> envelopes -> lake.
 
 `/signals` serves from the cache this fills, never from an upstream, so an
 upstream outage costs **freshness, not availability**. A collector that reaches
@@ -686,7 +692,8 @@ async def capture_%%pkg%%(
     return envelopes
 '''
 
-CONFTEST_PY = '''"""Fixtures for %%name%%'s suite.
+CONFTEST_PY = '''\
+"""Fixtures for %%name%%'s suite.
 
 `SpyLake` is an in-memory `LakeWriter` rather than moto: CI prunes
 collector-core's dev dependencies inside `services/`, so a moto import passes
@@ -791,7 +798,8 @@ def lake() -> SpyLake:
     return SpyLake()
 '''
 
-TEST_ROUTES_PY = '''"""%%name%%'s five-route contract surface, plus auth.
+TEST_ROUTES_PY = '''\
+"""%%name%%'s five-route contract surface, plus auth.
 
 The routes themselves are `collector_core.routes`' and are proved there against
 a fake collector. What this file proves is that THIS service is wired to them —
@@ -916,7 +924,8 @@ def test_an_absent_token_env_fails_closed_with_503(client, monkeypatch):
     assert client.get("/signals").status_code == 503
 '''
 
-TEST_CONFORMANCE_PY = '''"""Producer-side contract conformance, against the **real** capture path.
+TEST_CONFORMANCE_PY = '''\
+"""Producer-side contract conformance, against the **real** capture path.
 
 The repo-root `tests/test_signal_envelope_conformance.py` validates committed
 static fixtures — both sides hand-maintained — so it catches fixture drift and
@@ -1024,7 +1033,8 @@ def test_the_schema_covers_exactly_the_declared_signal_types():
     assert set(FIELD_SCHEMAS) == set(SIGNAL_TYPES)
 '''
 
-TEST_COVERAGE_PY = '''"""The coverage floor, which is the thing most likely to be got wrong.
+TEST_COVERAGE_PY = '''\
+"""The coverage floor, which is the thing most likely to be got wrong.
 
 `coverage.expected` must never derive from what a fetch returned. These tests
 are the ones that fail if somebody "simplifies" `capture.py` by computing the
@@ -1090,7 +1100,8 @@ def test_every_signal_type_declares_a_floor():
     assert all(floor >= 1 for floor in EXPECTED_FLOOR.values())
 '''
 
-PYPROJECT_TOML = '''[project]
+PYPROJECT_TOML = '''\
+[project]
 name = "%%name%%"
 version = "0.1.0"
 requires-python = ">=3.12"
@@ -1145,7 +1156,8 @@ show_missing = true
 collector-core = { workspace = true }
 '''
 
-DOCKERFILE = '''# Stage 1 — workspace-manifests. Verbatim in every collector; the write-up
+DOCKERFILE = '''\
+# Stage 1 — workspace-manifests. Verbatim in every collector; the write-up
 # lives in services/weather/Dockerfile, and tests/test_dockerfile_workspace.py
 # enforces that they agree.
 #
@@ -1199,7 +1211,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \\
 # Stage 3 — runtime
 FROM python:3.12-slim
 
-RUN addgroup --system --gid 65532 app && adduser --system --uid 65532 --ingroup app appuser
+# A numeric UID: Kubernetes `runAsNonRoot` can only verify a numeric user.
+RUN addgroup --system --gid 65532 app \\
+    && adduser --system --uid 65532 --ingroup app appuser
 
 WORKDIR /app
 
@@ -1214,7 +1228,8 @@ EXPOSE %%port%%
 CMD ["uvicorn", "%%pkg%%.main:app", "--host", "0.0.0.0", "--port", "%%port%%"]
 '''
 
-HELM_VALUES = '''service:
+HELM_VALUES = '''\
+service:
   name: %%name%%
   port: %%port%%
 
@@ -1303,7 +1318,8 @@ extraEnv:
     value: "us-east-1"
 '''
 
-GITOPS_VALUES = '''# The image tag ArgoCD deploys. Overwritten on every push to main by
+GITOPS_VALUES = '''\
+# The image tag ArgoCD deploys. Overwritten on every push to main by
 # .github/actions/update-gitops-tag with the Git SHA that built the image —
 # 0.1.0 is only the placeholder that makes the generated Application render
 # before the first build lands.
@@ -1311,14 +1327,16 @@ image:
   tag: "0.1.0"
 '''
 
-FIELD_SCHEMA_HEAD = '''{
+FIELD_SCHEMA_HEAD = '''\
+{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://foundry.internal/signal-envelope/collectors/%%name%%.json",
   "title": "%%name%% collector signal fields",
   "signal_types": {
 '''
 
-FIELD_SCHEMA_TYPE = '''    "%%signal_type%%": {
+FIELD_SCHEMA_TYPE = '''\
+    "%%signal_type%%": {
       "type": "object",
       "required": ["key", "observed_at", "value"],
       "properties": {
@@ -1328,7 +1346,8 @@ FIELD_SCHEMA_TYPE = '''    "%%signal_type%%": {
       }
     }'''
 
-README_MD = '''# %%name%%
+README_MD = '''\
+# %%name%%
 
 A Foundry signal collector. Scaffolded by `scripts/new-collector.py`; see
 [`docs/collectors.md`](../../docs/collectors.md) for the authoring guide.
@@ -1339,7 +1358,7 @@ A Foundry signal collector. Scaffolded by `scripts/new-collector.py`; see
 | Gateway path | `%%path%%` |
 | Cadence class | `%%cadence%%` |
 | Signal types | %%signal_types_md%% |
-| Status | **Stub upstream** — `adapters/upstream.py` returns a deterministic placeholder until `UPSTREAM_URL` is set |
+| Status | **Stub upstream** — see `adapters/upstream.py` |
 
 ## What it captures
 
@@ -1374,7 +1393,8 @@ uv run pytest -v
 ```
 '''
 
-SMOKE_SH = '''#!/usr/bin/env bash
+SMOKE_SH = '''\
+#!/usr/bin/env bash
 #
 # %%name%%'s own smoke assertions — the routes beyond the standard five.
 # scripts/smoke-test.sh runs this after the standard contract surface passes,
@@ -1398,7 +1418,8 @@ curl -sf -H "$AUTH" "$SMOKE_GATEWAY_URL/catalog" >/dev/null
 echo "%%name%%: extra-route smoke OK"
 '''
 
-REGISTRY_ENTRY = '''
+REGISTRY_ENTRY = '''\
+
   - name: %%name%%
     path: %%path%%
     stage: %%stage%%
@@ -1579,7 +1600,9 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Service port. Defaults to one past the highest already claimed.",
     )
-    parser.add_argument("--stage", default="8B", help="Phase-8 sub-stage (documentary).")
+    parser.add_argument(
+        "--stage", default="8B", help="Phase-8 sub-stage (documentary)."
+    )
     parser.add_argument(
         "--depends-on",
         default="",
@@ -1606,7 +1629,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Also generate services/<name>/smoke.sh. Only needed for extra routes.",
     )
     parser.add_argument("--root", type=Path, default=ROOT)
-    parser.add_argument("--force", action="store_true", help="Overwrite existing files.")
+    parser.add_argument(
+        "--force", action="store_true", help="Overwrite existing files."
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
