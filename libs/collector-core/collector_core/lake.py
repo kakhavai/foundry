@@ -6,8 +6,34 @@ nothing is lost, and the revision itself is visible.
 
 Partitioning by season and week means a training window is one prefix scan
 rather than a full-bucket listing.
+
+**`LakeWriter` is boto3, which is synchronous.** Calling it directly from a
+coroutine runs it on the event loop thread and blocks the whole process —
+including `/health`. That is not theoretical: it is what broke `roster-scope`'s
+first deploy. Its capture's ledger read was the first statement of the
+lifespan-started coroutine with no `await` ahead of it, so uvicorn never
+finished starting, the readiness probe never passed, and `kubectl rollout
+status` timed out at 180s. botocore's defaults make the worst case minutes
+rather than seconds: a 60-second connect timeout, retried. Readiness became
+gated on object-store latency — the exact inversion of the collector
+contract's promise that an upstream outage degrades *freshness*, not
+*availability*.
+
+`weather` was safe only by accident of statement ordering: its capture's first
+statement is `await fetch_schedule(...)`, which yields, so its pod goes Ready
+long before it touches the lake. An invariant nobody can see is not an
+invariant, so this module supplies both halves of the fix:
+
+- `awrite` / `alist_keys` / `aread` — `asyncio.to_thread` wrappers, the only
+  way a coroutine may touch the lake.
+- `EventLoopGuardedLake` — a wrapper `build_collector_app` applies to every
+  collector's lake, which raises if a synchronous method is called from the
+  event loop thread. A twenty-fifth collector that forgets gets a loud,
+  classified failure at the first write instead of an invisible readiness
+  inversion in production.
 """
 
+import asyncio
 import json
 import os
 from typing import Protocol
@@ -135,6 +161,87 @@ class NullLakeWriter:
 
     def read(self, key: str) -> dict:
         raise KeyError(f"NullLakeWriter holds no objects (requested {key!r})")
+
+
+class EventLoopGuardedLake:
+    """A `LakeWriter` that refuses to run on the event loop thread.
+
+    Wraps whatever `build_lake_writer_from_env` produced. Every synchronous
+    method asserts there is no running event loop in the calling thread before
+    delegating, so:
+
+    - called from `asyncio.to_thread` (i.e. through `awrite`/`alist_keys`/
+      `aread`, or a whole sync helper offloaded in one go) — no running loop
+      in a worker thread, so it delegates normally;
+    - called from ordinary synchronous code, including tests — no running
+      loop, so it delegates normally;
+    - called directly from a coroutine or a route handler — raises.
+
+    The third case is the bug this exists to make impossible to reintroduce.
+    Failing loudly is strictly better than the alternative: a blocking call
+    there does not error, it silently stalls the process until the kubelet
+    kills the pod, and the symptom (probes reporting `connection refused`)
+    looks nothing like its cause.
+    """
+
+    def __init__(self, inner: LakeWriter) -> None:
+        self.inner = inner
+
+    @staticmethod
+    def _assert_off_loop(method: str) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return  # No loop in this thread — the call is safe.
+        raise RuntimeError(
+            f"LakeWriter.{method}() is synchronous boto3 and was called on the "
+            "event loop thread, which blocks every other request including "
+            "/health. Use collector_core.lake.awrite/alist_keys/aread, or "
+            "offload the whole helper with asyncio.to_thread."
+        )
+
+    def write(self, envelope: Envelope) -> str:
+        self._assert_off_loop("write")
+        return self.inner.write(envelope)
+
+    def list_keys(
+        self,
+        collector: str,
+        signal_type: str,
+        season: int,
+        week: int,
+        version: str = ENVELOPE_VERSION,
+    ) -> list[str]:
+        self._assert_off_loop("list_keys")
+        return self.inner.list_keys(collector, signal_type, season, week, version)
+
+    def read(self, key: str) -> dict:
+        self._assert_off_loop("read")
+        return self.inner.read(key)
+
+
+async def awrite(lake: LakeWriter, envelope: Envelope) -> str:
+    """`lake.write` off the event loop. The only way a coroutine may write."""
+    return await asyncio.to_thread(lake.write, envelope)
+
+
+async def alist_keys(
+    lake: LakeWriter,
+    collector: str,
+    signal_type: str,
+    season: int,
+    week: int,
+    version: str = ENVELOPE_VERSION,
+) -> list[str]:
+    """`lake.list_keys` off the event loop."""
+    return await asyncio.to_thread(
+        lake.list_keys, collector, signal_type, season, week, version
+    )
+
+
+async def aread(lake: LakeWriter, key: str) -> dict:
+    """`lake.read` off the event loop."""
+    return await asyncio.to_thread(lake.read, key)
 
 
 def build_lake_writer_from_env() -> LakeWriter:

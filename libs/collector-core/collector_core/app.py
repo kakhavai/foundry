@@ -24,7 +24,7 @@ from fastapi import FastAPI
 
 from .auth import DEFAULT_EXEMPT_PATHS, build_bearer_middleware
 from .cadence import CadenceClass
-from .lake import build_lake_writer_from_env
+from .lake import EventLoopGuardedLake, build_lake_writer_from_env
 from .metrics import CollectorMetrics
 from .refresh import RefreshGate
 from .routes import CaptureFn, CaptureState, CollectorSpec, build_collector_router
@@ -35,6 +35,18 @@ def _no_event(state: CaptureState, now: datetime) -> datetime | None:
     """The default `next_event_at` when a descriptor declares none: the loop
     still runs on its base cadence, it simply never escalates."""
     return None
+
+
+def _setup_telemetry(module_path: str, app: FastAPI) -> None:
+    """Import a collector's telemetry module and run its setup.
+
+    A plain function rather than two inline statements so the whole blocking
+    unit -- the import *and* the setup -- can be handed to
+    `asyncio.to_thread` as one callable. `importlib.import_module` still lives
+    here and nowhere else, so the deferred-import invariant is unchanged.
+    """
+    telemetry = importlib.import_module(module_path)
+    telemetry.setup_telemetry(app)
 
 
 @dataclass(frozen=True)
@@ -96,7 +108,12 @@ def build_collector_app(descriptor: CollectorDescriptor) -> FastAPI:
 
     state = CaptureState()
     refresh_gate = RefreshGate(refresh_floor)
-    lake = build_lake_writer_from_env()
+    # Guarded, not raw: `LakeWriter` is synchronous boto3, and a collector
+    # that calls it straight from its capture coroutine blocks the event loop
+    # and gates readiness on object-store latency. The wrapper turns that from
+    # an invisible stall into an immediate, classified error. Coroutines reach
+    # the lake through `collector_core.lake.awrite`/`alist_keys`/`aread`.
+    lake = EventLoopGuardedLake(build_lake_writer_from_env())
 
     spec_kwargs = dict(
         name=descriptor.name,
@@ -123,9 +140,15 @@ def build_collector_app(descriptor: CollectorDescriptor) -> FastAPI:
         # The import happens here, inside the guard, and nowhere else --
         # `descriptor.telemetry_module` being a string rather than a
         # pre-imported callable is what makes that non-negotiable.
+        #
+        # Off the event loop, because both halves block: importing the OTel
+        # SDK and its exporters is hundreds of milliseconds of synchronous
+        # import work, and `setup_telemetry` builds exporters and readers on
+        # top of it. Nothing in the lifespan may hold the loop -- uvicorn has
+        # not finished starting yet, so time spent here is time `/health` is
+        # unanswerable, which is what the readiness probe measures.
         if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") and descriptor.telemetry_module:
-            telemetry = importlib.import_module(descriptor.telemetry_module)
-            telemetry.setup_telemetry(app)
+            await asyncio.to_thread(_setup_telemetry, descriptor.telemetry_module, app)
 
         # Guarded so tests and local runs do not reach an upstream on import.
         task: asyncio.Task | None = None
