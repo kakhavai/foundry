@@ -6,7 +6,9 @@ is a pure function — no cluster, no k6, no network.
 """
 
 import importlib.util
+import json
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -433,3 +435,134 @@ def test_newest_pod_picks_the_later_timestamp_when_it_is_listed_last():
     older = _pod("k6-ramp-old", "2026-07-29T23:10:00Z", phase="Running")
     newer = _pod("k6-ramp-new", "2026-07-29T23:15:00Z", phase="Pending")
     assert rl.newest_pod([older, newer]) == newer
+
+
+# ── run_shape, threshold-naming wiring ─────────────────────────────────────────
+#
+# first_breached_threshold was defined, documented, and unit-tested in
+# isolation (see the fixtures above) but never called from run_shape -- the
+# review that found this called it dead code. These tests drive run_shape's
+# actual code path with the cluster calls mocked out, so a future edit that
+# breaks the wiring (not just the function in isolation) fails here.
+#
+# The log text embeds k6's real startup banner, "‾" (U+203E) included -- the
+# same character that breaks an unencoded write_text() on Windows (see the
+# encoding tests below). Any regression on either fix shows up in these tests
+# without needing a separate synthetic case.
+
+K6_BANNER = (
+    "\n          /‾‾\\ \n     /‾‾/  /‾‾\\   \n    /‾‾/  /‾‾/  \n"
+    "   /‾‾/  /‾‾/    k6 - a next-generation load generator\n"
+)
+
+
+def _mock_cluster(monkeypatch, tmp_path, *, log_text: str, exit_code: int, restarts: int = 2):
+    """Stand in for every cluster call run_shape makes, so its own logic --
+    including the threshold-naming wired in below -- runs for real without a
+    live cluster.
+
+    Patches module-level functions rather than subprocess, mirroring how
+    run_shape actually calls them (as free names resolved from the module's
+    own globals at call time, which is exactly what monkeypatching the module
+    attribute intercepts).
+    """
+    monkeypatch.setattr(rl, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(rl, "restart_count", lambda: restarts)
+    monkeypatch.setattr(rl, "configmap_up", lambda: None)
+    monkeypatch.setattr(rl, "apply_job", lambda job: None)
+    monkeypatch.setattr(rl, "wait_for_pod_action", lambda shape, timeout_s: "fetch")
+    monkeypatch.setattr(rl, "pod_exit_code", lambda shape: exit_code)
+
+    def fake_kubectl(args, check=True):
+        if args[0] == "logs":
+            return types.SimpleNamespace(stdout=log_text)
+        return types.SimpleNamespace(stdout="", returncode=0)
+
+    monkeypatch.setattr(rl, "kubectl", fake_kubectl)
+
+
+def _summary_log(metrics: dict) -> str:
+    return f"{K6_BANNER}TOTAL RESULTS\n{rl.SUMMARY_MARKER}\n{json.dumps({'metrics': metrics})}\n"
+
+
+def test_run_shape_names_the_breached_threshold_for_a_failing_shape(monkeypatch, tmp_path, capsys):
+    """A non-breakpoint shape that crossed a threshold it should have held
+    must say which metric, not just FAIL -- this is the whole point of
+    wiring first_breached_threshold in."""
+    log = _summary_log({"http_req_failed": {"thresholds": {"rate<0.01": True}}})
+    _mock_cluster(monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED)
+
+    passed = rl.run_shape("ramp", soak_minutes=5)
+
+    assert passed is False
+    out = capsys.readouterr().out
+    assert "FAIL -- a threshold was crossed: http_req_failed (rate<0.01)" in out
+
+
+def test_run_shape_breakpoint_names_the_rung_that_broke(monkeypatch, tmp_path, capsys):
+    """breakpoint's entire output is 'which rung broke' -- MEASURED must name
+    it too, not only FAIL. This is the case that a bare `not passed` guard
+    would have missed, since breakpoint's MEASURED verdict has passed=True."""
+    log = _summary_log(
+        {"http_req_failed{scenario:rate_600}": {"thresholds": {"rate<0.01": True}}}
+    )
+    _mock_cluster(monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED)
+
+    passed = rl.run_shape("breakpoint", soak_minutes=5)
+
+    assert passed is True
+    out = capsys.readouterr().out
+    assert (
+        "MEASURED -- threshold crossed as designed: "
+        "http_req_failed{scenario:rate_600} (rate<0.01)" in out
+    )
+
+
+def test_run_shape_survives_a_malformed_summary_payload(monkeypatch, tmp_path, capsys):
+    """The runner must never crash while reporting a failure. A payload that
+    isn't valid JSON (a truncated export, a k6 crash mid-write) must degrade
+    to the plain verdict, not raise."""
+    log = f"{K6_BANNER}TOTAL RESULTS\n{rl.SUMMARY_MARKER}\nnot valid json\n"
+    _mock_cluster(monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED)
+
+    passed = rl.run_shape("ramp", soak_minutes=5)
+
+    assert passed is False
+    out = capsys.readouterr().out
+    assert "result: FAIL -- a threshold was crossed" in out
+    assert "FAIL -- a threshold was crossed:" not in out  # nothing named
+
+
+def test_run_shape_a_passing_run_gets_no_threshold_suffix(monkeypatch, tmp_path, capsys):
+    """A clean PASS must stay exactly 'PASS' -- no colon, no metric name --
+    since nothing crossed."""
+    log = _summary_log({"http_req_failed": {"thresholds": {"rate<0.01": False}}})
+    _mock_cluster(monkeypatch, tmp_path, log_text=log, exit_code=0)
+
+    passed = rl.run_shape("ramp", soak_minutes=5)
+
+    assert passed is True
+    out = capsys.readouterr().out
+    assert "result: PASS" in out
+
+
+# ── run_shape, UTF-8 write path (Windows regression) ───────────────────────────
+#
+# k6's startup banner (embedded in K6_BANNER above, and therefore in every log
+# text these tests already exercise) contains U+203E. On this platform, `uv
+# run python` resolves write_text()'s default encoding to the locale codepage
+# (cp1252) rather than UTF-8, so an unencoded write_text() raises
+# UnicodeEncodeError partway through -- after a run has already completed --
+# losing the result. All four tests above already cover this implicitly since
+# they run run_shape to completion on Windows; this test isolates it and
+# fails with a clear message (rather than an opaque encode error deep in a
+# different test) if the encoding= argument is ever dropped.
+
+def test_run_shape_writes_results_containing_the_k6_banner_without_crashing(monkeypatch, tmp_path):
+    log = _summary_log({"http_reqs": {"value": 100}})
+    _mock_cluster(monkeypatch, tmp_path, log_text=log, exit_code=0)
+
+    rl.run_shape("ramp", soak_minutes=5)
+
+    written = (tmp_path / "ramp.txt").read_text(encoding="utf-8")
+    assert "‾" in written

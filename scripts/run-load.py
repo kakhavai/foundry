@@ -560,6 +560,22 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
         code = pod_exit_code(shape)
         passed, verdict = interpret_exit(shape, code)
 
+        # Name the threshold that crossed, if k6 exited 99. Gated on the exit
+        # code rather than `not passed`: breakpoint's whole output is "which
+        # rung broke", and it exits 99 on a *successful* MEASURED run (passed
+        # is True there), not a failing one. Gating on `not passed` would
+        # silently skip the one shape whose entire purpose is this data. A
+        # malformed or missing summary must not crash a run that is already
+        # reporting a failure -- json.JSONDecodeError degrades to "no name",
+        # not a traceback.
+        if code == K6_EXIT_THRESHOLD_CROSSED and payload.strip():
+            try:
+                breached = first_breached_threshold(json.loads(payload))
+            except json.JSONDecodeError:
+                breached = None
+            if breached:
+                verdict = f"{verdict}: {breached}"
+
         restarts_after = restart_count()
         passed, verdict = apply_restart_check(
             shape, passed, verdict, restarts_before, restarts_after
