@@ -1,0 +1,135 @@
+name: load-test
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+# workflow_dispatch only, and deliberately so.
+#
+# No schedule: a scheduled run spends a cluster every night on a repo that
+# changes in bursts. Considered and rejected twice already, for chaos.
+#
+# No pull_request trigger, unlike chaos-test.yml. Chaos earned one because
+# platform-tests validates scenario files structurally without ever executing
+# them, so wrong PromQL merged green. The equivalent risk here is smaller and
+# the run is longer: tests/test_run_load.py covers the runner's logic without a
+# cluster, and `k6 inspect` catches a malformed script in seconds.
+#
+# The cost is real and is written down rather than patched: between manual runs,
+# a regression reaching this harness from outside it — a renamed service, a moved
+# port, a changed response shape — is caught by nothing. See
+# docs/scale-baselines.md.
+#
+# This is NOT a required status check, and must not become one. Load results are
+# noisier than chaos results, and the chaos check is not required either.
+#
+# The default shape set is `ramp,breakpoint`, and both omissions are deliberate:
+#
+#   soak  — provably uninformative in stub mode. /projections reads a
+#           module-level dict, filters an empty list, and _poll_loop returns
+#           immediately without a snapshot URL, so there is no per-request
+#           allocation and no background task: nothing accumulates over time.
+#           Running the one shape that cannot inform anything is the obvious
+#           thing to cut from a default.
+#   spike — currently FAILS, correctly. At 500 RPS against a 250m CPU limit the
+#           pod runs 2-4x beyond its throughput ceiling and the kubelet restarts
+#           it. That is a true finding about the platform's sizing, not a flaky
+#           test, and it is documented in docs/scale-baselines.md. It is excluded
+#           from the default so a dispatch is not permanently red; it is not
+#           excluded to hide it, and the assertion has not been softened.
+#
+# Both remain selectable via the `shapes` input.
+on:
+  workflow_dispatch:
+    inputs:
+      shapes:
+        description: 'Comma-separated shapes to run. Default excludes soak and spike -- see the comment above.'
+        required: false
+        default: 'ramp,breakpoint'
+      soak_minutes:
+        description: 'Soak duration in minutes, used only if soak is in shapes (the phase doc specifies 30; never run at that length)'
+        required: false
+        default: '5'
+
+concurrency:
+  group: load-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    # Default set is ramp (5m) + breakpoint (~3m, it aborts at the first rung to
+    # cross 1%), plus ~5m of cluster setup: about 13 minutes. Adding soak costs
+    # its duration; adding spike costs ~2.5m. 45 leaves room for a slow runner
+    # without letting a wedged run burn the default 360-minute budget.
+    timeout-minutes: 45
+    container:
+      image: ghcr.io/kakhavai/foundry/ci-runner:latest
+      options: --privileged -v /var/run/docker.sock:/var/run/docker.sock
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Kind cluster
+        run: kind create cluster --config infra/kind/cluster.yaml --name foundry
+
+      - name: Fix kubeconfig for container networking
+        run: |
+          GHA_NETWORK=$(docker network ls --format '{{.Name}}' | grep 'github_network' | head -1)
+          docker network connect "$GHA_NETWORK" foundry-control-plane
+          NODE_IP=$(docker inspect foundry-control-plane \
+            --format="{{(index .NetworkSettings.Networks \"$GHA_NETWORK\").IPAddress}}")
+          kubectl config set-cluster kind-foundry \
+            --server="https://$NODE_IP:6443" \
+            --insecure-skip-tls-verify=true
+
+      # Needed for the soak's memory observation. The gateway and Chaos Mesh are
+      # not installed: player-projections is not routed through the gateway, and
+      # nothing here injects a fault.
+      - name: Deploy observability stack
+        run: |
+          cd infra/grafana-stack
+          helmfile repos
+          helmfile apply
+
+      - name: Deploy player-projections
+        run: python3 scripts/deploy-local.py player-projections
+
+      - name: Wait for the workload
+        run: |
+          kubectl wait --for=condition=ready pod --all -n monitoring --timeout=300s
+          # rollout status, not `wait --for=condition=ready pod -l <label>`: the
+          # label selector also matches Terminating pods, which never reach Ready.
+          kubectl rollout status deployment/player-projections --timeout=180s
+
+      # A loop over the input rather than --all, so the default set can exclude
+      # shapes without the runner growing a flag for it. `set -o pipefail` and
+      # the explicit `failed` tracking matter: `tee` would otherwise mask a
+      # non-zero exit, and every shape should run even after one fails so the
+      # artifact is complete rather than truncated at the first red.
+      - name: Run load shapes
+        run: |
+          set -o pipefail
+          failed=0
+          for shape in $(echo "${{ inputs.shapes }}" | tr ',' ' '); do
+            echo "::group::$shape"
+            uv run --with pyyaml==6.0.3 python scripts/run-load.py "$shape" \
+              --soak-minutes ${{ inputs.soak_minutes }} 2>&1 | tee -a load-report.txt \
+              || failed=1
+            echo "::endgroup::"
+          done
+          exit $failed
+
+      - name: Upload load report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-report
+          path: |
+            load-report.txt
+            load-results/
+
+      - name: Tear down cluster
+        if: always()
+        run: kind delete cluster --name foundry
