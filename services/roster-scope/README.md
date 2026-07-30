@@ -25,7 +25,7 @@ roster_scope/
   metrics.py              the shared fleet metrics plus this collector's two
   telemetry.py            OTel wiring, imported only behind the env guard
   adapters/
-    depth_chart.py        upstream ordered-player feed
+    depth_chart.py        upstream ordered-player feed (streamed, see below)
     identity.py           the player-identity seam
 ```
 
@@ -54,6 +54,25 @@ Consequences worth knowing:
 - A total chart outage yields `present: 32` (the config-derived team defenses)
   out of 416 — a ratio of ~0.077, and an envelope that is still written, with
   a populated `errors` array.
+
+## The depth-chart upstream is large, and that shaped the adapter
+
+The candidate feed publishes a **36.8 MB** document, and it is a season-long
+*time series of snapshots* covering every unit — not one current chart. Two
+consequences are baked into `adapters/depth_chart.py`:
+
+- **It streams.** Reading `resp.text` held the body three times over and
+  OOM-killed the pod at 256Mi on the first deploy.
+- **It retains only what the config can use** — in-scope positions, newest row
+  per `(team, position, rank)`. 983 rows against the real feed, peaking at
+  38.5 MiB RSS, so the memory limit is unchanged.
+
+The feed carries **no season or week column**; `season` selects the asset and
+`week` scopes the envelope. `dt` becomes `depth_source_captured_at`.
+
+`CAPTURE_ENABLED` ships **false**, matching `player-identity`: 37 MB on every
+pod start is not a polite thing to do to a third party on every CI run. That
+is a load decision, not a memory one.
 
 ## The `player-identity` seam
 
