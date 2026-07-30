@@ -229,6 +229,51 @@ def test_other_nonzero_codes_fail_even_for_breakpoint(code):
     assert "ERROR" in verdict
 
 
+# ── apply_restart_check ─────────────────────────────────────────────────────────
+
+def test_only_breakpoint_is_exempt_from_the_no_restart_assertion():
+    exempt = {s for s, c in rl.SHAPES.items() if not c["asserts_no_restart"]}
+    assert exempt == {"breakpoint"}
+
+
+def test_unchanged_restart_count_is_a_no_op_for_every_shape():
+    for shape in rl.SHAPES:
+        passed, verdict = rl.apply_restart_check(shape, True, "PASS", 2, 2)
+        assert passed is True
+        assert verdict == "PASS"
+
+
+def test_breakpoint_still_passes_when_the_restart_count_moved():
+    """breakpoint measures and asserts nothing about restarts -- provoking one
+    is the point of the shape, not a defect it should fail on."""
+    passed, verdict = rl.apply_restart_check(
+        "breakpoint", True, "MEASURED -- threshold crossed as designed", 2, 3
+    )
+    assert passed is True
+
+
+def test_breakpoint_still_reports_the_restart_as_an_observation():
+    """The moved count is interesting data about where the service breaks down
+    (Task 6 quotes it) and must still appear in the verdict text -- worded so it
+    cannot be mistaken for an assertion that passed."""
+    _, verdict = rl.apply_restart_check(
+        "breakpoint", True, "MEASURED -- threshold crossed as designed", 2, 3
+    )
+    assert "restart count moved 2 -> 3" in verdict
+    assert "(observed; not an assertion for this shape)" in verdict
+    assert "RESTARTED" not in verdict
+
+
+@pytest.mark.parametrize("shape", ["ramp", "soak", "spike"])
+def test_a_moved_restart_count_fails_asserting_shapes(shape):
+    """The guard against this change quietly disabling the check everywhere: a
+    shape that was passing must go red the moment its restart count moves."""
+    passed, verdict = rl.apply_restart_check(shape, True, "PASS", 2, 2 + 1)
+    assert passed is False
+    assert "RESTARTED" in verdict
+    assert "restart count moved 2 -> 3" in verdict
+
+
 # ── first_breached_threshold ──────────────────────────────────────────────────
 #
 # Both fixtures are trimmed from real k6 2.1.0 --summary-export output captured

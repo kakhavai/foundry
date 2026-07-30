@@ -55,14 +55,36 @@ K6_EXIT_THRESHOLD_CROSSED = 99
 #
 # `timeout` is the kubectl wait budget, sized well above each shape's own
 # duration so a slow cluster does not read as a hung Job.
+#
+# `asserts_no_restart` is False only for breakpoint: its entire purpose is to
+# drive the service past capacity until the error-rate threshold crosses, and a
+# kubelet restart along the way is the expected result of that, not a defect.
+# The other three shapes are meant to hold steady, so a restart during any of
+# them is a real finding and keeps failing the run.
 SHAPES: dict[str, dict] = {
-    "ramp": {"script": "ramp.js", "expect_threshold_breach": False, "timeout": "10m"},
-    "soak": {"script": "soak.js", "expect_threshold_breach": False, "timeout": "50m"},
-    "spike": {"script": "spike.js", "expect_threshold_breach": False, "timeout": "10m"},
+    "ramp": {
+        "script": "ramp.js",
+        "expect_threshold_breach": False,
+        "timeout": "10m",
+        "asserts_no_restart": True,
+    },
+    "soak": {
+        "script": "soak.js",
+        "expect_threshold_breach": False,
+        "timeout": "50m",
+        "asserts_no_restart": True,
+    },
+    "spike": {
+        "script": "spike.js",
+        "expect_threshold_breach": False,
+        "timeout": "10m",
+        "asserts_no_restart": True,
+    },
     "breakpoint": {
         "script": "breakpoint.js",
         "expect_threshold_breach": True,
         "timeout": "20m",
+        "asserts_no_restart": False,
     },
 }
 
@@ -274,6 +296,27 @@ def interpret_exit(shape: str, code: int) -> tuple[bool, str]:
             return True, "MEASURED -- threshold crossed as designed"
         return False, "FAIL -- a threshold was crossed"
     return False, f"ERROR -- k6 exited {code}"
+
+
+def apply_restart_check(
+    shape: str, passed: bool, verdict: str, before: int, after: int
+) -> tuple[bool, str]:
+    """Fold a restart-count observation into a shape's (passed, verdict).
+
+    A no-op when the count did not move. When it did, every shape gets the
+    fact appended to the verdict text -- it is useful data regardless of
+    outcome -- but only a shape with asserts_no_restart=True has it flip
+    `passed`. breakpoint is the one exception: it exists to drive the service
+    past capacity until it breaks, so a restart along the way is the expected
+    result, not a defect, and the line is worded so it cannot be mistaken for
+    an assertion that passed.
+    """
+    if before == after:
+        return passed, verdict
+    moved = f"player-projections restart count moved {before} -> {after}"
+    if SHAPES[shape]["asserts_no_restart"]:
+        return False, f"{verdict} | RESTARTED -- {moved}"
+    return passed, f"{verdict} | {moved} (observed; not an assertion for this shape)"
 
 
 def first_breached_threshold(summary: dict) -> str | None:
@@ -512,13 +555,10 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
         passed, verdict = interpret_exit(shape, code)
 
         restarts_after = restart_count()
-        if restarts_after != restarts_before:
-            passed = False
-            verdict += (
-                f" | RESTARTED -- player-projections restart count moved "
-                f"{restarts_before} -> {restarts_after}"
-            )
-        else:
+        passed, verdict = apply_restart_check(
+            shape, passed, verdict, restarts_before, restarts_after
+        )
+        if restarts_after == restarts_before:
             print(f"  restart count unchanged at {restarts_after}")
 
         print(f"\nresult: {verdict}")
