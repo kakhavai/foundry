@@ -174,7 +174,7 @@
     },
     "/signals/convergence": {
       "get": {
-        "description": "weather's own extra route -- not part of the shared five. Reaches the\nlake via `app.state.collector_spec` rather than a module-level global.",
+        "description": "weather's own extra route -- not part of the shared five. Reaches the\nlake via `app.state.collector_spec` rather than a module-level global.\n\nOffloaded whole rather than awaiting each lake call individually:\n`build_convergence_series` is a synchronous helper that does one\n`list_keys` plus one `read` per snapshot, so running it on the event loop\nwould stall every other request -- including `/health` -- for the duration\nof a prefix scan. One `to_thread` moves all of it off, and the guarded\nlake makes forgetting an error rather than a stall.",
         "operationId": "convergence_signals_convergence_get",
         "parameters": [
           {

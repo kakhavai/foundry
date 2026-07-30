@@ -299,22 +299,37 @@ weather's.
    `RefreshGate`, the lake writer, the lifespan (capture loop start/stop,
    OTel guard, graceful shutdown), bearer auth, and the standard five routes
    — all without writing any of it again.
-   `telemetry_module` is a **dotted module path string**, e.g.
-   `telemetry_module="<pkg>.telemetry"` — not a callable, and not
+   **Do not write a `telemetry.py` and do not set `telemetry_module`.** It
+   defaults to `"collector_core.telemetry"`, the fleet's shared wiring, and
+   `build_collector_app` passes your descriptor's `name` as the service name.
+   Wave 0 deleted three identical copies of that file; do not add a fourth.
+   Set it to `None` only to disable telemetry outright, or to your own dotted
+   path if the collector genuinely needs more — in which case call the shared
+   `setup_telemetry(app, service_name)` first rather than forking it.
+   It is a **dotted module path string**, never a callable, and never
    `from .telemetry import setup_telemetry` anywhere in `main.py`.
    `build_collector_app` is the only thing that imports it, via
    `importlib.import_module`, and only once `OTEL_EXPORTER_OTLP_ENDPOINT` is
-   actually set. Passing a callable instead (importing `<pkg>.telemetry` at
+   actually set. Passing a callable instead (importing the module at
    `main.py`'s own top level and handing the function in already bound) is
    legal Python and every test stays green, but it silently reintroduces the
    eager import the guard exists to prevent — that is exactly why the field
-   takes a string, not a function. If the collector has no telemetry wired
-   yet, leave it `None`; the app still builds and starts fine.
-5. There is no `auth.py` and no `scheduler.py` wrapper to copy — the shared
-   loop and the bearer middleware are mounted by `build_collector_app`
-   itself. A collector only writes a `scheduler.py` if it has its own
-   `next_event_at` lookup (weather's `next_kickoff` is the model); most
-   collectors will not need one.
+   takes a string, not a function.
+5. There is no `auth.py`, no `telemetry.py`, and no `scheduler.py` wrapper to
+   copy — the shared loop, the bearer middleware and the OTel wiring are all
+   mounted by `build_collector_app` itself. A collector only writes a
+   `scheduler.py` if it has its own `next_event_at` lookup (weather's
+   `next_kickoff` is the model); most collectors will not need one.
+
+   Nor does a collector write its own coverage floor, error cap, failure
+   envelope, or lake offloading. `collector_core.coverage` supplies
+   `CoverageAccumulator(floor=...)` and `cap_errors`;
+   `collector_core.failure.fail_capture` writes the `present: 0` envelope and
+   re-raises; `collector_core.lake` supplies `awrite`/`alist_keys`/`aread`,
+   and the lake you are handed **refuses a synchronous call from the event
+   loop thread** — boto3 on the loop gates readiness on object-store latency.
+   `collector_core.streaming.stream_csv_dicts` is how a large CSV upstream is
+   read: stream and filter as you parse, never hold the response twice.
 6. Any route beyond the standard five (weather's `/signals/convergence` is
    the example) is a plain `@app.get`/`@app.post` added to `main.py` after
    the `build_collector_app` call, reaching the lake and collector name via
@@ -482,13 +497,26 @@ if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
     setup_telemetry(app)
 ```
 
-Each service has a `telemetry.py` with traces (OTLP gRPC → OTel Collector → Tempo) and metrics (`PrometheusMetricReader` → `/metrics` → Prometheus).
+**Collectors do not write a `telemetry.py`.** `collector_core/telemetry.py` is
+the fleet's single copy — traces (OTLP gRPC → OTel Collector → Tempo) and
+metrics (`PrometheusMetricReader` → `/metrics` → Prometheus).
+`CollectorDescriptor.telemetry_module` defaults to `"collector_core.telemetry"`,
+still a dotted string resolved by `importlib` *inside* the
+`OTEL_EXPORTER_OTLP_ENDPOINT` guard, and `build_collector_app` passes the
+descriptor's own `name` so the resource is named from data rather than a
+per-service literal. `OTEL_SERVICE_NAME` still overrides it.
+
+Wave 0 consolidated this: every collector's `telemetry.py` was the same forty
+lines differing by exactly one string. Set `telemetry_module=None` to disable
+telemetry, or point it at your own module — which takes `(app, service_name)`
+and should call the shared `setup_telemetry` first rather than forking it.
+`player-projections` is not a collector and keeps its own copy.
 
 **`setup_telemetry` must rebuild the middleware stack.** `setup_telemetry` runs
 inside the lifespan handler, and `FastAPIInstrumentor.instrument_app` only
 patches `app.build_middleware_stack`. Starlette builds and caches that stack on
 its first `__call__` — which *is* the lifespan scope — so the patch arrives too
-late and `OpenTelemetryMiddleware` is never installed. Every `telemetry.py`
+late and `OpenTelemetryMiddleware` is never installed. The shared module
 therefore ends with:
 
 ```python
@@ -499,9 +527,11 @@ app.middleware_stack = app.build_middleware_stack()
 Omit that line and the failure is **silent**: `_is_instrumented_by_opentelemetry`
 still reads `True`, `/metrics` still works, and the service simply produces no
 server spans while its httpx client spans arrive in Tempo with no parent.
-`test_server_middleware_is_actually_installed` in each service's
-`tests/test_telemetry.py` guards it by walking the real middleware chain —
-asserting `instrument_app` was *called* does not catch this.
+`test_server_middleware_is_actually_installed` in
+`libs/collector-core/tests/test_telemetry.py` guards it by walking the real
+middleware chain — asserting `instrument_app` was *called* does not catch this.
+Holding that test once instead of twenty-six times is the point of the
+consolidation: it is one chance to drop the line, not twenty-six.
 
 **Collector service name:** The Helmfile release is named `otel-collector`, but the Helm chart appends `-opentelemetry-collector`, making the in-cluster DNS name `otel-collector-opentelemetry-collector.monitoring.svc.cluster.local`. This is set in `helm/charts/generic-service/values.yaml`. If traces/logs stop flowing while `/metrics` still works, this is the first thing to check — Prometheus scrapes pod annotations directly and is unaffected by a broken OTel endpoint.
 

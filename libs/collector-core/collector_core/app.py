@@ -24,7 +24,7 @@ from fastapi import FastAPI
 
 from .auth import DEFAULT_EXEMPT_PATHS, build_bearer_middleware
 from .cadence import CadenceClass
-from .lake import build_lake_writer_from_env
+from .lake import EventLoopGuardedLake, build_lake_writer_from_env
 from .metrics import CollectorMetrics
 from .refresh import RefreshGate
 from .routes import CaptureFn, CaptureState, CollectorSpec, build_collector_router
@@ -35,6 +35,29 @@ def _no_event(state: CaptureState, now: datetime) -> datetime | None:
     """The default `next_event_at` when a descriptor declares none: the loop
     still runs on its base cadence, it simply never escalates."""
     return None
+
+
+# The shared OTel wiring every collector gets unless it declares its own.
+# A dotted string, not an import: `collector_core.telemetry` pulls in the OTel
+# SDK, the exporters and the instrumentors, and importing that eagerly is
+# exactly what the `OTEL_EXPORTER_OTLP_ENDPOINT` guard exists to prevent.
+DEFAULT_TELEMETRY_MODULE = "collector_core.telemetry"
+
+
+def _setup_telemetry(module_path: str, app: FastAPI, service_name: str) -> None:
+    """Import a collector's telemetry module and run its setup.
+
+    A plain function rather than inline statements so the whole blocking
+    unit -- the import *and* the setup -- can be handed to
+    `asyncio.to_thread` as one callable. `importlib.import_module` still lives
+    here and nowhere else, so the deferred-import invariant is unchanged.
+
+    `service_name` is passed positionally so the shared module can name the
+    resource from the descriptor rather than a per-service literal. A
+    collector's own `telemetry.py` therefore takes `(app, service_name)`.
+    """
+    telemetry = importlib.import_module(module_path)
+    telemetry.setup_telemetry(app, service_name)
 
 
 @dataclass(frozen=True)
@@ -59,15 +82,22 @@ class CollectorDescriptor:
     # perishable moment). `None` means the loop never escalates -- it is not
     # required.
     next_event_at: NextEventAt | None = None
-    # A dotted module path (e.g. "weather.telemetry"), not a callable. A
-    # callable would let a collector author import its telemetry module at
-    # their own file's top level and hand the function in already bound --
-    # legal Python, every test green, and it silently defeats the whole
-    # point of the OTel guard below. A string cannot import anything by
-    # itself: `importlib.import_module` only runs, and only inside the env
-    # check, so the deferred-import invariant is structural, not a
-    # convention every collector has to independently reinvent.
-    telemetry_module: str | None = None
+    # A dotted module path, not a callable. A callable would let a collector
+    # author import its telemetry module at their own file's top level and
+    # hand the function in already bound -- legal Python, every test green,
+    # and it silently defeats the whole point of the OTel guard below. A
+    # string cannot import anything by itself: `importlib.import_module` only
+    # runs, and only inside the env check, so the deferred-import invariant
+    # is structural, not a convention every collector has to independently
+    # reinvent.
+    #
+    # Defaults to the fleet's shared wiring (`collector_core.telemetry`),
+    # which was previously forty near-identical lines copied into every
+    # service. Override only for a collector that genuinely needs more; that
+    # module takes `(app, service_name)` and should call the shared
+    # `setup_telemetry` first rather than forking it. `None` disables
+    # telemetry entirely.
+    telemetry_module: str | None = DEFAULT_TELEMETRY_MODULE
     client_factory: Callable[[], httpx.AsyncClient] | None = None
 
 
@@ -96,7 +126,12 @@ def build_collector_app(descriptor: CollectorDescriptor) -> FastAPI:
 
     state = CaptureState()
     refresh_gate = RefreshGate(refresh_floor)
-    lake = build_lake_writer_from_env()
+    # Guarded, not raw: `LakeWriter` is synchronous boto3, and a collector
+    # that calls it straight from its capture coroutine blocks the event loop
+    # and gates readiness on object-store latency. The wrapper turns that from
+    # an invisible stall into an immediate, classified error. Coroutines reach
+    # the lake through `collector_core.lake.awrite`/`alist_keys`/`aread`.
+    lake = EventLoopGuardedLake(build_lake_writer_from_env())
 
     spec_kwargs = dict(
         name=descriptor.name,
@@ -123,9 +158,17 @@ def build_collector_app(descriptor: CollectorDescriptor) -> FastAPI:
         # The import happens here, inside the guard, and nowhere else --
         # `descriptor.telemetry_module` being a string rather than a
         # pre-imported callable is what makes that non-negotiable.
+        #
+        # Off the event loop, because both halves block: importing the OTel
+        # SDK and its exporters is hundreds of milliseconds of synchronous
+        # import work, and `setup_telemetry` builds exporters and readers on
+        # top of it. Nothing in the lifespan may hold the loop -- uvicorn has
+        # not finished starting yet, so time spent here is time `/health` is
+        # unanswerable, which is what the readiness probe measures.
         if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") and descriptor.telemetry_module:
-            telemetry = importlib.import_module(descriptor.telemetry_module)
-            telemetry.setup_telemetry(app)
+            await asyncio.to_thread(
+                _setup_telemetry, descriptor.telemetry_module, app, descriptor.name
+            )
 
         # Guarded so tests and local runs do not reach an upstream on import.
         task: asyncio.Task | None = None

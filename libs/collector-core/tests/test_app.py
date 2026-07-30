@@ -71,6 +71,13 @@ def make_descriptor(**overrides) -> CollectorDescriptor:
         capture=_StubCapture(),
         signal_matches=_signal_matches,
         metrics=CollectorMetrics("collector-app-fake"),
+        # Explicitly off. `CollectorDescriptor.telemetry_module` defaults to
+        # the fleet's shared wiring, and these tests exercise process wiring
+        # rather than telemetry -- left at the default they would install real
+        # global OTel providers and a real OTLP exporter, which outlive the
+        # test and pollute every later one. `test_telemetry.py` owns that
+        # surface and stubs the SDK properly.
+        telemetry_module=None,
     )
     base.update(overrides)
     return CollectorDescriptor(**base)
@@ -194,14 +201,19 @@ def test_telemetry_module_is_imported_and_called_when_the_endpoint_is_set(monkey
     calls = []
     module_name = "collector_core_tests_fake_telemetry_module"
     fake_module = types.ModuleType(module_name)
-    fake_module.setup_telemetry = calls.append
+    # `(app, service_name)`: the collector's own name is passed positionally so
+    # the shared module can build its resource from the descriptor rather than
+    # a per-service literal.
+    fake_module.setup_telemetry = lambda app, service_name: calls.append(
+        (app, service_name)
+    )
     monkeypatch.setitem(sys.modules, module_name, fake_module)
 
     app = build_collector_app(make_descriptor(telemetry_module=module_name))
     with TestClient(app):
         pass
 
-    assert calls == [app]
+    assert calls == [(app, "fake")]
 
 
 def test_a_missing_telemetry_module_is_a_noop_even_with_the_endpoint_set(monkeypatch):

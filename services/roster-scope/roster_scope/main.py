@@ -29,11 +29,11 @@ app = build_collector_app(
         # No `next_event_at`: weekly cadence with nothing perishable to
         # escalate toward. The loop runs on its base interval.
         #
-        # A dotted string, not a callable. `build_collector_app` imports it
-        # with importlib *inside* the OTEL_EXPORTER_OTLP_ENDPOINT guard;
-        # importing `.telemetry` here and passing the function would defeat
-        # that guard while leaving every test green.
-        telemetry_module="roster_scope.telemetry",
+        # No `telemetry_module` either: `collector_core.telemetry` is the
+        # default. It is still resolved as a dotted string by importlib
+        # *inside* the OTEL_EXPORTER_OTLP_ENDPOINT guard -- consolidating the
+        # module did not weaken that; it removed twenty-six chances to get it
+        # wrong.
     )
 )
 

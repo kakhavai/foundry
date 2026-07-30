@@ -18,13 +18,36 @@ Validation happens at **two levels**, and both are load-bearing:
 
 A validation failure fails the capture loudly with `reason=schema` rather
 than mapping nulls into an append-only lake that is never rewritten.
+
+**On memory.** This document is parsed whole rather than streamed, which is a
+deliberate exception to the fleet rule in `collector_core.streaming`. It is a
+single JSON object keyed by player id, so a streaming parse needs an
+incremental JSON reader (a new compiled runtime dependency) rather than the
+line-at-a-time CSV handling every other collector uses. Measured before
+accepting it: a synthetic Sleeper-shaped document of 12.2 MB — more than twice
+the ~5 MB the real one runs at — peaks at 42 MB of traced allocation through
+`json.loads`, and the retained subset is ~2,900 mapped rows. Roughly 20 MB at
+the real size, against a 256Mi limit. It is not close, so it is not worth a
+dependency.
+
+What was missing is the *ceiling*: nothing bounded how much this would buffer
+if the upstream started serving something unbounded, which is exactly the
+guard `roster-scope` learned to add. `MAX_PLAYERS_DOCUMENT_BYTES` is that
+bound, and it fails loudly rather than being OOM-killed with no explanation.
 """
 
+import json
 import os
 
 import httpx
 
 PLAYERS_URL = os.getenv("PLAYERS_URL", "https://api.sleeper.app/v1/players/nfl")
+
+# The real document is ~5 MB. This is a wide ceiling on an upstream nobody
+# controls, not a tuning knob: crossing it means the document is no longer the
+# thing this adapter was written against, and refusing is better than being
+# killed by the kernel for it.
+MAX_PLAYERS_DOCUMENT_BYTES = 64 * 1024 * 1024
 
 # Present-though-nullable. Absence means the upstream's shape moved.
 REQUIRED_RECORD_KEYS = frozenset(
@@ -52,6 +75,10 @@ class UpstreamSchemaError(ValueError):
     """
 
 
+class PlayersDocumentTooLarge(ValueError):
+    """The players document exceeded `MAX_PLAYERS_DOCUMENT_BYTES`."""
+
+
 async def fetch_players(client: httpx.AsyncClient) -> tuple[dict, str | None]:
     """Fetch the players document. Returns `(payload, source_ref)`.
 
@@ -59,10 +86,26 @@ async def fetch_players(client: httpx.AsyncClient) -> tuple[dict, str | None]:
     this version of the document, which is exactly what the envelope's
     `upstream.source_ref` is for. `None` when the upstream sends no ETag,
     rather than a fabricated stand-in.
+
+    Streamed only far enough to enforce the size ceiling before anything is
+    decoded: `response.json()` on an unbounded body would buffer and parse it
+    first and discover the problem by being OOM-killed. The bytes are held
+    once and handed straight to the parser.
     """
-    response = await client.get(PLAYERS_URL)
-    response.raise_for_status()
-    return response.json(), response.headers.get("etag")
+    async with client.stream("GET", PLAYERS_URL) as response:
+        response.raise_for_status()
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in response.aiter_bytes():
+            size += len(chunk)
+            if size > MAX_PLAYERS_DOCUMENT_BYTES:
+                raise PlayersDocumentTooLarge(
+                    f"{PLAYERS_URL} exceeded {MAX_PLAYERS_DOCUMENT_BYTES} bytes"
+                )
+            chunks.append(chunk)
+        etag = response.headers.get("etag")
+
+    return json.loads(b"".join(chunks)), etag
 
 
 def validate_document(payload, crosswalk_keys: dict[str, str]) -> None:

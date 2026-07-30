@@ -2,6 +2,8 @@
 `/signals/convergence`. Everything else lives in `collector_core.app`.
 """
 
+import asyncio
+
 from collector_core.app import CollectorDescriptor, build_collector_app
 from fastapi import Query
 
@@ -32,7 +34,10 @@ app = build_collector_app(
         signal_matches=_signal_matches,
         metrics=metrics,
         next_event_at=next_kickoff,
-        telemetry_module="weather.telemetry",
+        # No `telemetry_module`: the fleet's shared wiring
+        # (`collector_core.telemetry`) is the default, and weather needs
+        # nothing beyond it. The forty near-identical lines this service used
+        # to carry are gone.
     )
 )
 
@@ -40,7 +45,17 @@ app = build_collector_app(
 @app.get("/signals/convergence")
 async def convergence(game_id: str = Query(...), season: int = 2026, week: int = 1):
     """weather's own extra route -- not part of the shared five. Reaches the
-    lake via `app.state.collector_spec` rather than a module-level global."""
+    lake via `app.state.collector_spec` rather than a module-level global.
+
+    Offloaded whole rather than awaiting each lake call individually:
+    `build_convergence_series` is a synchronous helper that does one
+    `list_keys` plus one `read` per snapshot, so running it on the event loop
+    would stall every other request -- including `/health` -- for the duration
+    of a prefix scan. One `to_thread` moves all of it off, and the guarded
+    lake makes forgetting an error rather than a stall.
+    """
     spec = app.state.collector_spec
-    series = build_convergence_series(spec.lake, spec.name, game_id, season, week)
+    series = await asyncio.to_thread(
+        build_convergence_series, spec.lake, spec.name, game_id, season, week
+    )
     return {"game_id": game_id, "series": series, "count": len(series)}

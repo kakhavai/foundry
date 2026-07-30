@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 import respx
+from collector_core.coverage import ERRORS_TRUNCATED, MAX_ERRORS
 
 from roster_scope.capture import capture_scope
 from roster_scope.scope import CHANGE_SIGNAL, MEMBERSHIP_SIGNAL
@@ -200,8 +201,10 @@ async def test_a_rank_change_between_captures_emits_one_event(lake):
 
 @respx.mock
 async def test_a_total_upstream_outage_still_writes_an_envelope(lake):
-    """`weather` raises here and writes nothing. This collector does not: a
-    gap in an append-only lake must be explicit, never inferred from absence."""
+    """A gap in an append-only lake must be explicit, never inferred from
+    absence. This collector degrades in place rather than raising; `weather`
+    raises but now writes a failure envelope first
+    (`collector_core.failure.fail_capture`). Two shapes, same guarantee."""
     respx.get(FEED_2026).mock(return_value=httpx.Response(503))
     result = await run_capture(lake)
 
@@ -286,8 +289,17 @@ async def test_a_deadline_truncates_the_pass_rather_than_discarding_it(lake):
     # The deadline is already past when the first team is reached, so every
     # slot is accounted for as truncated rather than silently absent.
     assert membership.coverage.present == 0
-    assert len(membership.errors) == 416
-    assert {e["reason"] for e in membership.errors} == {"deadline_exceeded"}
+    # Capped, with the drop stated rather than silent: all 416 slots are
+    # accounted for in `coverage.missing`, but 416 near-identical error
+    # entries in every envelope and every lake object is the payload bloat
+    # `collector_core.coverage.cap_errors` exists to bound.
+    assert len(membership.errors) == MAX_ERRORS + 1
+    assert {e["reason"] for e in membership.errors[:MAX_ERRORS]} == {
+        "deadline_exceeded"
+    }
+    assert membership.errors[-1]["reason"] == ERRORS_TRUNCATED
+    assert membership.errors[-1]["total"] == 416
+    assert len(membership.coverage.missing) == 416
     assert len(lake.writes) == 2
 
 

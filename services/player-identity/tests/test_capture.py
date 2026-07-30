@@ -11,15 +11,12 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 import respx
+from collector_core.coverage import BELOW_EXPECTED_FLOOR, MAX_ERRORS
 from conftest import SpyLake, player, sleeper_document
 
 from player_identity import capture as capture_module
 from player_identity.adapters.sleeper import PLAYERS_URL, UpstreamSchemaError
-from player_identity.capture import (
-    EXPECTED_ROSTER_FLOOR,
-    MAX_ERRORS,
-    capture_identities,
-)
+from player_identity.capture import EXPECTED_ROSTER_FLOOR, capture_identities
 from player_identity.resolution import MissQueue, ResolutionIndex
 
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
@@ -92,7 +89,7 @@ async def test_expected_never_derives_from_what_the_fetch_returned():
     assert coverage.present == 2
     assert coverage.ratio < 0.01
     reasons = {e["reason"] for e in envelopes["player_identity_crosswalk"].errors}
-    assert "below_expected_roster_floor" in reasons
+    assert BELOW_EXPECTED_FLOOR in reasons
 
 
 @respx.mock
@@ -103,7 +100,7 @@ async def test_the_floor_never_lowers_a_genuinely_larger_roster():
     coverage = envelopes["player_identity_crosswalk"].coverage
     assert coverage.expected == 2
     reasons = {e["reason"] for e in envelopes["player_identity_crosswalk"].errors}
-    assert "below_expected_roster_floor" not in reasons
+    assert BELOW_EXPECTED_FLOOR not in reasons
 
 
 @respx.mock
@@ -272,7 +269,10 @@ async def test_the_errors_array_is_capped_with_a_truncation_marker():
     errors = envelopes["player_identity_crosswalk"].errors
     assert len(errors) == MAX_ERRORS + 1
     assert errors[-1]["reason"] == "errors_truncated"
-    assert "20 further error(s) omitted" in errors[-1]["detail"]
+    # The marker carries structured counts, not just prose, so a consumer can
+    # tell how much was dropped without parsing a sentence.
+    assert errors[-1]["omitted"] == 20
+    assert errors[-1]["total"] == MAX_ERRORS + 20
 
 
 @respx.mock

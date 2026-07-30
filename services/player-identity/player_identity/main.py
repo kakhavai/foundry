@@ -38,7 +38,7 @@ app = build_collector_app(
         capture=partial(capture_identities, misses=_misses, index=_index),
         signal_matches=_signal_matches,
         metrics=metrics,
-        telemetry_module="player_identity.telemetry",
+        # Shared telemetry wiring by default -- see collector_core.telemetry.
     )
 )
 app.state.miss_queue = _misses
