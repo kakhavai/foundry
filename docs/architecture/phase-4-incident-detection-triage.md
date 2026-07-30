@@ -86,8 +86,12 @@ services/foundry-cli/foundry/triage/
 ```
 
 The fault toggle (4A's own incident source) is not a module here — it lives in the
-`weather` service's upstream client (`services/weather/weather/client.py`), env-var-guarded
-so it is inert in production. See the Fault toggle section below.
+`weather` service's upstream adapter (`services/weather/weather/adapters/forecast.py`),
+env-var-guarded so it is inert in production. See the Fault toggle section below.
+
+It was originally in `weather/client.py`; Phase 8's 8A retrofit deleted that file
+and carried `_maybe_inject_fault` into the forecast adapter, so the toggle and its
+`FAULT_UPSTREAM_*` Helm plumbing still work unchanged.
 
 Each unit has one purpose and a defined interface: a **collector** turns a telemetry source into typed records; a **detector** turns records into scored anomalies for one signal; the **ranker** turns all anomalies into ranked suspects; the **narrator** turns the bundle into prose. Collectors and detectors never call the LLM; the narrator never queries telemetry.
 
@@ -271,7 +275,7 @@ It strictly narrates the structured evidence — it does not re-query telemetry,
 ## Deliverables
 
 - `services/foundry-cli/foundry/triage/` — collectors, detectors, models, ranker, narrator, CLI, eval harness
-- `services/weather/weather/client.py` — env-var-guarded fault toggle (eval incident source)
+- `services/weather/weather/adapters/forecast.py` — env-var-guarded fault toggle (eval incident source; was `weather/client.py` before 8A deleted it)
 - Env-var fault toggle in the `weather` service + Helm values plumbing
 - `eval/scenarios/` + `run_eval.py` with documented accuracy metrics
 - `docs/incident-assistant-limitations.md` — what this tool does not do and why
