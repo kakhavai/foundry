@@ -547,9 +547,15 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
             )
 
         RESULTS_DIR.mkdir(exist_ok=True)
-        (RESULTS_DIR / f"{shape}.txt").write_text(text)
+        # encoding="utf-8" explicitly: k6's own startup banner contains U+203E
+        # (the "/‾‾/" ascii-art), and on Windows `uv run python` resolves
+        # write_text's default encoding to the locale codepage (cp1252) rather
+        # than UTF-8, so a 5-minute ramp completed and then died writing its
+        # own results. Every capture has that banner, so this is not an edge
+        # case -- it broke every local run on this platform.
+        (RESULTS_DIR / f"{shape}.txt").write_text(text, encoding="utf-8")
         if payload.strip():
-            (RESULTS_DIR / f"{shape}.json").write_text(payload)
+            (RESULTS_DIR / f"{shape}.json").write_text(payload, encoding="utf-8")
 
         code = pod_exit_code(shape)
         passed, verdict = interpret_exit(shape, code)
@@ -577,6 +583,16 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
 
 
 def main() -> None:
+    # Same U+203E exposure as the results-file write, but for the streaming
+    # path: when stdout is a pipe (CI, or a captured local run) rather than a
+    # console, Python still resolves its encoding from the locale codepage on
+    # Windows unless UTF-8 mode is on. route_log_lines' `show` callback prints
+    # every line k6 emits live, banner included. Guarded for interpreters
+    # where stdout has no reconfigure (e.g. already replaced by a test
+    # harness's capture object).
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(
         prog="run-load",
         description="Run a k6 load shape against player-projections.",
