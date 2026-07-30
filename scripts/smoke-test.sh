@@ -93,13 +93,24 @@ curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
   | python3 -c "import sys,json; assert json.load(sys.stdin)['refresh_id']; print('refresh accepted')"
 
 # /refresh returns before the capture finishes, so poll rather than assume.
-for i in $(seq 1 30); do
+#
+# Count on the runner, not inside the container: the MinIO image is minimal and
+# has no `grep`, so piping to it in-container fails with exit 127 on every poll
+# and the loop can only ever report zero — a broken counter that looks exactly
+# like a broken lake write.
+OBJECTS=0
+for _ in $(seq 1 30); do
   OBJECTS=$(kubectl exec -n monitoring deploy/minio -- \
-    sh -c 'ls -R /export/foundry-signals 2>/dev/null | grep -c ".json"' || echo 0)
+    ls -R /export/foundry-signals 2>/dev/null | grep -c '\.json' || true)
+  OBJECTS=${OBJECTS:-0}
   [ "$OBJECTS" -gt 0 ] && break
   sleep 2
 done
-[ "$OBJECTS" -gt 0 ] || (echo "no envelope reached the lake after 60s" && exit 1)
+if [ "$OBJECTS" -eq 0 ]; then
+  echo "no envelope reached the lake after 60s. Bucket contents:"
+  kubectl exec -n monitoring deploy/minio -- ls -R /export 2>&1 | head -30 || true
+  exit 1
+fi
 echo "lake write OK ($OBJECTS object(s))"
 
 echo "weather: OK"
