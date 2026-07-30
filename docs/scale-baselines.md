@@ -20,14 +20,26 @@ immediately when `PROJECTIONS_SNAPSHOT_URL` is empty
 "real or mocked upstream" question has a third answer here, and it is stated
 rather than forced into one of the two.
 
-**`weather` is deliberately uncovered.** It is a synchronous proxy whose upstream
-URL is a module constant, and `/weather/stadiums` makes 30 upstream calls per
-request. The specified shapes would send ~15,000 upstream requests for one ramp
-and ~90,000 for one soak against an Open-Meteo free tier of roughly 10,000 per
-**day**. Load coverage for `weather` belongs to Phase 8's 8A, which rebuilds it
-to serve from memory — at which point a load test hits memory and the problem
-disappears at the root. **This section must be replaced with real numbers
-then, not deleted.**
+**`weather` is uncovered here, and the reason has since expired.**
+
+When this harness was built, `weather` was a synchronous proxy: its upstream URL
+was a module constant and `/weather/stadiums` made 30 upstream calls per request.
+The specified shapes would have sent ~15,000 upstream requests for one ramp and
+~90,000 for one soak, against an Open-Meteo free tier of roughly 10,000 per
+**day**. One ramp exceeded the daily budget, so load coverage was deferred to
+Phase 8's 8A rather than hammering a third-party API from CI.
+
+**8A has since landed (#49), and it removed that blocker.** `weather` is now a
+capture-model collector: it captures on a cadence and serves from memory behind
+the shared `collector_core` router, so a load test would hit memory and reach no
+third party at all. Its request-path surface has changed with it — there is no
+`client.py`, and the routes are `/signals`, `/catalog`, and `/refresh` rather
+than `/weather/stadiums`.
+
+So `weather` has **no numbers in this file, and no longer has a reason not to.**
+Covering it means a new k6 script targeting the `/signals` surface and a baseline
+captured against the capture model — the immediate follow-up to this work, not a
+blocked item. **Replace this section with real numbers; do not delete it.**
 
 ## Conditions
 

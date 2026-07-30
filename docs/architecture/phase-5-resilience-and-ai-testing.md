@@ -143,11 +143,13 @@ than by running the scenarios, which is the only reason they did not ship as
 passing.
 
 **Load and scale testing with k6.** `tests/load/` contains k6 scripts for
-`player-projections`. `weather` is deliberately **not** covered: it is a
-synchronous proxy whose 30-call list route would send ~15,000 requests to
-Open-Meteo for a single ramp against a free tier of roughly 10,000 per day.
-Load coverage for `weather` is deferred to [Phase 8](phase-8-data-source-collectors.md)'s
-8A, which rebuilds it to serve from memory. The four shapes:
+`player-projections`. `weather` is **not** covered here: at the time it was a
+synchronous proxy whose 30-call list route would have sent ~15,000 requests to
+Open-Meteo for a single ramp, against a free tier of roughly 10,000 per day, so
+coverage was deferred to [Phase 8](phase-8-data-source-collectors.md)'s 8A.
+**8A has since landed and removed that constraint** — `weather` now captures on
+a cadence and serves from memory — so covering it is unblocked follow-up work
+rather than a standing exclusion. The four shapes:
 - Ramp test: 0 → 100 RPS over 5 minutes, measure P95 latency and error rate
 - Soak test: 50 RPS sustained for 30 minutes, detect memory leaks or connection pool exhaustion
 - Spike test: 10x normal load for 60 seconds, validate graceful degradation
@@ -208,7 +210,8 @@ service logs anything today — and chaos criteria need metrics, not prose.
 - `infra/chaos-mesh/` — Chaos Mesh helmfile installation
 - `chaos/scenarios/` — Chaos Mesh scenario manifests with documented hypotheses
 - `tests/load/` — k6 scripts for `player-projections`, run in-cluster as a Job by
-  `scripts/run-load.py` (`weather` deferred to 8A — see above)
+  `scripts/run-load.py` (`weather` not covered — see above; 8A has since
+  unblocked it)
 - `.github/workflows/load-test.yml` — **`workflow_dispatch` only**, with a
   `soak_minutes` input; not a required check
 - `.github/workflows/chaos-test.yml` — **decided: `workflow_dispatch`, plus `pull_request` scoped to the chaos machinery** — see the decisions table above.

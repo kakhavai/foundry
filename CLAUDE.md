@@ -418,9 +418,12 @@ path to `player-projections` — it is deliberately not routed through the
 gateway — and an in-cluster Job needs no k6 binary on the CI runner or on a
 developer's machine.
 
-**Only `player-projections` is covered, in stub mode.** `weather` is a
-synchronous proxy to a rate-limited free API; one ramp would exceed Open-Meteo's
-daily budget, so its load coverage is deferred to Phase 8's 8A. See
+**Only `player-projections` is covered, in stub mode.** `weather` was excluded
+because it was then a synchronous proxy to a rate-limited free API — one ramp
+would have exceeded Open-Meteo's daily budget. **8A has since removed that
+blocker**: `weather` now captures on a cadence and serves from memory, so
+covering it needs a k6 script against its `/signals` surface, not a waiver. It
+is the immediate follow-up. See
 [`docs/scale-baselines.md`](docs/scale-baselines.md) for every number's
 conditions and the caveats that go with them.
 

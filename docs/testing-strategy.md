@@ -273,8 +273,11 @@ The >20% P95 regression gate is deliberately absent for exactly this reason. The
 soak shape is the extreme case: with no upstream client, no per-request
 allocation, and no background task in stub mode, it has nothing to accumulate and
 so cannot currently detect the leaks it exists to detect. `weather` is not
-covered at all — it is a synchronous proxy to a rate-limited free API, deferred
-to Phase 8's 8A. All of this is stated in `docs/scale-baselines.md`.
+covered at all — it was a synchronous proxy to a rate-limited free API when this
+harness was built, so coverage was deferred to 8A. 8A has since landed and
+`weather` now serves from memory, which makes covering it unblocked follow-up
+work rather than a standing exclusion. All of this is stated in
+`docs/scale-baselines.md`.
 
 ## Not Covered Here
 
