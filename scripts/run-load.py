@@ -329,7 +329,13 @@ def first_breached_threshold(summary: dict) -> str | None:
     exported `{"rate<0.01": false}`, and a deliberately impossible
     http_req_duration threshold that actually aborted the run exported
     `{"p(95)<0.001": true}`.
+
+    A summary that isn't a dict (valid JSON but not an object -- `null`, a
+    bare number or string, a list) has no thresholds to name; returning None
+    is the honest answer rather than raising AttributeError on `.get`.
     """
+    if not isinstance(summary, dict):
+        return None
     for name, metric in sorted((summary.get("metrics") or {}).items()):
         for expression, crossed in (metric.get("thresholds") or {}).items():
             if crossed:

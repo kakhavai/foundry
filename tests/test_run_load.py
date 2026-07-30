@@ -329,6 +329,16 @@ def test_tolerates_an_empty_summary():
     assert rl.first_breached_threshold({}) is None
 
 
+@pytest.mark.parametrize("summary", [None, 42, "not a dict", ["also", "not", "a", "dict"]])
+def test_tolerates_a_non_dict_summary(summary):
+    """Valid JSON that isn't an object -- json.loads("null") -> None, a bare
+    number, a bare string, a list -- has no thresholds to name. Before this
+    guard, `summary.get("metrics")` raised AttributeError on all four, and it
+    did so on the K6_EXIT_THRESHOLD_CROSSED path: precisely while run_shape
+    was reporting a FAIL or a breakpoint MEASURED result."""
+    assert rl.first_breached_threshold(summary) is None
+
+
 # ── phase_action ──────────────────────────────────────────────────────────────
 #
 # The very first live run of this tool found `kubectl logs -f` giving up in
@@ -523,6 +533,25 @@ def test_run_shape_survives_a_malformed_summary_payload(monkeypatch, tmp_path, c
     isn't valid JSON (a truncated export, a k6 crash mid-write) must degrade
     to the plain verdict, not raise."""
     log = f"{K6_BANNER}TOTAL RESULTS\n{rl.SUMMARY_MARKER}\nnot valid json\n"
+    _mock_cluster(monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED)
+
+    passed = rl.run_shape("ramp", soak_minutes=5)
+
+    assert passed is False
+    out = capsys.readouterr().out
+    assert "result: FAIL -- a threshold was crossed" in out
+    assert "FAIL -- a threshold was crossed:" not in out  # nothing named
+
+
+def test_run_shape_survives_a_valid_but_non_dict_summary_payload(monkeypatch, tmp_path, capsys):
+    """A payload that parses fine but isn't a JSON object (`null` here --
+    e.g. a summary export that got truncated to just its final newline-free
+    token, or overwritten) took a different path than the malformed-JSON
+    case above: json.loads succeeds, and summary.get("metrics") raised
+    AttributeError on a bare None -- uncaught, on the exact
+    K6_EXIT_THRESHOLD_CROSSED path where the runner is reporting a failure.
+    Must degrade to the plain verdict instead, same as malformed JSON."""
+    log = f"{K6_BANNER}TOTAL RESULTS\n{rl.SUMMARY_MARKER}\nnull\n"
     _mock_cluster(monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED)
 
     passed = rl.run_shape("ramp", soak_minutes=5)
