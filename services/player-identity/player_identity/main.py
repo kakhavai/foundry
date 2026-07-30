@@ -1,23 +1,16 @@
 """player-identity's process wiring: the descriptor, `_signal_matches`, and
-the three resolve routes. Everything else lives in `collector_core.app`.
+the three resolve routes. Everything else lives in `collector_core.app`, and
+the routes' own logic lives in `api.py`.
 """
 
-from datetime import UTC, datetime
 from functools import partial
 
 from collector_core.app import CollectorDescriptor, build_collector_app
-from fastapi import HTTPException
 
+from .api import resolve_queries, resolve_query, unresolved_payload
 from .capture import CADENCE_CLASS, COLLECTOR_NAME, SIGNAL_TYPES, capture_identities
-from .identity import KNOWN_POSITIONS, normalized_key, position_group
 from .metrics import metrics
-from .resolution import (
-    MAX_BATCH_QUERIES,
-    MissQueue,
-    ResolutionIndex,
-    ResolveQuery,
-    candidate_payload,
-)
+from .resolution import MissQueue, ResolutionIndex
 
 SUPPORTED_FILTERS = ("season", "week", "signal_type", "player_id", "team", "position")
 
@@ -52,118 +45,11 @@ app.state.miss_queue = _misses
 app.state.resolution_index = _index
 
 
-def _utc_now() -> datetime:
-    return datetime.now(tz=UTC)
-
-
-def _build_query(spec: dict) -> ResolveQuery:
-    """Turn one caller-supplied row into a `ResolveQuery`, or 422.
-
-    An unknown position is rejected rather than ignored, for the same reason
-    `player-projections` rejects `pos=FLEX`: a client bug should surface as a
-    loud error, not look like a player who does not exist.
-    """
-    name = spec.get("name")
-    position = spec.get("position")
-    if position is not None:
-        position = str(position).upper()
-        if position not in KNOWN_POSITIONS:
-            raise HTTPException(
-                status_code=422,
-                detail=f"unknown position {position!r}",
-            )
-
-    jersey = spec.get("jersey_number")
-    if jersey is not None:
-        try:
-            jersey = int(jersey)
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=422, detail="jersey_number must be an integer"
-            ) from None
-
-    entry_year = spec.get("entry_year")
-    if entry_year is not None:
-        try:
-            entry_year = int(entry_year)
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=422, detail="entry_year must be an integer"
-            ) from None
-
-    team = spec.get("team")
-    if team is not None:
-        team = str(team).upper()
-
-    # A query with nothing to match on would score every record in the
-    # league at zero and return an empty list, which reads like "no such
-    # player" rather than "you asked nothing".
-    if not any(
-        value not in (None, "")
-        for value in (name, team, position, jersey, spec.get("source_id"))
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "supply at least one of: name, team, position, jersey_number, source_id"
-            ),
-        )
-
-    return ResolveQuery(
-        raw_name=name,
-        normalized_key=normalized_key(name) if name else None,
-        team=team,
-        position=position,
-        position_group=position_group(position),
-        jersey_number=jersey,
-        entry_year=entry_year,
-        birth_date=spec.get("birth_date"),
-        season=spec.get("season"),
-        source=spec.get("source"),
-        source_id=(
-            None if spec.get("source_id") is None else str(spec.get("source_id"))
-        ),
-    )
-
-
-def _resolve_one(spec: dict, *, now: datetime) -> dict:
-    query = _build_query(spec)
-    index = app.state.resolution_index
-    resolution = index.resolve(query, now=now)
-
-    if not resolution.resolved:
-        app.state.miss_queue.record(query, resolution, now=now)
-        best = resolution.candidates[0] if resolution.candidates else None
-        # Labelled by which attribute disagreed. A spike concentrated on
-        # `team` is a staleness problem — a trade a book has not caught up
-        # with — and reads completely differently from one spread across
-        # attributes.
-        attributes = list(best.disagreeing) if best and best.disagreeing else ["none"]
-        for attribute in attributes:
-            metrics.resolution_failure(attribute, resolution.reason or "unknown")
-        if resolution.near_miss:
-            metrics.near_miss()
-
-    method = resolution.link_method or "attribute_score"
-    return {
-        "query": {
-            "name": query.raw_name,
-            "team": query.team,
-            "position": query.position,
-            "jersey_number": query.jersey_number,
-            "season": query.season,
-            "source": query.source,
-            "source_id": query.source_id,
-        },
-        "resolved": resolution.resolved,
-        "player_id": resolution.player_id,
-        "link_method": resolution.link_method,
-        "confidence": round(resolution.confidence, 6),
-        "margin": resolution.margin,
-        "reason": resolution.reason,
-        "candidates": [candidate_payload(c, method) for c in resolution.candidates],
-        "count": len(resolution.candidates),
-    }
+def _shared() -> dict:
+    """The index and the miss queue, off `app.state` rather than the
+    module-level names above — the routes must read the same objects a
+    capture just replaced."""
+    return {"index": app.state.resolution_index, "misses": app.state.miss_queue}
 
 
 @app.get("/resolve")
@@ -184,7 +70,7 @@ async def resolve(
     that produced it, so a caller can tell an adopted crosswalk link apart
     from a scored one without a second request.
     """
-    return _resolve_one(
+    return resolve_query(
         {
             "name": name,
             "team": team,
@@ -196,7 +82,7 @@ async def resolve(
             "source": source,
             "source_id": source_id,
         },
-        now=_utc_now(),
+        **_shared(),
     )
 
 
@@ -208,37 +94,7 @@ async def resolve_batch(body: dict):
     rather than silently truncated, which would return a short list a caller
     could easily read as "the rest did not resolve".
     """
-    queries = body.get("queries")
-    if not isinstance(queries, list):
-        raise HTTPException(status_code=422, detail="body must carry a 'queries' array")
-    if len(queries) > MAX_BATCH_QUERIES:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"batch of {len(queries)} exceeds the maximum of "
-                f"{MAX_BATCH_QUERIES} queries per call"
-            ),
-        )
-
-    now = _utc_now()
-    results = []
-    for entry in queries:
-        if isinstance(entry, str):
-            entry = {"name": entry}
-        if not isinstance(entry, dict):
-            raise HTTPException(
-                status_code=422,
-                detail="each query must be a string or an object",
-            )
-        results.append(_resolve_one(entry, now=now))
-
-    resolved = sum(1 for r in results if r["resolved"])
-    return {
-        "results": results,
-        "count": len(results),
-        "resolved_count": resolved,
-        "unresolved_count": len(results) - resolved,
-    }
+    return resolve_queries(body, **_shared())
 
 
 @app.get("/unresolved")
@@ -249,6 +105,4 @@ async def unresolved(limit: int = 100):
     this collector produces, so it is served as a first-class route rather
     than left to be dug out of the lake.
     """
-    queue = app.state.miss_queue
-    rows = queue.rows()[: max(0, limit)]
-    return {"misses": rows, "count": len(rows), "total": len(queue)}
+    return unresolved_payload(app.state.miss_queue, limit)
