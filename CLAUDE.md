@@ -209,6 +209,8 @@ contracts/              Committed contracts — see contracts/README.md.
                         openapi/              = API surface snapshots (generated)
                         responses/            = response field-name snapshots (generated)
                         Regenerate the generated two deliberately — CI fails on drift.
+                        collector-registry.yaml = the inventory of DEPLOYED collectors
+                        (hand-written, append-only) + its .schema.json
 ```
 
 ---
@@ -282,6 +284,67 @@ weather's.
    the example) is a plain `@app.get`/`@app.post` added to `main.py` after
    the `build_collector_app` call, reaching the lake and collector name via
    `app.state.collector_spec` rather than a module-level global.
+7. Append an entry to `contracts/collector-registry.yaml` — **in the same PR
+   as the service**. See the next section.
+
+---
+
+## The Collector Registry
+
+`contracts/collector-registry.yaml` is the inventory of collectors, and the
+projections generator reads it to decide what to call. It lists **deployed**
+collectors only. The twenty-six-collector staging table in
+`docs/architecture/phase-8-data-source-collectors.md` is the *plan*; this file
+is the *inventory*. That is not a stylistic split — pre-listing unbuilt
+collectors would red the "every entry has a deployed collector" gate on day
+one, and the only fix would be to weaken it into nothing.
+
+Two consequences, both mechanical rather than conventional:
+
+- an entry lands in the **same PR** as its service, and
+- **after** the PRs that added its `depends_on` entries.
+
+The file is **append-only**. Entries are in merge order, not sorted, and
+nothing in the gate requires sorting, grouping, or regeneration — so two
+collectors added on two branches merge as a plain append. Do not reorder or
+reformat existing entries.
+
+**The drift gate runs in two places.** Both matter; neither subsumes the other:
+
+| | Where | What it can see |
+|---|---|---|
+| `tests/test_collector_registry.py` | `platform-tests`, no cluster | schema, uniqueness, `services/<name>/` exists, Helm `gateway.pathPrefix` == `path`, Argo + GitOps manifests exist, both reverse directions, `depends_on` resolution / self-dependency / cycles, and the entry vs. the service's own `CollectorDescriptor` **read by AST** |
+| `scripts/check-registry.py` | `scripts/smoke-test.sh`, inside the required `integration-test` | each collector's **live** `GET /catalog`, fetched through the gateway |
+
+**Why AST and not an import:** `platform-tests` installs only pytest, pyyaml
+and jsonschema. Importing `services/weather/weather/main.py` would pull in
+fastapi, httpx and prometheus_client, none of which are there. The test parses
+the service tree instead, builds a module-level constant table, and resolves
+the descriptor's kwargs through it — `CadenceClass.VOLATILE` resolves via enum
+members read out of `collector_core/cadence.py`, so adding a cadence class
+cannot drift. **A registered collector with no discoverable
+`CollectorDescriptor` is a hard failure, never a skip.**
+
+There is deliberately **no committed `/catalog` fixture**. A fixture is a copy
+of the answer, and a copy of the answer cannot detect that the answer changed.
+
+**Two known gaps, stated rather than implied:**
+
+- `scope_aware` is type-checked as a bool and nothing else. No code
+  representation of it exists today, so its correctness is human-reviewed.
+- `envelope_version` is an **int** in the registry (following the phase doc's
+  example) but the string `"1"` in `collector_core.envelope.ENVELOPE_VERSION`
+  (because it becomes the lake path segment `v1`), and `/catalog` returns the
+  string. Both sides of every comparison are `str()`-ed. This is a real
+  spec/code inconsistency awaiting a deliberate decision, not a bug to
+  "fix" by quietly changing one side.
+
+`GET /collectors` — the phase doc has the gateway serving the registry live —
+is **not built**. See the follow-up notes in the Phase 8A PR: it needs a
+generated JSON copy of the file, a generator with *its own* drift gate, a
+GitOps home, and an auth decision (a direct response never reaches a service,
+so it would be unauthenticated by construction). The generator reads the
+committed file from the repo meanwhile, which is the spec's own fallback.
 
 ---
 
