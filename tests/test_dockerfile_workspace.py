@@ -59,18 +59,41 @@ def _logical_lines(text: str) -> list[str]:
     ]
 
 
-def _workspace_members() -> list[str]:
+def _workspace() -> dict:
     data = tomllib.loads(_read(ROOT / "pyproject.toml"))
-    return data["tool"]["uv"]["workspace"]["members"]
+    return data["tool"]["uv"]["workspace"]
+
+
+def _workspace_members() -> list[str]:
+    return _workspace()["members"]
+
+
+def _excluded_dirs() -> set[Path]:
+    """Paths `[tool.uv.workspace] exclude` removes from the globbed members.
+
+    `members` is a glob (`services/*`) so that adding a collector needs no edit
+    to the root pyproject.toml — twenty-four queued collectors would otherwise
+    all append to one line. Reading `members` without `exclude` therefore claims
+    `player-projections` and `foundry-cli` are workspace members, and every
+    assertion below would demand they carry a stage that is meaningless for a
+    service that is not in the workspace at all.
+    """
+    excluded: set[Path] = set()
+    for pattern in _workspace().get("exclude", []):
+        excluded.update(path.resolve() for path in ROOT.glob(pattern))
+    return excluded
 
 
 def _collector_dirs() -> list[Path]:
     """Workspace members under services/ that ship a Dockerfile."""
+    excluded = _excluded_dirs()
     dirs: list[Path] = []
     for member in _workspace_members():
         if not member.startswith("services/"):
             continue
         for path in sorted(ROOT.glob(member)):
+            if path.resolve() in excluded:
+                continue
             if (path / "Dockerfile").is_file():
                 dirs.append(path)
     return dirs

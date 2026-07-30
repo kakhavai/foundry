@@ -1,9 +1,24 @@
+# Globbed, not enumerated. Every collector is a workspace member, and listing
+# them by hand made the root pyproject.toml a shared file that all twenty-four
+# queued collectors would have to append to — twenty-four merge conflicts on a
+# file no machine reads for anything else. `services/*` covers them all, so
+# `scripts/new-collector.py` touches no file outside the new service and the
+# append-only registry.
+#
+# `exclude` names the two services that are deliberately NOT members: both own
+# their own uv.lock and build from their own directory as the Docker context.
+# `player-projections` consumes the generator's S3 output and imports nothing
+# from libs/; `foundry-cli` has no Helm values, no image and no GitOps entry.
+# Pulling either into the workspace would force it to resolve against the
+# fleet's lock for no benefit.
 [tool.uv.workspace]
 members = [
     "libs/*",
-    "services/weather",
-    "services/player-identity",
-    "services/roster-scope",
+    "services/*",
+]
+exclude = [
+    "services/foundry-cli",
+    "services/player-projections",
 ]
 
 # Applies to the Python that lives OUTSIDE a member package — tests/ and

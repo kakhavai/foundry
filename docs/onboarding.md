@@ -2,6 +2,12 @@
 
 This guide walks through adding a new Python HTTP service to Foundry. The result: CI runs on every push, images are built and pushed to GHCR on merge to `main`, Helm deploys the service to the Kind cluster, and Grafana shows logs, traces, and metrics — with no observability config in the service.
 
+> **Adding a collector? Do not follow this guide by hand.** Run
+> `scripts/new-collector.py`, which generates every file below plus the capture
+> surface, and read [`collectors.md`](collectors.md). This guide is for a
+> service that is *not* a collector — there is one today,
+> `player-projections`.
+
 ---
 
 ## Prerequisites
