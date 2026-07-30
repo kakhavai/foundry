@@ -1,0 +1,258 @@
+{
+  "captured_at": "2026-09-15T12:00:00Z",
+  "collector": "roster-scope",
+  "coverage": {
+    "expected": 0,
+    "missing": [],
+    "present": 0
+  },
+  "envelope_version": "1",
+  "errors": [],
+  "scope": {
+    "scope_version": 1,
+    "season": 2026,
+    "week": 1
+  },
+  "signal_type": "scope_change_event",
+  "signals": [
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-b30964ea38bd",
+      "scope_version": 1,
+      "to_depth_rank": 1,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-7f18d7e97f7d",
+      "scope_version": 1,
+      "to_depth_rank": 2,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-e6d5471925b1",
+      "scope_version": 1,
+      "to_depth_rank": 1,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-8ab3d3911ba0",
+      "scope_version": 1,
+      "to_depth_rank": 2,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-1f6097562260",
+      "scope_version": 1,
+      "to_depth_rank": 3,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-24ab865a554d",
+      "scope_version": 1,
+      "to_depth_rank": 1,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-fae011463b79",
+      "scope_version": 1,
+      "to_depth_rank": 2,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-1630487dba3e",
+      "scope_version": 1,
+      "to_depth_rank": 3,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-32fff03f3e36",
+      "scope_version": 1,
+      "to_depth_rank": 4,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-06e3ae75846c",
+      "scope_version": 1,
+      "to_depth_rank": 1,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-0994892e242d",
+      "scope_version": 1,
+      "to_depth_rank": 2,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-87b200e53e3f",
+      "scope_version": 1,
+      "to_depth_rank": 1,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-dst-buf",
+      "scope_version": 1,
+      "to_depth_rank": 1,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-778bfce4542c",
+      "scope_version": 1,
+      "to_depth_rank": 1,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-d16e4e4e60ea",
+      "scope_version": 1,
+      "to_depth_rank": 2,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-c07146cd7b3f",
+      "scope_version": 1,
+      "to_depth_rank": 1,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-2ddcf2d27436",
+      "scope_version": 1,
+      "to_depth_rank": 2,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-63f2c9ae0b7b",
+      "scope_version": 1,
+      "to_depth_rank": 3,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-77446fa69814",
+      "scope_version": 1,
+      "to_depth_rank": 1,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-979190110d2b",
+      "scope_version": 1,
+      "to_depth_rank": 2,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-539bcd72f890",
+      "scope_version": 1,
+      "to_depth_rank": 3,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-306adbe0cd1e",
+      "scope_version": 1,
+      "to_depth_rank": 4,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-8d9185d00816",
+      "scope_version": 1,
+      "to_depth_rank": 1,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-7d2244ae8efd",
+      "scope_version": 1,
+      "to_depth_rank": 2,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-c3bdda9ff14e",
+      "scope_version": 1,
+      "to_depth_rank": 1,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    },
+    {
+      "from_depth_rank": null,
+      "occurred_at": "2026-09-15T12:00:00Z",
+      "player_id": "fdy-dst-kc",
+      "scope_version": 1,
+      "to_depth_rank": 1,
+      "transition": "entered",
+      "trigger": "depth_chart"
+    }
+  ],
+  "upstream": {
+    "adapter": "nflverse-depth-charts",
+    "fetched_at": "2026-09-15T12:00:00Z",
+    "source_ref": "https://feed.test/2026.csv"
+  }
+}

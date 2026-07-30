@@ -1,0 +1,56 @@
+[project]
+name = "roster-scope"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-grpc",
+    "opentelemetry-exporter-prometheus",
+    "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-instrumentation-httpx",
+    "prometheus-client",
+    "collector-core",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "httpx",
+    "respx",
+    "jsonschema[format]",
+    # Only for the test that reads contracts/collector-registry.yaml — the
+    # service itself never parses YAML, so this stays out of `dependencies`.
+    "pyyaml",
+]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=roster_scope --cov-branch --cov-report=term --cov-fail-under=80"
+
+[tool.coverage.run]
+branch = true
+source = ["roster_scope"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.uv.sources]
+collector-core = { workspace = true }

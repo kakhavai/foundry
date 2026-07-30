@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/roster-scope.json",
+  "title": "roster-scope collector signal fields",
+  "signal_types": {
+    "scope_membership_weekly": {
+      "type": "object",
+      "required": [
+        "player_id",
+        "entity_type",
+        "scope_version",
+        "membership_status",
+        "rule_id",
+        "team",
+        "position",
+        "depth_rank",
+        "previous_depth_rank",
+        "depth_source_captured_at",
+        "added_at_version",
+        "grace_expires_week",
+        "is_manual_override",
+        "override_reason"
+      ],
+      "properties": {
+        "player_id": { "type": "string", "minLength": 1 },
+        "entity_type": { "enum": ["player", "team_defense"] },
+        "scope_version": { "type": "integer", "minimum": 0 },
+        "membership_status": { "enum": ["active", "grace", "excluded"] },
+        "rule_id": { "type": "string", "minLength": 1 },
+        "team": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "position": { "enum": ["QB", "RB", "WR", "TE", "K", "DST"] },
+        "depth_rank": { "type": "integer", "minimum": 1 },
+        "previous_depth_rank": { "type": ["integer", "null"], "minimum": 1 },
+        "depth_source_captured_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "added_at_version": { "type": "integer", "minimum": 0 },
+        "grace_expires_week": { "type": ["integer", "null"], "minimum": 1 },
+        "is_manual_override": { "type": "boolean" },
+        "override_reason": { "type": ["string", "null"] }
+      }
+    },
+    "scope_change_event": {
+      "type": "object",
+      "required": [
+        "scope_version",
+        "player_id",
+        "transition",
+        "from_depth_rank",
+        "to_depth_rank",
+        "trigger",
+        "occurred_at"
+      ],
+      "properties": {
+        "scope_version": { "type": "integer", "minimum": 0 },
+        "player_id": { "type": "string", "minLength": 1 },
+        "transition": {
+          "enum": ["entered", "entered_grace", "excluded", "rank_changed"]
+        },
+        "from_depth_rank": { "type": ["integer", "null"], "minimum": 1 },
+        "to_depth_rank": { "type": ["integer", "null"], "minimum": 1 },
+        "trigger": {
+          "enum": [
+            "depth_chart",
+            "transaction",
+            "injury_designation",
+            "config_change",
+            "manual"
+          ]
+        },
+        "occurred_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

@@ -1,0 +1,143 @@
+name: roster-scope
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+on:
+  pull_request:
+    paths:
+      - 'services/roster-scope/**'
+      - 'libs/**'
+      - 'helm/values/roster-scope/**'
+      - 'helm/charts/generic-service/**'
+      - '.github/actions/**'
+      - 'contracts/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'services/roster-scope/**'
+      - 'libs/**'
+      - 'helm/values/roster-scope/**'
+      - 'helm/charts/generic-service/**'
+      - '.github/actions/**'
+      - 'contracts/**'
+
+# Cancel superseded PR runs; serialize (never cancel) main pushes so an in-flight
+# build-push / update-gitops-tag deploy is not killed mid-commit.
+concurrency:
+  group: roster-scope-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-lint
+        with:
+          working-directory: services/roster-scope
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-test
+        with:
+          working-directory: services/roster-scope
+
+  helm-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/helm-lint
+        with:
+          chart-path: helm/charts/generic-service
+          values-file: helm/values/roster-scope/values.yaml
+
+  runtime-imports:
+    # The container installs with `--no-dev`. A module-level import of a
+    # dev-only dependency passes every test locally off the shared workspace
+    # virtualenv and crash-loops the pod. `collector-core` has done exactly
+    # this once already.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Every service module must import with runtime deps only
+        shell: bash
+        working-directory: services/roster-scope
+        run: |
+          uv sync --frozen --no-dev
+          uv run --no-sync python - <<'PY'
+          import importlib, pkgutil, sys
+          import roster_scope
+          failed = []
+          for module in pkgutil.walk_packages(
+              roster_scope.__path__, prefix="roster_scope."
+          ):
+              try:
+                  importlib.import_module(module.name)
+              except Exception as exc:
+                  failed.append(f"{module.name}: {exc!r}")
+          if failed:
+              print("Modules that fail to import without dev dependencies:")
+              for f in failed:
+                  print("  ", f)
+              sys.exit(1)
+          print("all modules import with runtime dependencies only")
+          PY
+
+  build-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint, test, helm-lint, runtime-imports]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-push
+        with:
+          service: roster-scope
+          # Repo root: roster-scope depends on libs/collector-core/ by path
+          # through the uv workspace, so the lock cannot resolve without it.
+          context: .
+          dockerfile: services/roster-scope/Dockerfile
+          image-name: ghcr.io/kakhavai/foundry/roster-scope
+          tag: ${{ github.sha }}
+
+  update-gitops-tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [build-push]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GITOPS_APP_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: ./.github/actions/update-gitops-tag
+        with:
+          service: roster-scope
+          tag: ${{ github.sha }}

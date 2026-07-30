@@ -6,7 +6,7 @@ cleanup() {
   # Envoy Service lookup below, and if that lookup fails under set -e, these
   # three are never assigned; without the default, set -u would throw its own
   # "unbound variable" error on top of the real failure.
-  kill "${WEATHER_PF:-}" "${PP_PF:-}" "${GW_PF:-}" "${PI_PF:-}" 2>/dev/null || true
+  kill "${WEATHER_PF:-}" "${PP_PF:-}" "${GW_PF:-}" "${PI_PF:-}" "${RS_PF:-}" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -20,6 +20,8 @@ kubectl port-forward svc/weather 8000:8000 &
 WEATHER_PF=$!
 kubectl port-forward svc/player-projections 8001:8001 &
 PP_PF=$!
+kubectl port-forward svc/roster-scope 8003:8003 &
+RS_PF=$!
 kubectl port-forward -n envoy-gateway-system "svc/$ENVOY_SVC" 8080:80 &
 GW_PF=$!
 kubectl port-forward svc/player-identity 8002:8002 &
@@ -218,6 +220,53 @@ for p in health metrics; do
   [ "$STATUS" = "404" ] || (echo "$p must not be published at the edge, got $STATUS" && exit 1)
 done
 echo "player-identity: OK"
+
+# roster-scope
+RS_GATEWAY=http://localhost:8080/collectors/roster-scope
+
+curl -sf http://localhost:8003/health | grep '"status":"ok"'
+curl -sf http://localhost:8003/metrics | grep '# HELP'
+
+curl -sf -H "$AUTH" http://localhost:8003/catalog | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+assert data['collector'] == 'roster-scope', data
+assert set(data['signal_types']) == {
+    'scope_membership_weekly', 'scope_change_event'}, data
+assert data['cadence_class'] == 'weekly', data
+print('roster-scope catalog OK')
+"
+
+# /scope is published at the edge as well as /signals — the resolved list is
+# the route every other collector calls, so it has to survive the gateway's
+# prefix strip and rewrite.
+curl -sf -H "$AUTH" "$RS_GATEWAY/scope/rules" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+ids = {r['rule_id'] for r in data['rules']}
+assert 'wr_depth_le_4' in ids, data
+assert data['teams'] == 32, data
+print('roster-scope scope/rules OK')
+"
+
+curl -sf -H "$AUTH" "$RS_GATEWAY/signals" | python3 -c "
+import sys, json
+assert 'envelopes' in json.load(sys.stdin)
+print('roster-scope gateway routing OK')
+"
+
+# The direct-Service call is the one that matters: under gateway-only auth it
+# would return 200 and this required check would pass over an unprotected path.
+STATUS=$(curl -o /dev/null -sw '%{http_code}' http://localhost:8003/scope/players)
+[ "$STATUS" = "401" ] || (echo "direct roster-scope call without token should be 401, got $STATUS" && exit 1)
+STATUS=$(curl -o /dev/null -sw '%{http_code}' "$RS_GATEWAY/scope/players")
+[ "$STATUS" = "401" ] || (echo "roster-scope gateway without token should be 401, got $STATUS" && exit 1)
+
+for p in health metrics; do
+  STATUS=$(curl -o /dev/null -sw '%{http_code}' "$RS_GATEWAY/$p")
+  [ "$STATUS" = "404" ] || (echo "roster-scope $p must not be published at the edge, got $STATUS" && exit 1)
+done
+echo "roster-scope: OK"
 
 # collector registry — the half of the drift gate that needs a live cluster.
 # tests/test_collector_registry.py checks everything decidable from files; this
