@@ -34,10 +34,18 @@ export const options = {
     },
   },
   thresholds: {
-    // Scoped to the cooldown by k6's automatic `scenario` tag. The spike
-    // scenario deliberately carries no threshold. The cooldown p(95) ceiling
-    // arrives in Task 3.
     'http_req_failed{scenario:cooldown}': ['rate<0.01'],
+    // The recovery assertion: after 10x load for 60s, normal-load latency must
+    // return to the ramp's baseline. Deliberately not applied to the spike
+    // scenario, where degradation is the expected behaviour.
+    //
+    // Calibrated: max(2x the worst p(95) across three captured runs, 10ms).
+    // At this service's scale the 10ms floor is what governs — absolute jitter
+    // on a contended single-node cluster outweighs the ratio below ~5ms. So
+    // this catches an order-of-magnitude regression, not a subtle one, and it
+    // is NOT the >20% regression gate, which stays deferred.
+    // See docs/scale-baselines.md for the numbers and which term won.
+    'http_req_duration{scenario:cooldown}': ['p(95)<10'],
   },
 };
 

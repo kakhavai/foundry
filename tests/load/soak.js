@@ -27,6 +27,13 @@ export const options = {
   },
   thresholds: {
     http_req_failed: ['rate<0.01'],
+    // Calibrated: max(2x the worst p(95) across three captured runs, 10ms).
+    // At this service's scale the 10ms floor is what governs — absolute jitter
+    // on a contended single-node cluster outweighs the ratio below ~5ms. So
+    // this catches an order-of-magnitude regression, not a subtle one, and it
+    // is NOT the >20% regression gate, which stays deferred.
+    // See docs/scale-baselines.md for the numbers and which term won.
+    http_req_duration: ['p(95)<10'],
   },
 };
 
