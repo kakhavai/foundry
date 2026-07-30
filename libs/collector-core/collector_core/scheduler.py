@@ -23,7 +23,12 @@ import httpx
 from .cadence import CadenceClass, next_interval
 from .lake import LakeWriter
 from .metrics import CollectorMetrics
-from .routes import DEFAULT_CAPTURE_DEADLINE, CaptureFn, CaptureState
+from .routes import (
+    DEFAULT_CAPTURE_DEADLINE,
+    CaptureFn,
+    CaptureState,
+    _default_client_factory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +87,7 @@ async def run_capture_loop(
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], datetime] = _utc_now,
     capture_deadline: timedelta | None = DEFAULT_CAPTURE_DEADLINE,
+    client_factory: Callable[[], httpx.AsyncClient] = _default_client_factory,
 ) -> None:
     """Capture forever, re-deriving the interval after each pass.
 
@@ -96,21 +102,47 @@ async def run_capture_loop(
     `/refresh`: total upstream failure costs at most one deadline's worth of
     wall-clock time rather than `games x per-call timeout`, so an overrun
     pass cannot pile up behind the next tick indefinitely.
+
+    `client_factory` matches `CollectorSpec.client_factory` -- previously this
+    was hardcoded to `httpx.AsyncClient(timeout=10.0)` regardless of what a
+    collector configured, so the knob a collector uses to own its transport
+    silently did nothing on the path that performs virtually all captures.
+
+    `state.lock` is held across the *whole* pass, not just the state
+    assignment, so this loop and a dispatched `/refresh` can never call the
+    upstream at the same time, and whichever finishes second cannot clobber
+    a result that describes a later `now` (`CaptureState.apply_capture`).
     """
+    process_started_at: datetime | None = None
     while True:
         now = clock()
+        if process_started_at is None:
+            process_started_at = now
         deadline = None if capture_deadline is None else now + capture_deadline
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                state.envelopes = await capture(
-                    season, week, client=client, lake=lake, now=now, deadline=deadline
-                )
-            state.last_capture_at = now
+            async with state.lock:
+                async with client_factory() as client:
+                    envelopes = await capture(
+                        season,
+                        week,
+                        client=client,
+                        lake=lake,
+                        now=now,
+                        deadline=deadline,
+                    )
+                state.apply_capture(envelopes, now)
         except Exception:  # noqa: BLE001 -- the loop must survive anything
             logger.exception("capture failed; retrying on the next tick")
 
         if state.last_capture_at is not None:
             metrics.staleness((clock() - state.last_capture_at).total_seconds())
+        else:
+            # No capture has ever succeeded -- report elapsed-since-start
+            # instead of skipping the metric outright, so
+            # `collector_staleness_seconds` exists as a series from the first
+            # tick. An absent series cannot page during exactly the total
+            # outage this exists to catch.
+            metrics.staleness((clock() - process_started_at).total_seconds())
 
         interval = interval_for_state(
             state,

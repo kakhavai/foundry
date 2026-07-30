@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 import respx
-from collector_core.lake import NullLakeWriter
+from collector_core.lake import NullLakeWriter, lake_key
 
 from weather.adapters.forecast import FORECAST_URL
 from weather.adapters.schedule import SCHEDULE_URL
@@ -148,6 +148,56 @@ async def test_total_upstream_failure_still_writes_an_envelope():
     assert envelope.errors, "a failed capture must record why"
 
 
+class _ExplodingLakeWriter:
+    """Every write raises -- stands in for a bucket that is unreachable or
+    whose credentials never arrived (both `optional: true` in the Helm
+    values, so the pod starts fine and looks Healthy)."""
+
+    def write(self, envelope) -> str:
+        raise RuntimeError("lake unreachable")
+
+    def list_keys(self, collector, signal_type, season, week) -> list[str]:
+        return []
+
+    def read(self, key: str) -> dict:
+        raise KeyError(key)
+
+
+@respx.mock
+async def test_a_lake_write_failure_is_recorded_and_still_propagates(metric_value):
+    """FINDING 5: `lake.write` used to sit outside every try/except -- a
+    total lake outage propagated to the caller (logged and swallowed)
+    without incrementing a single counter, one of the two most likely
+    total-outage modes (the other is the schedule feed itself, covered in
+    `test_failure_metrics.py`).
+    """
+    mock_upstreams(schedule_csv(HOME_GAME))
+
+    before = (
+        metric_value(
+            "collector_capture_failures_total",
+            collector="weather",
+            reason="unknown",
+        )
+        or 0.0
+    )
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(RuntimeError, match="lake unreachable"):
+            await capture_week(
+                2026, 1, client=client, lake=_ExplodingLakeWriter(), now=NOW
+            )
+    after = (
+        metric_value(
+            "collector_capture_failures_total",
+            collector="weather",
+            reason="unknown",
+        )
+        or 0.0
+    )
+
+    assert after - before == 1.0
+
+
 @respx.mock
 async def test_current_conditions_failure_is_isolated_from_a_healthy_forecast():
     """The forecast fetch (per game) and the current-conditions fetch (per
@@ -282,7 +332,7 @@ async def test_no_deadline_captures_everything():
 
 
 @respx.mock
-async def test_capture_raises_when_the_adapter_returns_a_mismatched_hour(
+async def test_a_mismatched_forecast_hour_is_recorded_per_game_not_raised(
     monkeypatch,
 ):
     """Guards the `assert_forecast_hour` call inside `capture_week` itself.
@@ -292,6 +342,12 @@ async def test_capture_raises_when_the_adapter_returns_a_mismatched_hour(
     kickoff — the mismatch has to be injected at the capture layer to prove
     the write-time guard is actually wired in, not just unit-testable in
     isolation.
+
+    FINDING 5: this guard failure used to propagate out of `capture_week`
+    entirely and abort the whole week -- one bad game took every other game
+    down with it. It must degrade the same way `UnresolvableVenue` does: the
+    one game lands in `coverage.missing`/`errors`, and the rest of the week
+    still captures.
     """
     mock_upstreams(schedule_csv(HOME_GAME))
 
@@ -317,33 +373,49 @@ async def test_capture_raises_when_the_adapter_returns_a_mismatched_hour(
     monkeypatch.setattr("weather.capture.fetch_forecast_at", _stale_forecast)
 
     async with httpx.AsyncClient() as client:
-        with pytest.raises(ValueError, match="forecast_valid_at"):
-            await capture_week(2026, 1, client=client, lake=NullLakeWriter(), now=NOW)
+        result = await capture_week(
+            2026, 1, client=client, lake=NullLakeWriter(), now=NOW
+        )
+
+    envelope = result["venue_forecast_kickoff"]
+    assert envelope.coverage.present == 0
+    assert envelope.coverage.missing == ["2026_01_CHI_CAR"]
+    assert envelope.signals == []
+    assert any(e["reason"] == "forecast_hour_mismatch" for e in envelope.errors)
 
 
 class SpyLakeWriter:
-    """Records what it was handed. Deliberately NOT moto/S3.
+    """Records what it was handed, keyed by `lake_key` -- dict-keyed rather
+    than a plain list, so a key collision is observable by construction: two
+    writes to the same key collapse to one dict entry instead of silently
+    both landing. Deliberately NOT moto/S3.
 
     `collector-core` already tests real object-store semantics against moto,
     and its dev dependencies are not installed for this service in CI — a moto
     import here passes locally off a shared virtualenv and fails in CI, which is
     the worst place to find out. What weather needs to prove is narrower anyway:
     that a capture hands one envelope per signal type to whatever writer it was
-    given. The storage layer's correctness is not this service's test to own.
+    given, under distinct keys. The storage layer's own correctness (S3
+    semantics, sorting, prefix scans) is not this service's test to own.
     """
 
     def __init__(self) -> None:
-        self.written: list = []
+        self.written: dict[str, object] = {}
 
     def write(self, envelope) -> str:
-        self.written.append(envelope)
-        return f"spy://{envelope.signal_type}"
+        key = lake_key(envelope)
+        self.written[key] = envelope
+        return key
 
     def list_keys(self, collector, signal_type, season, week) -> list[str]:
-        return [f"spy://{e.signal_type}" for e in self.written]
+        return [
+            key
+            for key, envelope in self.written.items()
+            if envelope.signal_type == signal_type
+        ]
 
     def read(self, key: str) -> dict:
-        raise KeyError(key)
+        return self.written[key].to_dict()
 
 
 @respx.mock
@@ -353,11 +425,31 @@ async def test_capture_writes_one_envelope_per_signal_type_to_the_lake():
     async with httpx.AsyncClient() as client:
         await capture_week(2026, 1, client=client, lake=lake, now=NOW)
 
-    assert {e.signal_type for e in lake.written} == {
+    assert {e.signal_type for e in lake.written.values()} == {
         "venue_forecast_kickoff",
         "venue_conditions_current",
     }
     assert len(lake.written) == 2
+
+
+@respx.mock
+async def test_capture_pass_produces_two_distinct_lake_keys():
+    """FINDING 1 regression: both envelopes from one pass share the same
+    `captured_at` by design -- one frozen instant per pass. Before
+    `signal_type` was part of the lake key, both writes resolved to the same
+    key and the second `put_object` silently overwrote the first, so the
+    week's `venue_forecast_kickoff` envelope -- the collector's headline
+    product -- vanished from the lake. `SpyLakeWriter`'s dict-keyed storage
+    makes that collision observable: a collision here collapses `written` to
+    a single entry instead of two.
+    """
+    lake = SpyLakeWriter()
+    mock_upstreams(schedule_csv(HOME_GAME))
+    async with httpx.AsyncClient() as client:
+        await capture_week(2026, 1, client=client, lake=lake, now=NOW)
+
+    assert len(lake.written) == 2
+    assert len(set(lake.written)) == 2  # the keys themselves are distinct
 
 
 def test_forecast_hour_assertion_accepts_the_matching_hour():

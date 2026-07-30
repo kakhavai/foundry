@@ -180,6 +180,12 @@ order — not keyed by `id` — and the frontend does the grouping.
 
 ```
 services/<name>/        Python service (FastAPI, uv, pyproject.toml)
+libs/collector-core/     Shared library for the collector fleet: bearer auth,
+                        the five-route contract surface, the capture loop,
+                        the append-only S3 lake, the signal envelope. Every
+                        collector (weather is the first) depends on it via
+                        the uv workspace; changes here fall under the
+                        `weather` CI workflow AND the integration-test gate.
 helm/charts/generic-service/    Base Helm chart all services share
 helm/values/<name>/     Per-service value overrides
 .github/actions/        Composite CI actions: python-lint, python-test, helm-lint, build-push
@@ -344,7 +350,12 @@ cd services/<name>
 uv run pytest -v
 ```
 
-Tests use `respx` to mock `httpx` calls. OTel not initialized in tests. State-based endpoint tests pre-populate the in-memory cache via `_state` directly.
+```bash
+cd libs/collector-core
+uv run pytest -v
+```
+
+Tests use `respx` to mock `httpx` calls. OTel not initialized in tests. State-based endpoint tests pre-populate the in-memory cache via `_state` directly. `libs/collector-core`'s own suite (`libs/collector-core/tests/`) proves the shared router and capture loop against a fake two-signal-type collector, independent of `weather`; `services/weather/tests/` pins the same shapes against the real service and additionally validates real capture output against `contracts/signal-envelope/collectors/weather.json`.
 
 ---
 

@@ -26,6 +26,14 @@ REFRESH_FLOOR = timedelta(seconds=int(os.getenv("REFRESH_MIN_INTERVAL_SECONDS", 
 # REFRESH_FLOOR above) so both call sites share one configured value.
 CAPTURE_DEADLINE = timedelta(seconds=int(os.getenv("CAPTURE_DEADLINE_SECONDS", "300")))
 
+# The scope the background loop captures, and what a bare `POST /refresh`
+# (no body scope) falls back to -- read once here so both share one source.
+# `CollectorSpec.default_scope` exists precisely so this isn't a library
+# literal that silently diverges from these env vars the first time an
+# operator advances CAPTURE_WEEK.
+CAPTURE_SEASON = int(os.getenv("CAPTURE_SEASON", "2026"))
+CAPTURE_WEEK = int(os.getenv("CAPTURE_WEEK", "1"))
+
 
 def _signal_matches(row: dict, params: dict) -> bool:
     """weather's row filter for every query parameter beyond season/week/signal_type."""
@@ -50,6 +58,7 @@ _spec = CollectorSpec(
     metrics=metrics,
     refresh_gate=_refresh_gate,
     signal_matches=_signal_matches,
+    default_scope={"season": CAPTURE_SEASON, "week": CAPTURE_WEEK},
     capture_deadline=CAPTURE_DEADLINE,
 )
 
@@ -68,9 +77,10 @@ async def lifespan(app: FastAPI):
             run_capture_loop(
                 _state,
                 lake=_lake,
-                season=int(os.getenv("CAPTURE_SEASON", "2026")),
-                week=int(os.getenv("CAPTURE_WEEK", "1")),
+                season=CAPTURE_SEASON,
+                week=CAPTURE_WEEK,
                 capture_deadline=CAPTURE_DEADLINE,
+                client_factory=_spec.client_factory,
             )
         )
     try:
@@ -95,13 +105,14 @@ async def convergence(game_id: str = Query(...), season: int = 2026, week: int =
     """The ordered forecast series for one kickoff, with per-snapshot deltas.
     weather's own extra route, not part of the shared five -- derivable from
     the lake, but every consumer would otherwise reimplement it."""
+    # `list_keys` filters to this signal type by key suffix (`lake.py`), so
+    # every object read back here is already a `venue_forecast_kickoff`
+    # envelope -- no further filtering needed on read.
     keys = _lake.list_keys(COLLECTOR_NAME, "venue_forecast_kickoff", season, week)
     series = []
     previous: dict | None = None
     for key in keys:
         body = _lake.read(key)
-        if body["signal_type"] != "venue_forecast_kickoff":
-            continue
         match = next((s for s in body["signals"] if s.get("game_id") == game_id), None)
         if match is None:
             continue

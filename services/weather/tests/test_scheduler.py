@@ -116,6 +116,44 @@ async def test_run_capture_loop_wires_weathers_capture_cadence_and_metrics_in():
     assert sleep.calls == [timedelta(minutes=15).total_seconds()]
 
 
+@respx.mock
+async def test_run_capture_loop_honours_an_injected_client_factory():
+    """FINDING 7: the shared loop used to hardcode its own
+    `httpx.AsyncClient(timeout=10.0)` regardless of what a collector
+    configured, so weather's own `client_factory` knob -- the same one
+    `/refresh` (`CollectorSpec.client_factory`) already honoured -- silently
+    did nothing on the loop, the path that performs virtually every capture.
+    """
+    _mock_upstreams()
+    state = CaptureState()
+    sleep = _FakeSleep()
+    opened: list[httpx.AsyncClient] = []
+
+    def custom_client_factory() -> httpx.AsyncClient:
+        client = httpx.AsyncClient(timeout=5.0)
+        opened.append(client)
+        return client
+
+    with pytest.raises(_StopLoop):
+        await weather_run_capture_loop(
+            state,
+            lake=NullLakeWriter(),
+            season=2026,
+            week=1,
+            sleep=sleep,
+            clock=lambda: INTEGRATION_NOW,
+            capture_deadline=None,
+            client_factory=custom_client_factory,
+        )
+
+    assert len(opened) == 1
+    assert opened[0].timeout.connect == 5.0
+    assert set(state.envelopes) == {
+        "venue_forecast_kickoff",
+        "venue_conditions_current",
+    }
+
+
 def state_with_kickoffs(*kickoffs: datetime) -> CaptureState:
     state = CaptureState()
     state.envelopes = {

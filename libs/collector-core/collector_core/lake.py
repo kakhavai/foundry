@@ -14,33 +14,43 @@ from typing import Protocol
 
 import boto3
 
-from .envelope import Envelope
+from .envelope import ENVELOPE_VERSION, Envelope
 
 
 def lake_key(envelope: Envelope) -> str:
-    """signals/<collector>/v<version>/season=<YYYY>/week=<NN>/<captured_at>.json
+    """signals/<collector>/v<version>/season=<YYYY>/week=<NN>/<captured_at>-<signal_type>.json
 
     Week is zero-padded so lexicographic prefix listing is also chronological
-    ordering — week=10 must not sort before week=2.
+    ordering — week=10 must not sort before week=2. `signal_type` is a suffix
+    after `captured_at`, not a separate path segment, so a prefix scan stays
+    sorted by capture instant first: one capture pass writes both signal
+    types with the *same* `captured_at` (a deliberately frozen instant), and
+    without the signal type in the key both writes would resolve to one
+    object -- the second `put_object` silently overwriting the first.
     """
     captured_at = envelope.to_dict()["captured_at"]
     season = envelope.scope["season"]
     week = int(envelope.scope["week"])
     return (
         f"signals/{envelope.collector}/v{envelope.envelope_version}"
-        f"/season={season}/week={week:02d}/{captured_at}.json"
+        f"/season={season}/week={week:02d}/{captured_at}-{envelope.signal_type}.json"
     )
 
 
-def _partition_prefix(collector: str, season: int, week: int) -> str:
-    return f"signals/{collector}/v1/season={season}/week={week:02d}/"
+def _partition_prefix(collector: str, season: int, week: int, version: str) -> str:
+    return f"signals/{collector}/v{version}/season={season}/week={week:02d}/"
 
 
 class LakeWriter(Protocol):
     def write(self, envelope: Envelope) -> str: ...
 
     def list_keys(
-        self, collector: str, signal_type: str, season: int, week: int
+        self,
+        collector: str,
+        signal_type: str,
+        season: int,
+        week: int,
+        version: str = ENVELOPE_VERSION,
     ) -> list[str]: ...
 
     def read(self, key: str) -> dict: ...
@@ -64,21 +74,37 @@ class S3LakeWriter:
         return key
 
     def list_keys(
-        self, collector: str, signal_type: str, season: int, week: int
+        self,
+        collector: str,
+        signal_type: str,
+        season: int,
+        week: int,
+        version: str = ENVELOPE_VERSION,
     ) -> list[str]:
-        """Keys in the partition, in captured_at order.
+        """Keys for one signal type in the partition, in captured_at order.
 
-        `signal_type` is not part of the key layout — one capture writes one
-        envelope per signal type into the same partition — so results are
-        filtered by reading, not by prefix. Sorted because the convergence
-        route depends on the ordering.
+        `signal_type` is a suffix on the key (`lake_key`), so filtering is a
+        suffix match on the listing rather than a read of every object.
+        `version` defaults to the envelope version this build writes; pass it
+        explicitly to read an older partition after a version bump — the
+        partition path (`_partition_prefix`) is versioned the same way
+        `lake_key` is, so a caller that never updates it silently stops
+        finding anything the moment writes move to a new version. Sorted
+        because the convergence route depends on the ordering, and the
+        captured_at-first key layout keeps a suffix filter from disturbing it.
         """
         paginator = self._client.get_paginator("list_objects_v2")
+        suffix = f"-{signal_type}.json"
         keys: list[str] = []
         for page in paginator.paginate(
-            Bucket=self._bucket, Prefix=_partition_prefix(collector, season, week)
+            Bucket=self._bucket,
+            Prefix=_partition_prefix(collector, season, week, version),
         ):
-            keys.extend(obj["Key"] for obj in page.get("Contents", []))
+            keys.extend(
+                obj["Key"]
+                for obj in page.get("Contents", [])
+                if obj["Key"].endswith(suffix)
+            )
         return sorted(keys)
 
     def read(self, key: str) -> dict:
@@ -98,7 +124,12 @@ class NullLakeWriter:
         return ""
 
     def list_keys(
-        self, collector: str, signal_type: str, season: int, week: int
+        self,
+        collector: str,
+        signal_type: str,
+        season: int,
+        week: int,
+        version: str = ENVELOPE_VERSION,
     ) -> list[str]:
         return []
 

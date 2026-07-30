@@ -9,6 +9,7 @@ import weather.adapters.forecast as forecast_module
 from weather.adapters.forecast import (
     FORECAST_URL,
     ForecastHorizonError,
+    _precipitation_type,
     fetch_forecast_at,
 )
 
@@ -96,19 +97,24 @@ async def test_bands_widen_with_lead_time():
     assert far_width > near_width
 
 
-@respx.mock
-async def test_precipitation_type_is_derived_from_temperature():
-    respx.get(FORECAST_URL).mock(return_value=httpx.Response(200, json=HOURLY))
-    async with httpx.AsyncClient() as client:
-        result = await fetch_forecast_at(35.2, -80.8, VALID_AT, client)
-    assert result["precipitation_type"] in {
-        "none",
-        "rain",
-        "snow",
-        "sleet",
-        "freezing_rain",
-        "mixed",
-    }
+@pytest.mark.parametrize(
+    "rate_in_hr, temperature_f, expected",
+    [
+        (0.0, 20.0, "none"),  # no precipitation at all -- temperature is moot
+        (0.05, 30.0, "snow"),  # boundary: <= 30.0F is snow
+        (0.05, 34.0, "sleet"),  # boundary: <= 34.0F (and > 30.0F) is sleet
+        (0.05, 36.0, "freezing_rain"),  # boundary: <= 36.0F (and > 34.0F)
+        (0.05, 36.01, "rain"),  # just above the freezing_rain boundary
+    ],
+)
+def test_precipitation_type_thresholds(rate_in_hr, temperature_f, expected):
+    """FINDING 9: the previous version of this test asserted set membership
+    rather than an expected value, so it passed even if the 30/34/36F
+    thresholds were reordered or a branch was dropped -- four of five
+    branches were unexercised, since every fixture in this file lands on
+    `rain`. Each case here pins one branch at its own boundary.
+    """
+    assert _precipitation_type(rate_in_hr, temperature_f) == expected
 
 
 @respx.mock

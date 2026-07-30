@@ -85,7 +85,11 @@ async def capture_week(
     truncation as `deadline_exceeded` in `coverage.missing`/`errors`, the same
     accounting a genuine upstream failure gets.
     """
-    games = await fetch_schedule(season, week, client)
+    try:
+        games = await fetch_schedule(season, week, client)
+    except Exception as exc:  # noqa: BLE001 — total-outage path, classified below
+        metrics.capture_failure(exc)
+        raise
 
     forecast_acc = CoverageAccumulator(g.game_id for g in games)
     forecast_signals: list[dict] = []
@@ -119,7 +123,16 @@ async def capture_week(
             forecast_acc.fail(game.game_id, metrics.reason_for(exc))
             continue
 
-        assert_forecast_hour(forecast["forecast_valid_at"], game.kickoff_at)
+        try:
+            assert_forecast_hour(forecast["forecast_valid_at"], game.kickoff_at)
+        except ValueError as exc:
+            # A per-game guard failure degrades like `UnresolvableVenue` --
+            # one missing record, not a total-failure week. Left unguarded,
+            # this used to propagate out of `capture_week` entirely and take
+            # every other game in the week down with it.
+            metrics.capture_failure(exc)
+            forecast_acc.fail(game.game_id, "forecast_hour_mismatch")
+            continue
 
         signal = {
             "game_id": game.game_id,
@@ -188,7 +201,11 @@ async def capture_week(
     }
 
     for signal_type, envelope in envelopes.items():
-        lake.write(envelope)
+        try:
+            lake.write(envelope)
+        except Exception as exc:  # noqa: BLE001 — total-outage path (lake unreachable)
+            metrics.capture_failure(exc)
+            raise
         metrics.coverage(signal_type, envelope.coverage.ratio)
 
     return envelopes

@@ -9,6 +9,7 @@ service.
 """
 
 import asyncio
+import contextlib
 import logging
 import threading
 from datetime import UTC, datetime, timedelta
@@ -21,7 +22,13 @@ from collector_core.cadence import CadenceClass
 from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
 from collector_core.metrics import CollectorMetrics
 from collector_core.refresh import RefreshGate
-from collector_core.routes import CaptureState, CollectorSpec, build_collector_router
+from collector_core.routes import (
+    CaptureState,
+    CollectorSpec,
+    _run_capture,
+    build_collector_router,
+)
+from collector_core.scheduler import run_capture_loop
 
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
 SIGNAL_TYPES = ("alpha", "beta")
@@ -117,6 +124,7 @@ def spec() -> CollectorSpec:
         metrics=CollectorMetrics("fake"),
         refresh_gate=RefreshGate(timedelta(seconds=300)),
         signal_matches=signal_matches,
+        default_scope={"season": 2026, "week": 1},
     )
 
 
@@ -221,6 +229,24 @@ def test_refresh_returns_202_and_a_refresh_id(client):
     assert response.json()["refresh_id"]
 
 
+def test_refresh_with_no_body_scope_falls_back_to_the_specs_own_default_scope(spec):
+    """FINDING 6: a bare `POST /refresh` used to fall back to two literals
+    hardcoded in this library (`_DEFAULT_SEASON = 2026`, `_DEFAULT_WEEK = 1`),
+    shared by every collector regardless of its own current scope. This fake
+    collector deliberately sets a default scope the old literals never
+    matched, so the response only comes out right if `/refresh` reads it from
+    `spec.default_scope` rather than a module constant.
+    """
+    spec.default_scope = {"season": 2099, "week": 7}
+    app = FastAPI()
+    app.include_router(build_collector_router(spec))
+    with TestClient(app) as client:
+        response = client.post("/refresh", json={})
+
+    assert response.status_code == 202
+    assert response.json()["scope"] == {"season": 2099, "week": 7}
+
+
 def test_second_refresh_inside_the_floor_is_429_with_retry_after(client):
     client.post("/refresh", json={})
 
@@ -230,22 +256,28 @@ def test_second_refresh_inside_the_floor_is_429_with_retry_after(client):
     assert int(response.headers["Retry-After"]) > 0
 
 
-async def _wait_until(predicate, timeout: float = 2.0) -> bool:
-    """Poll `predicate` until it is truthy or `timeout` elapses.
+async def _wait_until(predicate, message: str, timeout: float = 2.0) -> None:
+    """Poll `predicate` until it is truthy, or raise with `message`.
 
     `/refresh` now dispatches its capture rather than awaiting it, and the
     dispatched task runs on `TestClient`'s own background event loop/thread --
     not the one running this test -- so there is no coroutine to `await`
     directly from here. Polling is the honest way to observe "eventually",
     without assuming exactly how many loop iterations a background task needs.
+
+    Takes a required `message` and asserts with it on timeout rather than
+    returning a bool for the caller to bare-`assert` -- a mutation that
+    hangs this poll used to report only `assert False`, telling a reader
+    nothing about which condition never became true. A confirmed mutation
+    burned a 6-hour CI runner on exactly that failure mode.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while loop.time() < deadline:
         if predicate():
-            return True
+            return
         await asyncio.sleep(0.01)
-    return bool(predicate())
+    assert predicate(), message
 
 
 async def test_refresh_updates_state_and_last_capture_at(client, spec):
@@ -255,7 +287,10 @@ async def test_refresh_updates_state_and_last_capture_at(client, spec):
 
     client.post("/refresh", json={})
 
-    assert await _wait_until(lambda: spec.state.last_capture_at is not None)
+    await _wait_until(
+        lambda: spec.state.last_capture_at is not None,
+        "expected last_capture_at to be set after the dispatched capture landed",
+    )
     assert set(spec.state.envelopes) == {"alpha", "beta"}
 
 
@@ -277,13 +312,16 @@ async def test_refresh_returns_before_the_capture_completes(client, spec):
 
     assert response.status_code == 202
     assert response.json()["refresh_id"]
-    assert await _wait_until(started.is_set), "the capture should have been dispatched"
+    await _wait_until(started.is_set, "the capture should have been dispatched")
     # The response above already landed while `release` was still unset, so
     # the capture cannot have finished yet -- prove it explicitly.
     assert spec.state.last_capture_at is None
 
     release.set()
-    assert await _wait_until(lambda: not spec.state.in_flight)
+    await _wait_until(
+        lambda: not spec.state.in_flight,
+        "expected the in-flight capture to finish once released",
+    )
 
 
 async def test_refresh_updates_state_once_the_dispatched_capture_finishes(client, spec):
@@ -291,7 +329,10 @@ async def test_refresh_updates_state_once_the_dispatched_capture_finishes(client
     response = client.post("/refresh", json={})
 
     assert response.status_code == 202
-    assert await _wait_until(lambda: spec.state.last_capture_at is not None)
+    await _wait_until(
+        lambda: spec.state.last_capture_at is not None,
+        "expected last_capture_at to be set after the dispatched capture landed",
+    )
     assert set(spec.state.envelopes) == {"alpha", "beta"}
 
 
@@ -307,7 +348,10 @@ async def test_a_failed_dispatched_capture_does_not_escape(client, spec, caplog)
     with caplog.at_level(logging.ERROR, logger="collector_core.routes"):
         response = client.post("/refresh", json={})
         assert response.status_code == 202
-        assert await _wait_until(lambda: not spec.state.in_flight)
+        await _wait_until(
+            lambda: not spec.state.in_flight,
+            "expected the failed dispatched capture to finish unwinding",
+        )
 
     assert "dispatched capture failed" in caplog.text
     # State from before the failure is untouched -- a failed dispatched
@@ -332,6 +376,113 @@ async def test_shutdown_cancels_an_in_flight_dispatched_capture(spec):
 
     assert task.cancelled()
     assert not spec.state.in_flight
+
+
+def test_apply_capture_ignores_a_pass_older_than_whats_already_applied(spec):
+    """FINDING 3, belt-and-braces: `/refresh` and the background loop each
+    used to write `state.envelopes`/`state.last_capture_at` unconditionally --
+    whichever finished last won, even if it described an older `now` than
+    what was already applied. `apply_capture` must refuse an older pass even
+    when called back-to-back with no concurrency involved at all.
+    """
+    state = spec.state
+    newer = {"alpha": make_envelope("alpha", [{"widget_id": "newer"}])}
+    older = {"alpha": make_envelope("alpha", [{"widget_id": "older"}])}
+
+    state.apply_capture(newer, NOW + timedelta(seconds=10))
+    state.apply_capture(older, NOW)
+
+    assert state.last_capture_at == NOW + timedelta(seconds=10)
+    assert state.envelopes["alpha"].signals == [{"widget_id": "newer"}]
+
+
+def test_apply_capture_accepts_a_newer_pass(spec):
+    state = spec.state
+    state.apply_capture({"alpha": make_envelope("alpha", [])}, NOW)
+    state.apply_capture(
+        {"alpha": make_envelope("alpha", [{"widget_id": "x"}])},
+        NOW + timedelta(seconds=5),
+    )
+
+    assert state.last_capture_at == NOW + timedelta(seconds=5)
+    assert state.envelopes["alpha"].signals == [{"widget_id": "x"}]
+
+
+async def test_the_loop_and_a_dispatched_refresh_serialize_on_the_shared_lock(spec):
+    """FINDING 3: `/refresh`'s dispatched capture (`_run_capture`) and the
+    background loop (`run_capture_loop`) each used to write
+    `state.envelopes` / `state.last_capture_at` with no coordination -- so a
+    loop tick that started earlier but ran long could still finish *after* a
+    faster `/refresh` and blindly overwrite it with an older result,
+    regressing `last_capture_at`.
+
+    `state.lock` must be held across the *whole* capture, not just the final
+    assignment -- proven here by observing that the refresh's capture
+    function has not even started while the loop still holds the lock. This
+    also stops the two from ever hitting the upstream at the same time,
+    which is what the refresh floor exists to prevent.
+
+    Both tasks are driven directly against `collector_core.routes._run_capture`
+    and `collector_core.scheduler.run_capture_loop` -- not through the HTTP
+    `client` fixture -- because `TestClient` dispatches route handlers on its
+    own background thread/event loop, and an `asyncio.Lock`/`asyncio.Event`
+    is not safe to share across two different running loops.
+    """
+    loop_holds_lock = asyncio.Event()
+    loop_release = asyncio.Event()
+
+    async def loop_capture(season, week, *, client, lake, now, deadline=None):
+        loop_holds_lock.set()
+        await loop_release.wait()
+        return {"alpha": make_envelope("alpha", [{"widget_id": "loop"}])}
+
+    class _StopAfterOne(Exception):
+        pass
+
+    async def sleep_once(_seconds):
+        raise _StopAfterOne
+
+    loop_task = asyncio.create_task(
+        run_capture_loop(
+            spec.state,
+            capture=loop_capture,
+            lake=spec.lake,
+            season=2026,
+            week=1,
+            cadence_class=spec.cadence_class,
+            next_event_at=lambda state, now: None,
+            metrics=spec.metrics,
+            sleep=sleep_once,
+            clock=lambda: NOW,
+        )
+    )
+    await loop_holds_lock.wait()
+
+    refresh_capture_started = asyncio.Event()
+
+    async def refresh_capture(season, week, *, client, lake, now, deadline=None):
+        refresh_capture_started.set()
+        return {"alpha": make_envelope("alpha", [{"widget_id": "refresh"}])}
+
+    spec.capture = refresh_capture
+    refresh_task = asyncio.create_task(
+        _run_capture(spec, 2026, 1, NOW + timedelta(seconds=10), None)
+    )
+
+    # The refresh is blocked on the same lock the loop is holding mid-capture.
+    await asyncio.sleep(0.05)
+    assert not refresh_capture_started.is_set()
+
+    loop_release.set()
+    with contextlib.suppress(_StopAfterOne):
+        await loop_task
+    await refresh_task
+
+    # The loop's pass describes an older `now` than the refresh's -- state
+    # must reflect the refresh (the fresher one), and last_capture_at must
+    # not regress, regardless of which task happened to finish last.
+    assert spec.state.last_capture_at == NOW + timedelta(seconds=10)
+    assert spec.state.envelopes["alpha"].signals == [{"widget_id": "refresh"}]
 
 
 def test_health_returns_ok(client):

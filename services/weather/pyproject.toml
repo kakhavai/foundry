@@ -25,6 +25,7 @@ dev = [
     "hypothesis",
     "httpx",
     "respx",
+    "jsonschema[format]",
 ]
 
 [tool.uv]

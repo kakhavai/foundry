@@ -41,13 +41,6 @@ logger = logging.getLogger(__name__)
 # given collector declares in its own `supported_filters`.
 UNIVERSAL_FILTERS: tuple[str, ...] = ("season", "week", "signal_type")
 
-# The season/week a bare `POST /refresh` captures when the caller supplies no
-# scope. Football-calendar concepts, not weather-specific — every collector
-# in this fleet shares one season/week domain. Hardcoded pending a real
-# "current scope" lookup; moving that literal is out of scope for this task.
-_DEFAULT_SEASON = 2026
-_DEFAULT_WEEK = 1
-
 # A sane ceiling on how long a single capture pass may run before it must
 # start truncating, applied both to the background loop and to a dispatched
 # `/refresh`. Overridable per collector via `CollectorSpec.capture_deadline`.
@@ -75,6 +68,13 @@ class CaptureState:
     # here so a pending capture survives until it finishes or is cancelled at
     # shutdown, and discarded via `add_done_callback` once it has.
     in_flight: set[asyncio.Task] = field(default_factory=set)
+    # Serializes a background loop tick against a dispatched `/refresh` --
+    # without it, both call `capture` concurrently (defeating the refresh
+    # floor's purpose of not double-hitting the upstream) and whichever
+    # finishes last wins the state assignment regardless of which of the two
+    # actually captured later. Held across the *whole* capture, not just the
+    # assignment.
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def cancel_in_flight(self) -> None:
         """Cancel every dispatched capture still running and wait for it to
@@ -86,6 +86,19 @@ class CaptureState:
         for task in tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+    def apply_capture(self, envelopes: dict[str, Envelope], now: datetime) -> None:
+        """Install a completed capture's results.
+
+        Belt-and-braces on top of `lock`: even serialized, a pass describing
+        an older `now` must never overwrite one describing a newer `now` --
+        e.g. a loop tick that started before a `/refresh` was dispatched but
+        (were it not for `lock`) could otherwise finish after it. Call only
+        while holding `lock`.
+        """
+        if self.last_capture_at is None or now > self.last_capture_at:
+            self.envelopes = envelopes
+            self.last_capture_at = now
 
 
 # The capture entry point a collector supplies. Matches the shape of
@@ -115,6 +128,14 @@ class CollectorSpec:
     metrics: CollectorMetrics
     refresh_gate: RefreshGate
     signal_matches: SignalMatcher
+    # The season/week a bare `POST /refresh` captures when the caller
+    # supplies no scope. Owned per-collector rather than a shared library
+    # literal: the loop's own scope comes from a collector's own env vars
+    # (e.g. weather's CAPTURE_SEASON/CAPTURE_WEEK), and a hardcoded fleet-wide
+    # default silently diverges from it the first time an operator advances
+    # the week. The collector must populate this from the same source the
+    # loop uses.
+    default_scope: dict
     # The transport a dispatched `/refresh` capture opens its client with.
     # Defaulting to today's `httpx.AsyncClient(timeout=10.0)` means no
     # collector's behaviour changes; a collector whose upstream is slower or
@@ -144,12 +165,17 @@ async def _run_capture(
     only a backstop for anything that escapes that, e.g. a bug in `capture`
     itself."""
     try:
-        async with spec.client_factory() as client:
-            envelopes = await spec.capture(
-                season, week, client=client, lake=spec.lake, now=now, deadline=deadline
-            )
-        spec.state.envelopes = envelopes
-        spec.state.last_capture_at = now
+        async with spec.state.lock:
+            async with spec.client_factory() as client:
+                envelopes = await spec.capture(
+                    season,
+                    week,
+                    client=client,
+                    lake=spec.lake,
+                    now=now,
+                    deadline=deadline,
+                )
+            spec.state.apply_capture(envelopes, now)
     except Exception:
         logger.exception("dispatched capture failed")
 
@@ -253,8 +279,8 @@ def build_collector_router(spec: CollectorSpec) -> APIRouter:
             )
 
         scope = body or {}
-        season = int(scope.get("season", _DEFAULT_SEASON))
-        week = int(scope.get("week", _DEFAULT_WEEK))
+        season = int(scope.get("season", spec.default_scope["season"]))
+        week = int(scope.get("week", spec.default_scope["week"]))
         deadline = (
             None if spec.capture_deadline is None else now + spec.capture_deadline
         )

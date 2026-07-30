@@ -1,6 +1,6 @@
 # Phase 8 — Data Source Collectors
 
-> **Status:** 📋 **Planned** — design done, no code yet · [roadmap](../../README.md#phases)
+> **Status:** 🚧 **In progress** — 8A delivered: `weather` retrofitted onto the capture model, the shared `collector-core` library (auth, five-route contract surface, capture loop, signal lake), and the append-only S3 lake. 8B–8F not started. · [roadmap](../../README.md#phases)
 
 **Goal:** Build the fleet of data-source collectors that feed the out-of-repo projections generator, and the paved road that makes adding the twenty-seventh collector a day of work rather than a week. Phase 8 turns "the generator needs good sources" from an aspiration into a specified, staged, extensible catalog.
 
@@ -332,7 +332,7 @@ The stadium as it will be at kickoff — split into what changes by the hour and
 #### `weather`
 
 **Signal types:** `venue_forecast_kickoff`, `venue_conditions_current`
-**Cadence class:** volatile — every 15 min from 96 h before kickoff, hourly beyond that; escalates to 5 min (perishable) from T−90 min through the final whistle
+**Cadence class:** volatile — every 15 minutes flat, for every game in scope regardless of how far out kickoff is; escalates to 5 min (perishable) from T−90 min through the final whistle
 **Stage:** 8A
 **Depends on:** a bundled schedule adapter at 8A, supplying `game_id`,
 kickoff timestamps, and per-game roof state. Replaced by `schedule-context`
@@ -357,7 +357,7 @@ Answers what the ball and the players will actually be dealing with at kickoff, 
 | `wind_gust_mph` | float | Peak gust in the kickoff hour |
 | `wind_direction_deg` | int | Meteorological degrees (direction wind comes *from*) |
 | `crosswind_component_mph` | float | Wind resolved perpendicular to `venue.field_orientation_deg`; null until `venue` exists |
-| `precipitation_type` | enum | `none`, `rain`, `snow`, `sleet`, `freezing_rain`, `mixed` |
+| `precipitation_type` | enum | `none`, `rain`, `snow`, `sleet`, `freezing_rain` |
 | `precipitation_probability` | float | 0–1 for the kickoff hour |
 | `precipitation_rate_in_hr` | float | Intensity, not accumulation |
 | `humidity_pct` | float | Relative humidity |
@@ -368,11 +368,13 @@ Answers what the ball and the players will actually be dealing with at kickoff, 
 
 **`coverage.expected` means:** one `venue_forecast_kickoff` record per game
 scheduled in the queried week — indoor games included, emitting a
-controlled-environment record rather than being dropped. Games beyond the
-96-hour horizon are captured at the hourly cadence with a larger
-`forecast_lead_hours` and wider `bands`. Counting only in-horizon games would
-make the coverage denominator move hour by hour, so the ratio could not
-distinguish a healthy collector from one that has captured only the near games.
+controlled-environment record rather than being dropped. Every game in scope
+is captured on the same 15-minute cadence regardless of how far out kickoff
+is — there is no separate hourly tier for distant games. Only
+`forecast_lead_hours` (larger) and `bands` width (wider) grow as a game gets
+farther from kickoff, never how often it is captured, so
+`coverage.expected` counts the full week's games from the first capture
+onward rather than moving as kickoff approaches.
 
 **Adapter notes:** An adapter must resolve a venue to a forecast point, request the *specific kickoff hour* rather than a daily summary, and carry the model's own spread through into `bands` instead of publishing a bare point estimate. Unit normalization is real work here: the current service emits Celsius and km/h, and the envelope standardizes on the suffixed imperial fields above. The hard part is the roof: an outdoor forecast for a closed dome is not merely wrong, it is confidently wrong, so `environment` must be resolved before any meteorological field is populated, and `retractable_undecided` must be representable rather than guessed.
 

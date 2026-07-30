@@ -73,7 +73,7 @@ foundry/
 | 5 | Resilience testing + AI agent adversarial layer | 🚧 In progress | Stage 1 delivered; no tag until all stages land |
 | 6 | AWS deployment — EKS via Terraform, ECR, ALB ingress, IRSA + OIDC | 📋 Planned | — |
 | 7 | AI observability & governance — instrument runtime AI (triage narrator) + developer AI (Claude Code) into the OTel/Grafana stack | 📋 Planned | — |
-| 8 | Data source collectors — the 26-collector catalog feeding the projections generator, on a uniform contract + signal lake (8A–8F) | 📋 Planned | — |
+| 8 | Data source collectors — the 26-collector catalog feeding the projections generator, on a uniform contract + signal lake (8A–8F) | 🚧 In progress | 8A delivered — `weather` retrofitted onto the capture model; 8B–8F not started |
 
 ---
 

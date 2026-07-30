@@ -149,6 +149,40 @@ async def test_successful_calls_count_as_attempts_but_not_failures(metric_value)
     assert failures_after - failures_before == 0.0
 
 
+@respx.mock
+async def test_schedule_feed_failure_increments_the_failure_counter(metric_value):
+    """FINDING 5: `fetch_schedule` used to sit outside every try/except in
+    `capture_week` -- a total schedule-feed outage propagated to the caller
+    (logged and swallowed) without incrementing a single counter. The
+    observable state was pod Healthy, `/signals` empty, and nothing in
+    `/metrics` to alert on. This is the most likely total-outage mode short
+    of the lake itself being unreachable.
+    """
+    respx.get(SCHEDULE_URL).mock(return_value=httpx.Response(503))
+
+    before = (
+        metric_value(
+            "collector_capture_failures_total",
+            collector="weather",
+            reason="http_status",
+        )
+        or 0.0
+    )
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await capture_week(2026, 1, client=client, lake=NullLakeWriter(), now=NOW)
+    after = (
+        metric_value(
+            "collector_capture_failures_total",
+            collector="weather",
+            reason="http_status",
+        )
+        or 0.0
+    )
+
+    assert after - before == 1.0
+
+
 def test_unknown_exception_class_falls_back_to_unknown():
     """The fallback is unreachable through capture_week — every exception type
     the classifier is asked to handle there is already covered above — so it

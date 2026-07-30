@@ -266,9 +266,14 @@ async def test_loop_records_staleness_after_a_successful_capture():
     assert metrics.calls == [3.0]
 
 
-async def test_loop_does_not_record_staleness_before_any_successful_capture():
-    """A capture that never succeeds must never report a staleness value --
-    there is nothing to measure staleness from yet."""
+async def test_loop_emits_staleness_since_process_start_before_any_capture_succeeds():
+    """FINDING 5 regression: `scheduler.py` used to skip staleness entirely
+    until the first successful capture (`if state.last_capture_at is not
+    None`) -- so during a total outage `collector_staleness_seconds` never
+    existed as a series at all, and an absent series cannot page. It must
+    report elapsed-since-process-start instead, so the series exists from
+    the very first tick.
+    """
     state = CaptureState()
     capture = _CaptureStub(RuntimeError("boom"))
     sleep = _FakeSleep(stop_after=1)
@@ -288,7 +293,11 @@ async def test_loop_does_not_record_staleness_before_any_successful_capture():
             clock=_FakeClock(NOW),
         )
 
-    assert metrics.calls == []
+    assert state.last_capture_at is None
+    # _FakeClock advances 1s per call: one read for `now` at the top of the
+    # iteration (this becomes `process_started_at`), one more to compute
+    # elapsed time after the failed capture -- 1.0s apart.
+    assert metrics.calls == [1.0]
 
 
 async def test_loop_sleeps_for_the_escalated_interval_near_an_event():
@@ -458,3 +467,53 @@ async def test_loop_passes_no_deadline_when_capture_deadline_is_none():
         )
 
     assert capture.calls[0]["deadline"] is None
+
+
+async def test_loop_opens_its_client_via_the_injected_client_factory():
+    """FINDING 7: `run_capture_loop` used to hardcode
+    `httpx.AsyncClient(timeout=10.0)` -- the loop performs virtually every
+    capture, so a collector's `client_factory` (the knob that lets it own its
+    own transport config) silently did nothing on the path that matters most,
+    even though `/refresh` (`collector_core.routes._run_capture`) already
+    honoured it.
+    """
+    state = CaptureState()
+    opened: list[object] = []
+
+    class _RecordingClient:
+        async def __aenter__(self):
+            opened.append(self)
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+    def custom_client_factory():
+        return _RecordingClient()
+
+    seen_clients: list[object] = []
+
+    async def capture(season, week, *, client, lake, now, deadline=None) -> dict:
+        seen_clients.append(client)
+        return {"alpha": "envelope"}
+
+    sleep = _FakeSleep(stop_after=1)
+
+    with pytest.raises(_StopLoop):
+        await run_capture_loop(
+            state,
+            capture=capture,
+            lake=_NullLake(),
+            season=2026,
+            week=1,
+            cadence_class=CadenceClass.VOLATILE,
+            next_event_at=no_event,
+            metrics=_StalenessSpy(),
+            sleep=sleep,
+            clock=_FakeClock(NOW),
+            client_factory=custom_client_factory,
+        )
+
+    assert len(opened) == 1
+    assert isinstance(opened[0], _RecordingClient)
+    assert seen_clients == [opened[0]]

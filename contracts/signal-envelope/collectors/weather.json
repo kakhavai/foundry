@@ -36,7 +36,7 @@
         "wind_gust_mph": { "type": ["number", "null"] },
         "wind_direction_deg": { "type": ["integer", "null"] },
         "precipitation_type": {
-          "enum": ["none", "rain", "snow", "sleet", "freezing_rain", "mixed"]
+          "enum": ["none", "rain", "snow", "sleet", "freezing_rain"]
         },
         "precipitation_probability": { "type": "number", "minimum": 0, "maximum": 1 },
         "precipitation_rate_in_hr": { "type": "number", "minimum": 0 },

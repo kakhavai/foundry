@@ -29,6 +29,11 @@ jobs:
           filters: |
             relevant:
               - 'services/**'
+              # The shared collector library — auth, the five routes, the
+              # capture loop, the lake writer, the envelope. A PR touching
+              # only libs/ used to skip this job entirely, and a skipped
+              # required check counts as a pass.
+              - 'libs/**'
               - 'helm/**'
               - 'infra/**'
               - 'scripts/**'
@@ -45,6 +50,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:

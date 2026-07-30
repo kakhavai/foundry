@@ -168,7 +168,13 @@ class _FakeLakeWriter:
     """A minimal stand-in for the `LakeWriter` protocol, holding a fixed set of
     already-written envelope bodies in read order. Not moto/S3 — same reasoning
     as `SpyLakeWriter` in test_capture.py: the storage layer's own correctness
-    is collector-core's test to own, not this route's."""
+    is collector-core's test to own, not this route's.
+
+    `list_keys` filters by `signal_type`, matching the real `S3LakeWriter`
+    (`signal_type` is now part of the key, `lake.py`) — the convergence route
+    relies on that filtering rather than re-checking `signal_type` itself on
+    read.
+    """
 
     def __init__(self, bodies: list[dict]) -> None:
         self._bodies = bodies
@@ -176,8 +182,12 @@ class _FakeLakeWriter:
     def write(self, envelope) -> str:
         raise NotImplementedError
 
-    def list_keys(self, collector, signal_type, season, week) -> list[str]:
-        return [str(i) for i in range(len(self._bodies))]
+    def list_keys(self, collector, signal_type, season, week, version="1") -> list[str]:
+        return [
+            str(i)
+            for i, body in enumerate(self._bodies)
+            if body["signal_type"] == signal_type
+        ]
 
     def read(self, key: str) -> dict:
         return self._bodies[int(key)]

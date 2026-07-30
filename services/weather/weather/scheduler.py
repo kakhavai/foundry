@@ -13,6 +13,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from collector_core.lake import LakeWriter
 from collector_core.routes import DEFAULT_CAPTURE_DEADLINE, CaptureState
 from collector_core.scheduler import interval_for_state as _interval_for_state
@@ -56,6 +57,10 @@ def interval_for_state(state: CaptureState, now: datetime) -> timedelta:
     )
 
 
+def _client_factory() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=10.0)
+
+
 async def run_capture_loop(
     state: CaptureState,
     *,
@@ -65,6 +70,7 @@ async def run_capture_loop(
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], datetime] | None = None,
     capture_deadline: timedelta | None = DEFAULT_CAPTURE_DEADLINE,
+    client_factory: Callable[[], httpx.AsyncClient] = _client_factory,
 ) -> None:
     """weather's capture loop -- the shared loop with weather's cadence
     class, capture function, metrics, and kickoff lookup bound in, so
@@ -81,5 +87,6 @@ async def run_capture_loop(
         metrics=metrics,
         sleep=sleep,
         capture_deadline=capture_deadline,
+        client_factory=client_factory,
         **kwargs,
     )

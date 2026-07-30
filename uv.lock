@@ -1704,6 +1704,7 @@ dependencies = [
 dev = [
     { name = "httpx" },
     { name = "hypothesis" },
+    { name = "jsonschema", extra = ["format"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -1730,6 +1731,7 @@ requires-dist = [
 dev = [
     { name = "httpx" },
     { name = "hypothesis" },
+    { name = "jsonschema", extras = ["format"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
