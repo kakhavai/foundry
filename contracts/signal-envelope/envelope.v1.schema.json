@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/envelope.v1.schema.json",
+  "title": "Foundry collector signal envelope, version 1",
+  "type": "object",
+  "required": [
+    "envelope_version",
+    "collector",
+    "signal_type",
+    "captured_at",
+    "upstream",
+    "scope",
+    "coverage",
+    "errors",
+    "signals"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "envelope_version": { "const": "1" },
+    "collector": { "type": "string", "minLength": 1 },
+    "signal_type": { "type": "string", "minLength": 1 },
+    "captured_at": { "type": "string", "format": "date-time" },
+    "upstream": {
+      "type": "object",
+      "required": ["adapter", "fetched_at"],
+      "additionalProperties": false,
+      "properties": {
+        "adapter": { "type": "string", "minLength": 1 },
+        "fetched_at": { "type": "string", "format": "date-time" },
+        "source_ref": { "type": ["string", "null"] }
+      }
+    },
+    "scope": { "type": "object" },
+    "coverage": {
+      "type": "object",
+      "required": ["expected", "present", "missing"],
+      "additionalProperties": false,
+      "properties": {
+        "expected": { "type": "integer", "minimum": 0 },
+        "present": { "type": "integer", "minimum": 0 },
+        "missing": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["reason"],
+        "properties": {
+          "reason": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      }
+    },
+    "signals": { "type": "array", "items": { "type": "object" } }
+  }
+}

@@ -4,28 +4,18 @@ Enforcement lives in the service rather than at the gateway. The reason is
 visible in `scripts/smoke-test.sh`: it port-forwards `svc/weather` directly, so
 gateway-only auth would leave the required `integration-test` check green over
 an unprotected path.
+
+`/signals` stands in for "a protected data route" throughout — it replaced
+`/weather/stadiums` in Task 13 and, unlike the old route, never calls an
+upstream itself, so these tests need no respx mocking to reach 200.
 """
 
-import httpx
 import pytest
-import respx
 from fastapi.testclient import TestClient
 
-from weather.client import WEATHER_URL
 from weather.main import app
 
-STADIUM_PATH = "/weather/stadiums/lambeau"
-
-GOOD_BODY = {
-    "current": {
-        "time": "2026-07-28T12:00",
-        "temperature_2m": 18.5,
-        "relative_humidity_2m": 65,
-        "wind_speed_10m": 12.3,
-        "weather_code": 2,
-        "precipitation": 0.0,
-    }
-}
+SIGNALS_PATH = "/signals"
 
 
 def anonymous() -> TestClient:
@@ -40,7 +30,7 @@ def test_missing_token_is_rejected(metric_value):
         )
         or 0.0
     )
-    response = anonymous().get(STADIUM_PATH)
+    response = anonymous().get(SIGNALS_PATH)
     after = (
         metric_value(
             "collector_auth_failures_total", collector="weather", reason="missing"
@@ -64,22 +54,19 @@ def test_missing_token_is_rejected(metric_value):
     ],
 )
 def test_malformed_authorization_header_is_rejected(header):
-    response = anonymous().get(STADIUM_PATH, headers={"Authorization": header})
+    response = anonymous().get(SIGNALS_PATH, headers={"Authorization": header})
 
     assert response.status_code == 401
 
 
-@respx.mock
-def test_extra_spaces_between_scheme_and_token_are_accepted(client, collector_token):
+def test_extra_spaces_between_scheme_and_token_are_accepted(collector_token):
     """RFC 7235 allows `1*SP` after the scheme, so `Bearer  <token>` is valid.
 
     Rejecting it fails closed, so this was never a security problem — just a
     caller that cannot authenticate for a reason no error message explains.
     """
-    respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json=GOOD_BODY))
-
     response = anonymous().get(
-        STADIUM_PATH, headers={"Authorization": f"Bearer   {collector_token}"}
+        SIGNALS_PATH, headers={"Authorization": f"Bearer   {collector_token}"}
     )
 
     assert response.status_code == 200
@@ -93,7 +80,7 @@ def test_wrong_token_is_rejected(metric_value):
         or 0.0
     )
     response = anonymous().get(
-        STADIUM_PATH, headers={"Authorization": "Bearer not-the-real-token"}
+        SIGNALS_PATH, headers={"Authorization": "Bearer not-the-real-token"}
     )
     after = (
         metric_value(
@@ -117,33 +104,28 @@ def test_superseded_token_is_rejected(monkeypatch, collector_token):
     monkeypatch.setenv("COLLECTOR_TOKEN", "rotated-token")
 
     response = anonymous().get(
-        STADIUM_PATH, headers={"Authorization": f"Bearer {collector_token}"}
+        SIGNALS_PATH, headers={"Authorization": f"Bearer {collector_token}"}
     )
 
     assert response.status_code == 401
 
 
-@respx.mock
 def test_rotated_token_is_accepted(monkeypatch):
     """The other half of rotation: the new token works immediately."""
-    respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json=GOOD_BODY))
     monkeypatch.setenv("COLLECTOR_TOKEN", "rotated-token")
 
     response = anonymous().get(
-        STADIUM_PATH, headers={"Authorization": "Bearer rotated-token"}
+        SIGNALS_PATH, headers={"Authorization": "Bearer rotated-token"}
     )
 
     assert response.status_code == 200
 
 
-@respx.mock
 def test_valid_token_reaches_the_route(client):
-    respx.get(WEATHER_URL).mock(return_value=httpx.Response(200, json=GOOD_BODY))
-
-    response = client.get(STADIUM_PATH)
+    response = client.get(SIGNALS_PATH)
 
     assert response.status_code == 200
-    assert response.json()["id"] == "lambeau"
+    assert response.json() == {"envelopes": [], "count": 0}
 
 
 def test_unconfigured_token_fails_closed(monkeypatch, metric_value):
@@ -162,7 +144,7 @@ def test_unconfigured_token_fails_closed(monkeypatch, metric_value):
     )
 
     response = anonymous().get(
-        STADIUM_PATH, headers={"Authorization": "Bearer anything-at-all"}
+        SIGNALS_PATH, headers={"Authorization": "Bearer anything-at-all"}
     )
 
     after = (

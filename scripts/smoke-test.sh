@@ -33,35 +33,86 @@ AUTH="Authorization: Bearer $TOKEN"
 # and Prometheus's scrape keep working.
 curl -sf http://localhost:8000/health | grep '"status":"ok"'
 curl -sf http://localhost:8000/metrics | grep '# HELP'
-curl -sf -H "$AUTH" http://localhost:8000/weather/stadiums | python3 -c "
+
+curl -sf -H "$AUTH" http://localhost:8000/catalog | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-assert data['count'] == 30, f'expected 30 stadiums, got {data[\"count\"]}'
-print('stadiums OK')
+assert data['collector'] == 'weather', data
+assert set(data['signal_types']) == {
+    'venue_forecast_kickoff', 'venue_conditions_current'}, data
+print('catalog OK')
 "
 
-# Through the gateway, authenticated. The doubled path segment is expected:
-# the gateway strips /collectors/weather and weather's own routes live under
-# /weather/. Phase 8's 8A removes the doubling.
-curl -sf -H "$AUTH" "$GATEWAY/weather/stadiums" | python3 -c "
+# The doubled path segment is gone: weather's routes no longer live under
+# /weather/, so the gateway's strip of /collectors/weather lands on /signals.
+curl -sf -H "$AUTH" "$GATEWAY/signals" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-assert data['count'] == 30, f'gateway: expected 30 stadiums, got {data[\"count\"]}'
+assert 'envelopes' in data, data
 print('gateway routing OK')
 "
+
+# An unknown signal_type must 422 rather than return an empty list, so a client
+# bug surfaces instead of looking like a quiet week.
+STATUS=$(curl -o /dev/null -sw '%{http_code}' -H "$AUTH" \
+  "$GATEWAY/signals?signal_type=nonsense")
+[ "$STATUS" = "422" ] || (echo "unknown signal_type should be 422, got $STATUS" && exit 1)
 
 # Rejections. The second one is the one that matters: it goes straight at the
 # Service, bypassing the gateway entirely. Under gateway-only auth it would
 # return 200 and this required check would pass over an unprotected path.
-STATUS=$(curl -o /dev/null -sw '%{http_code}' "$GATEWAY/weather/stadiums")
+STATUS=$(curl -o /dev/null -sw '%{http_code}' "$GATEWAY/signals")
 [ "$STATUS" = "401" ] || (echo "gateway without token should be 401, got $STATUS" && exit 1)
-STATUS=$(curl -o /dev/null -sw '%{http_code}' http://localhost:8000/weather/stadiums)
+STATUS=$(curl -o /dev/null -sw '%{http_code}' http://localhost:8000/signals)
 [ "$STATUS" = "401" ] || (echo "direct Service call without token should be 401, got $STATUS" && exit 1)
-# A wrong (non-empty) token must be rejected too, not just a missing one — this
-# is the deployed-path check for what test_wrong_token_is_rejected covers in-process.
-STATUS=$(curl -o /dev/null -sw '%{http_code}' -H "Authorization: Bearer wrong-token" "$GATEWAY/weather/stadiums")
+STATUS=$(curl -o /dev/null -sw '%{http_code}' -H "Authorization: Bearer wrong-token" "$GATEWAY/signals")
 [ "$STATUS" = "401" ] || (echo "gateway with wrong token should be 401, got $STATUS" && exit 1)
 echo "collector auth OK"
+
+# The auth exemption for /health and /metrics is necessary in-cluster: the
+# kubelet's probes and the annotation scrape cannot carry a token, and a probe
+# cannot read a Secret. That is not a reason to publish them at the edge, so the
+# gateway routes only the contract paths. In-cluster they must still answer.
+for p in health metrics; do
+  STATUS=$(curl -o /dev/null -sw '%{http_code}' "$GATEWAY/$p")
+  [ "$STATUS" = "404" ] || (echo "$p must not be published at the edge, got $STATUS" && exit 1)
+done
+echo "edge surface OK (/health and /metrics not routed)"
+
+# Same two paths, in-cluster, unauthenticated, must still work — otherwise the
+# probes and the metrics scrape break and the fix has overshot.
+curl -sf http://localhost:8000/health | grep '"status":"ok"'
+curl -sf http://localhost:8000/metrics | grep '# HELP'
+echo "in-cluster exempt paths OK"
+
+# Force a capture, then prove it reached the object store. This is the only
+# check that exercises a real Pod reading its credentials from a Secret and
+# resolving MinIO through cluster DNS — the local ArgoCD-managed cluster cannot.
+curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"season":2026,"week":1}' http://localhost:8000/refresh \
+  | python3 -c "import sys,json; assert json.load(sys.stdin)['refresh_id']; print('refresh accepted')"
+
+# /refresh returns before the capture finishes, so poll rather than assume.
+#
+# Count on the runner, not inside the container: the MinIO image is minimal and
+# has no `grep`, so piping to it in-container fails with exit 127 on every poll
+# and the loop can only ever report zero — a broken counter that looks exactly
+# like a broken lake write.
+OBJECTS=0
+for _ in $(seq 1 30); do
+  OBJECTS=$(kubectl exec -n monitoring deploy/minio -- \
+    ls -R /export/foundry-signals 2>/dev/null | grep -c '\.json' || true)
+  OBJECTS=${OBJECTS:-0}
+  [ "$OBJECTS" -gt 0 ] && break
+  sleep 2
+done
+if [ "$OBJECTS" -eq 0 ]; then
+  echo "no envelope reached the lake after 60s. Bucket contents:"
+  kubectl exec -n monitoring deploy/minio -- ls -R /export 2>&1 | head -30 || true
+  exit 1
+fi
+echo "lake write OK ($OBJECTS object(s))"
+
 echo "weather: OK"
 
 # player-projections

@@ -8,15 +8,20 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --locked --no-dev --no-install-project
-
+# A uv workspace has ONE lockfile, at the workspace root — there is no
+# services/weather/uv.lock (Task 1 deleted it). The root pyproject.toml and
+# root uv.lock both come in, plus every member's manifest, because uv resolves
+# the whole workspace graph before it can sync any single member.
 COPY pyproject.toml uv.lock ./
-COPY weather/ ./weather/
+COPY libs/collector-core/ ./libs/collector-core/
+COPY services/weather/pyproject.toml ./services/weather/
+
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable
+    uv sync --locked --no-dev --no-install-project --package weather
+
+COPY services/weather/weather/ ./services/weather/weather/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --no-editable --package weather
 
 FROM python:3.12-slim
 

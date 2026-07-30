@@ -2,6 +2,9 @@
 {{- if not .Values.gateway.pathPrefix }}
 {{- fail "gateway.pathPrefix must be set when gateway.enabled is true (e.g. /collectors/weather)" }}
 {{- end }}
+{{- if not .Values.gateway.publicPaths }}
+{{- fail "gateway.publicPaths must be a non-empty list when gateway.enabled is true" }}
+{{- end }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -13,22 +16,22 @@ spec:
     - name: {{ .Values.gateway.name }}
       namespace: {{ .Values.gateway.namespace }}
   rules:
+    {{- range $path := .Values.gateway.publicPaths }}
     - matches:
         - path:
             type: PathPrefix
-            value: {{ .Values.gateway.pathPrefix | quote }}
+            value: {{ printf "%s%s" $.Values.gateway.pathPrefix $path | quote }}
       filters:
-        # Strip /collectors/<name> so the service sees its own routes. One rule
-        # for the whole fleet — no per-collector rewrite target. Today that
-        # means the external path is /collectors/weather/weather/stadiums,
-        # because weather's own routes are namespaced under /weather/. That
-        # doubling is transitional: Phase 8's 8A replaces them with /signals.
+        # Strip the collector prefix and nothing else, so a collector's own
+        # sub-routes still resolve: /collectors/weather/signals/convergence
+        # reaches /signals/convergence.
         - type: URLRewrite
           urlRewrite:
             path:
               type: ReplacePrefixMatch
-              replacePrefixMatch: /
+              replacePrefixMatch: {{ $path | quote }}
       backendRefs:
-        - name: {{ include "generic-service.fullname" . }}
-          port: {{ .Values.service.port }}
+        - name: {{ include "generic-service.fullname" $ }}
+          port: {{ $.Values.service.port }}
+    {{- end }}
 {{- end }}

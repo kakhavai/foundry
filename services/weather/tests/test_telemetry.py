@@ -197,7 +197,7 @@ def test_auth_middleware_survives_instrumentation(
     original_stack = app.middleware_stack
     try:
         with TestClient(app) as client:
-            assert client.get("/weather/stadiums").status_code == 401
+            assert client.get("/signals").status_code == 401
     finally:
         FastAPIInstrumentor.uninstrument_app(app)
         app.middleware_stack = original_stack

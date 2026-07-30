@@ -62,6 +62,23 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/catalog": {
+      "get": {
+        "description": "Self-description. The registry says a collector exists; this says\nwhat it currently offers.",
+        "operationId": "catalog_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Catalog"
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health_health_get",
@@ -94,9 +111,54 @@
         "summary": "Prometheus Metrics"
       }
     },
-    "/weather/stadiums": {
+    "/refresh": {
+      "post": {
+        "description": "Force a capture outside the cadence, subject to the interval floor.\n\nReturns 202 once the capture is dispatched, not once it finishes --\nthe caller is told \"accepted\", not \"done\". The capture itself runs\nas a background task and lands in `spec.state` (and the lake, via\n`spec.capture`) whenever it completes.",
+        "operationId": "refresh_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh"
+      }
+    },
+    "/signals": {
       "get": {
-        "operationId": "all_stadiums_weather_weather_stadiums_get",
+        "operationId": "signals_signals_get",
         "responses": {
           "200": {
             "content": {
@@ -107,20 +169,41 @@
             "description": "Successful Response"
           }
         },
-        "summary": "All Stadiums Weather"
+        "summary": "Signals"
       }
     },
-    "/weather/stadiums/{stadium_id}": {
+    "/signals/convergence": {
       "get": {
-        "operationId": "stadium_weather_weather_stadiums__stadium_id__get",
+        "description": "The ordered forecast series for one kickoff, with per-snapshot deltas.\nweather's own extra route, not part of the shared five -- derivable from\nthe lake, but every consumer would otherwise reimplement it.",
+        "operationId": "convergence_signals_convergence_get",
         "parameters": [
           {
-            "in": "path",
-            "name": "stadium_id",
+            "in": "query",
+            "name": "game_id",
             "required": true,
             "schema": {
-              "title": "Stadium Id",
+              "title": "Game Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "season",
+            "required": false,
+            "schema": {
+              "default": 2026,
+              "title": "Season",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "week",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Week",
+              "type": "integer"
             }
           }
         ],
@@ -144,7 +227,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Stadium Weather"
+        "summary": "Convergence"
       }
     }
   }

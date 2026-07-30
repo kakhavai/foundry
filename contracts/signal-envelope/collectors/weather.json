@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/weather.json",
+  "title": "weather collector signal fields",
+  "signal_types": {
+    "venue_forecast_kickoff": {
+      "type": "object",
+      "required": [
+        "game_id",
+        "venue_id",
+        "forecast_valid_at",
+        "forecast_lead_hours",
+        "environment",
+        "temperature_f",
+        "wind_speed_mph",
+        "precipitation_type",
+        "playability"
+      ],
+      "properties": {
+        "game_id": { "type": "string" },
+        "venue_id": { "type": "string" },
+        "forecast_valid_at": { "type": "string", "format": "date-time" },
+        "forecast_lead_hours": { "type": "number", "minimum": 0 },
+        "environment": {
+          "enum": [
+            "outdoor",
+            "fixed_dome",
+            "retractable_open",
+            "retractable_closed",
+            "retractable_undecided"
+          ]
+        },
+        "temperature_f": { "type": ["number", "null"] },
+        "feels_like_f": { "type": ["number", "null"] },
+        "wind_speed_mph": { "type": ["number", "null"] },
+        "wind_gust_mph": { "type": ["number", "null"] },
+        "wind_direction_deg": { "type": ["integer", "null"] },
+        "precipitation_type": {
+          "enum": ["none", "rain", "snow", "sleet", "freezing_rain"]
+        },
+        "precipitation_probability": { "type": "number", "minimum": 0, "maximum": 1 },
+        "precipitation_rate_in_hr": { "type": "number", "minimum": 0 },
+        "humidity_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+        "bands": { "type": "object" },
+        "playability": { "type": "object" }
+      }
+    },
+    "venue_conditions_current": {
+      "type": "object",
+      "required": ["venue_id", "temperature_f", "wind_speed_mph"],
+      "properties": {
+        "venue_id": { "type": "string" }
+      }
+    }
+  }
+}

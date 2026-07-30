@@ -1,0 +1,30 @@
+[project]
+name = "collector-core"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["boto3", "fastapi", "httpx", "opentelemetry-api", "prometheus-client"]
+
+[dependency-groups]
+dev = ["ruff", "pytest", "pytest-asyncio", "pytest-cov", "jsonschema[format]", "moto[s3]"]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=collector_core --cov-branch --cov-report=term --cov-fail-under=80"
+
+[tool.coverage.run]
+branch = true
+source = ["collector_core"]
+
+[tool.coverage.report]
+show_missing = true
