@@ -45,7 +45,10 @@ def test_catalog_agrees_with_the_registry_entry(client):
     entry = next(c for c in registry["collectors"] if c["name"] == "roster-scope")
     body = client.get("/catalog").json()
     assert entry["cadence_class"] == body["cadence_class"]
-    assert str(entry["envelope_version"]) == body["envelope_version"]
+    # Exact, type included: the registry stores the STRING "1", matching
+    # ENVELOPE_VERSION and /catalog. The str() that used to be here was a
+    # workaround for an undecided type; see contracts/collector-registry.yaml.
+    assert entry["envelope_version"] == body["envelope_version"]
     assert set(entry["signal_types"]) == set(body["signal_types"])
 
 
