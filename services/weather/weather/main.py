@@ -34,7 +34,10 @@ app = build_collector_app(
         signal_matches=_signal_matches,
         metrics=metrics,
         next_event_at=next_kickoff,
-        telemetry_module="weather.telemetry",
+        # No `telemetry_module`: the fleet's shared wiring
+        # (`collector_core.telemetry`) is the default, and weather needs
+        # nothing beyond it. The forty near-identical lines this service used
+        # to carry are gone.
     )
 )
 
