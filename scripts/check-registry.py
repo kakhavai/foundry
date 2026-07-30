@@ -116,7 +116,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=10.0)
     args = parser.parse_args(argv)
 
-    registry = yaml.safe_load(args.registry.read_text(encoding="utf-8"))
+    # Bad input exits with a message, not a traceback. This runs from
+    # smoke-test.sh under `set -e`, where a stack dump buries the one line a
+    # reader needs among CI log noise.
+    try:
+        raw = args.registry.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"FAIL: cannot read registry {args.registry}: {exc}", file=sys.stderr)
+        return 2
+    try:
+        registry = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        print(f"FAIL: {args.registry} is not valid YAML: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(registry, dict) or "collectors" not in registry:
+        print(
+            f"FAIL: {args.registry} has no top-level 'collectors' key — see "
+            f"contracts/collector-registry.schema.json",
+            file=sys.stderr,
+        )
+        return 2
+
     entries = registry["collectors"]
     if not entries:
         # A registry with no entries would let this check pass having proved
