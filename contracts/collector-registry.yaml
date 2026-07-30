@@ -1,0 +1,69 @@
+# The collector registry — the inventory of collectors that are DEPLOYED.
+#
+# Not the plan. The staging table in
+# docs/architecture/phase-8-data-source-collectors.md lists all twenty-six
+# collectors in the catalog and the stage each is scheduled for; this file
+# lists only the ones that exist as a running service today. The two are
+# deliberately different documents:
+#
+#   the staging table is the plan     — it may name a service that has no code
+#   this registry is the inventory    — every entry must have a deployed service
+#
+# That distinction is what gives the CI drift gate its teeth. The phase doc's
+# first assertion is "every registry entry has a deployed collector, and every
+# deployed collector has a registry entry". Pre-listing the twenty-three
+# unbuilt collectors would red that gate on day one, and the only way back to
+# green would be to weaken the assertion into nothing.
+#
+# The consequence, and it is a mechanical one rather than a convention:
+#
+#   * an entry lands in the SAME PR as the service it describes, and
+#   * after the PRs that add its `depends_on` entries.
+#
+# A PR that adds an entry for a service that does not exist yet fails
+# tests/test_collector_registry.py. A PR that adds an entry depending on an
+# unregistered collector fails the same suite. Merge order therefore falls out
+# of the gate rather than out of anybody remembering it.
+#
+# APPEND-ONLY. Entries are in merge order, not sorted. Nothing in the gate
+# requires this file to be sorted, grouped, or regenerated, so two collectors
+# added in two branches merge as a plain append with no conflict beyond the
+# last line. Do not reorder or reformat existing entries to tidy it up.
+#
+# Shape is enforced by contracts/collector-registry.schema.json. What each
+# field means, and what actually checks it:
+#
+#   name             the collector, and the directory name under services/
+#   path             the gateway prefix; must equal helm/values/<name>/
+#                    values.yaml's gateway.pathPrefix
+#   stage            the phase-8 sub-stage that shipped it — documentary
+#   cadence_class    one of collector_core.cadence.CadenceClass's values;
+#                    must match what the service's CollectorDescriptor declares
+#   envelope_version integer. NOTE the type: collector_core's ENVELOPE_VERSION
+#                    is the STRING "1" because it becomes the lake path
+#                    segment `v1`, and `GET /catalog` returns that string. The
+#                    phase doc's registry example writes it as an int, so this
+#                    file follows the doc and the gate compares
+#                    str(registry) == str(catalog). Flagged as a real
+#                    spec/code inconsistency to be settled deliberately.
+#   signal_types     must match the CollectorDescriptor's declared tuple
+#   scope_aware      whether the collector narrows to the roster scope.
+#                    TYPE-CHECKED ONLY. No code representation of this exists
+#                    today, so nothing verifies the value is correct — it is
+#                    human-reviewed. Do not read a green gate as confirming it.
+#   depends_on       other collectors in THIS file. Self-dependency and cycles
+#                    are rejected.
+
+collectors:
+  - name: weather
+    path: /collectors/weather
+    stage: 8A
+    cadence_class: volatile
+    envelope_version: 1
+    signal_types: [venue_forecast_kickoff, venue_conditions_current]
+    scope_aware: false
+    # Empty deliberately. The phase doc's "Depends on" line for weather names
+    # a bundled in-process schedule adapter (not a collector) and `venue`
+    # (arrives in 8E). `depends_on` names registered collectors, and neither
+    # of those is one.
+    depends_on: []

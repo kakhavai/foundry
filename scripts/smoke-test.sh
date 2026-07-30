@@ -147,3 +147,18 @@ echo "filters OK"
 STATUS=$(curl -o /dev/null -sw '%{http_code}' http://localhost:8001/projections/unknown-player)
 [ "$STATUS" = "404" ] && echo "404 OK" || (echo "expected 404, got $STATUS" && exit 1)
 echo "player-projections: OK"
+
+# collector registry — the half of the drift gate that needs a live cluster.
+# tests/test_collector_registry.py checks everything decidable from files; this
+# proves each registered collector is actually deployed, routed at its registry
+# path, and serving a /catalog that agrees with the file. It goes through the
+# gateway on :8080 (already forwarded above) rather than per-service
+# port-forwards, because /catalog is in the chart's default gateway.publicPaths
+# for every collector — so this needs no new plumbing as the fleet grows.
+#
+# --no-project because the script needs pyyaml and the standard library and
+# nothing from the uv workspace; without it, `uv run` from the repo root builds
+# collector-core and weather into a throwaway venv to run a file that never
+# imports them.
+uv run --no-project --with pyyaml==6.0.3 python3 scripts/check-registry.py \
+  --base-url http://localhost:8080 --token "$TOKEN"

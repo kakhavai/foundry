@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/collector-registry/collector-registry.schema.json",
+  "title": "Foundry collector registry",
+  "description": "The inventory of deployed collectors. See contracts/collector-registry.yaml's header for why this is the inventory and not the plan.",
+  "type": "object",
+  "required": ["collectors"],
+  "additionalProperties": false,
+  "properties": {
+    "collectors": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/collector" }
+    }
+  },
+  "$defs": {
+    "collector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "path",
+        "stage",
+        "cadence_class",
+        "envelope_version",
+        "signal_types",
+        "scope_aware",
+        "depends_on"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+          "description": "Collector name; also the services/<name>/ directory."
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/collectors/[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+          "description": "Gateway prefix. Must equal helm/values/<name>/values.yaml's gateway.pathPrefix."
+        },
+        "stage": {
+          "type": "string",
+          "pattern": "^8[A-Z]$",
+          "description": "The phase-8 sub-stage that shipped this collector. Documentary."
+        },
+        "cadence_class": {
+          "description": "Must be one of collector_core.cadence.CadenceClass's values. tests/test_collector_registry.py asserts this enum still matches the code, so adding a cadence class in code fails until this schema is updated too.",
+          "enum": [
+            "static reference",
+            "seasonal",
+            "weekly",
+            "volatile",
+            "perishable"
+          ]
+        },
+        "envelope_version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Integer, per the phase doc's example. collector_core.envelope.ENVELOPE_VERSION is the string \"1\"; the gate compares str() on both sides. Typed as an integer here so it cannot quietly drift to a string."
+        },
+        "signal_types": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "description": "Must match the service's CollectorDescriptor signal_types."
+        },
+        "scope_aware": {
+          "type": "boolean",
+          "description": "Whether the collector narrows to the roster scope. TYPE-CHECKED ONLY — no automated check confirms the value is correct."
+        },
+        "depends_on": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+          },
+          "description": "Names of other collectors in this registry. Self-dependency and cycles are rejected by the gate."
+        }
+      }
+    }
+  }
+}
