@@ -1,10 +1,15 @@
 """weather's own scheduling piece: extracting the soonest kickoff worth
-watching out of its cached signals, and the escalation interval that
-extraction feeds into the shared loop (`collector_core.scheduler`).
+watching out of its cached signals.
 
-The loop itself is exercised by `libs/collector-core/tests/test_scheduler.py`
-against fakes; these tests only prove weather's binding -- `next_kickoff` and
-the cadence-class-bound `interval_for_state` -- is wired correctly.
+The loop itself -- escalation, staleness recording, surviving a failed
+capture -- is exercised by `libs/collector-core/tests/test_scheduler.py`
+against fakes. `collector_core.app.build_collector_app` wires the loop and
+`interval_for_state` up with weather's cadence class, capture function,
+metrics, and `next_kickoff` (`app.py`'s job, not weather's own). These tests
+drive `collector_core.scheduler` directly with those same weather-shaped
+values, to prove the binding weather hands the app builder is correct --
+independent of `build_collector_app`'s own wiring, which is
+`libs/collector-core/tests/test_app.py`'s job.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -14,14 +19,26 @@ import pytest
 import respx
 from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
 from collector_core.lake import NullLakeWriter
+from collector_core.scheduler import interval_for_state as _interval_for_state
+from collector_core.scheduler import run_capture_loop as _run_capture_loop
 
 from weather.adapters.forecast import FORECAST_URL
 from weather.adapters.schedule import SCHEDULE_URL
-from weather.capture import CaptureState
-from weather.scheduler import interval_for_state, next_kickoff
-from weather.scheduler import run_capture_loop as weather_run_capture_loop
+from weather.capture import CADENCE_CLASS, CaptureState, capture_week
+from weather.metrics import metrics
+from weather.scheduler import next_kickoff
 
 NOW = datetime(2026, 9, 13, 16, 0, tzinfo=UTC)
+
+
+def interval_for_state(state: CaptureState, now: datetime) -> timedelta:
+    """weather's cadence class and kickoff lookup, bound to the shared
+    `interval_for_state` -- the same binding `collector_core.app` performs
+    for the running loop."""
+    return _interval_for_state(
+        state, now, cadence_class=CADENCE_CLASS, next_event_at=next_kickoff
+    )
+
 
 SCHEDULE_HEADER = (
     "game_id,season,game_type,week,gameday,gametime,away_team,home_team,"
@@ -79,20 +96,24 @@ def _mock_upstreams() -> None:
 
 @respx.mock
 async def test_run_capture_loop_wires_weathers_capture_cadence_and_metrics_in():
-    """End-to-end proof of the binding in `weather/scheduler.py`: one tick of
-    weather's own `run_capture_loop` populates the state from a real
-    `capture_week` call, using weather's cadence class and kickoff lookup --
-    without the caller (`main.py`'s lifespan) supplying any of that itself."""
+    """End-to-end proof of the binding weather hands `build_collector_app`:
+    one tick of the shared loop, given weather's cadence class, capture
+    function, metrics, and kickoff lookup, populates the state from a real
+    `capture_week` call -- without anything else supplying that wiring."""
     _mock_upstreams()
     state = CaptureState()
     sleep = _FakeSleep()
 
     with pytest.raises(_StopLoop):
-        await weather_run_capture_loop(
+        await _run_capture_loop(
             state,
+            capture=capture_week,
             lake=NullLakeWriter(),
             season=2026,
             week=1,
+            cadence_class=CADENCE_CLASS,
+            next_event_at=next_kickoff,
+            metrics=metrics,
             sleep=sleep,
             clock=lambda: INTEGRATION_NOW,
             # This test injects a fixed calendar date well removed from real
@@ -135,11 +156,15 @@ async def test_run_capture_loop_honours_an_injected_client_factory():
         return client
 
     with pytest.raises(_StopLoop):
-        await weather_run_capture_loop(
+        await _run_capture_loop(
             state,
+            capture=capture_week,
             lake=NullLakeWriter(),
             season=2026,
             week=1,
+            cadence_class=CADENCE_CLASS,
+            next_event_at=next_kickoff,
+            metrics=metrics,
             sleep=sleep,
             clock=lambda: INTEGRATION_NOW,
             capture_deadline=None,

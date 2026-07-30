@@ -174,7 +174,7 @@
     },
     "/signals/convergence": {
       "get": {
-        "description": "The ordered forecast series for one kickoff, with per-snapshot deltas.\nweather's own extra route, not part of the shared five -- derivable from\nthe lake, but every consumer would otherwise reimplement it.",
+        "description": "weather's own extra route -- not part of the shared five. Reaches the\nlake via `app.state.collector_spec` rather than a module-level global.",
         "operationId": "convergence_signals_convergence_get",
         "parameters": [
           {
