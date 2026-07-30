@@ -70,6 +70,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     container:
       image: ghcr.io/kakhavai/foundry/ci-runner:latest
       options: --privileged -v /var/run/docker.sock:/var/run/docker.sock

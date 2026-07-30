@@ -115,12 +115,15 @@ async def run_capture_loop(
     """
     process_started_at: datetime | None = None
     while True:
-        now = clock()
-        if process_started_at is None:
-            process_started_at = now
-        deadline = None if capture_deadline is None else now + capture_deadline
         try:
             async with state.lock:
+                # Read after acquiring the lock -- not before -- so time spent
+                # waiting for a dispatched `/refresh` to release the lock is
+                # never charged against this pass's own capture deadline.
+                now = clock()
+                if process_started_at is None:
+                    process_started_at = now
+                deadline = None if capture_deadline is None else now + capture_deadline
                 async with client_factory() as client:
                     envelopes = await capture(
                         season,

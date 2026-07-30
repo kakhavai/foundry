@@ -152,20 +152,34 @@ def _rfc3339(value: datetime | None) -> str | None:
     )
 
 
+def _utc_now() -> datetime:
+    return datetime.now(tz=UTC)
+
+
 async def _run_capture(
     spec: CollectorSpec,
     season: int,
     week: int,
-    now: datetime,
-    deadline: datetime | None,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> None:
     """Run a dispatched capture. Never raises: an upstream failure must degrade
     freshness, not surface as an unhandled task exception. `spec.capture`
     already records the failure in its own envelope and metrics -- this is
     only a backstop for anything that escapes that, e.g. a bug in `capture`
-    itself."""
+    itself.
+
+    The lock is taken *before* the clock is read: `now` (and the `deadline`
+    derived from it) must describe when this capture actually started
+    running, not when it was merely dispatched. Reading the clock first would
+    let time spent waiting for the loop (or another `/refresh`) to release
+    the lock silently eat into this capture's own deadline.
+    """
     try:
         async with spec.state.lock:
+            now = clock()
+            deadline = (
+                None if spec.capture_deadline is None else now + spec.capture_deadline
+            )
             async with spec.client_factory() as client:
                 envelopes = await spec.capture(
                     season,
@@ -281,11 +295,13 @@ def build_collector_router(spec: CollectorSpec) -> APIRouter:
         scope = body or {}
         season = int(scope.get("season", spec.default_scope["season"]))
         week = int(scope.get("week", spec.default_scope["week"]))
-        deadline = (
-            None if spec.capture_deadline is None else now + spec.capture_deadline
-        )
 
-        task = asyncio.create_task(_run_capture(spec, season, week, now, deadline))
+        # `_run_capture` reads its own clock after it acquires `spec.state.lock`
+        # -- `now` here is deliberately *not* passed through to it. This `now`
+        # is only for the refresh floor, the refresh id, and the response
+        # body, all of which are properly measured from when the request
+        # arrived, not from whenever the dispatched capture eventually runs.
+        task = asyncio.create_task(_run_capture(spec, season, week))
         spec.state.in_flight.add(task)
         task.add_done_callback(spec.state.in_flight.discard)
 

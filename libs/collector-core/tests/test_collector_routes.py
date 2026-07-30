@@ -466,7 +466,7 @@ async def test_the_loop_and_a_dispatched_refresh_serialize_on_the_shared_lock(sp
 
     spec.capture = refresh_capture
     refresh_task = asyncio.create_task(
-        _run_capture(spec, 2026, 1, NOW + timedelta(seconds=10), None)
+        _run_capture(spec, 2026, 1, clock=lambda: NOW + timedelta(seconds=10))
     )
 
     # The refresh is blocked on the same lock the loop is holding mid-capture.
@@ -483,6 +483,86 @@ async def test_the_loop_and_a_dispatched_refresh_serialize_on_the_shared_lock(sp
     # not regress, regardless of which task happened to finish last.
     assert spec.state.last_capture_at == NOW + timedelta(seconds=10)
     assert spec.state.envelopes["alpha"].signals == [{"widget_id": "refresh"}]
+
+
+async def test_a_capture_queued_behind_the_lock_gets_the_full_deadline(spec):
+    """FINDING: `now` -- and the `deadline` derived from it -- used to be read
+    *before* `state.lock` was acquired, in both the background loop
+    (`collector_core.scheduler.run_capture_loop`) and a dispatched `/refresh`
+    (`_run_capture`). Time spent waiting for the lock was therefore charged
+    against the queued capture's own deadline: a `/refresh` queued behind a
+    loop tick that holds the lock for longer than the configured deadline
+    could reach `capture` with a deadline already in the past, at which
+    point a real collector's truncation logic fails every remaining item
+    outright.
+
+    Deliberately uses real wall-clock time rather than an injected fake --
+    the defect is specifically about wall-clock time elapsing while a
+    coroutine is blocked on `await lock.acquire()`, which a fake clock that
+    only advances on demand cannot observe.
+    """
+    spec.capture_deadline = timedelta(milliseconds=200)
+
+    loop_holds_lock = asyncio.Event()
+    loop_release = asyncio.Event()
+
+    async def loop_capture(season, week, *, client, lake, now, deadline=None):
+        loop_holds_lock.set()
+        await loop_release.wait()
+        return {}
+
+    class _StopAfterOne(Exception):
+        pass
+
+    async def sleep_once(_seconds):
+        raise _StopAfterOne
+
+    loop_task = asyncio.create_task(
+        run_capture_loop(
+            spec.state,
+            capture=loop_capture,
+            lake=spec.lake,
+            season=2026,
+            week=1,
+            cadence_class=spec.cadence_class,
+            next_event_at=lambda state, now: None,
+            metrics=spec.metrics,
+            sleep=sleep_once,
+        )
+    )
+    await loop_holds_lock.wait()
+
+    observed: dict = {}
+
+    async def refresh_capture(season, week, *, client, lake, now, deadline=None):
+        observed["now"] = now
+        observed["deadline"] = deadline
+        observed["wall_clock_at_start"] = datetime.now(tz=UTC)
+        return {}
+
+    spec.capture = refresh_capture
+    refresh_task = asyncio.create_task(_run_capture(spec, 2026, 1))
+
+    # Hold the loop's lock for well longer than the configured deadline
+    # before releasing it, so a naive pre-lock clock read would hand the
+    # queued refresh a deadline that has already expired by the time it
+    # actually starts running.
+    await asyncio.sleep(0.3)
+    loop_release.set()
+
+    with contextlib.suppress(_StopAfterOne):
+        await loop_task
+    await refresh_task
+
+    assert observed["deadline"] is not None
+    # `now` must describe when the refresh actually started running (after
+    # the wait), not when it was dispatched (before it).
+    assert (observed["wall_clock_at_start"] - observed["now"]).total_seconds() < 0.05
+    # The full 200ms deadline must still be ahead of it -- not the ~-100ms
+    # (already expired) a stale pre-lock `now` would have produced after a
+    # 300ms wait.
+    remaining = (observed["deadline"] - observed["wall_clock_at_start"]).total_seconds()
+    assert remaining == pytest.approx(0.2, abs=0.05)
 
 
 def test_health_returns_ok(client):
