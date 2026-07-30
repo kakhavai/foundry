@@ -20,7 +20,20 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["ruff", "pytest", "pytest-asyncio", "pytest-cov", "jsonschema[format]", "moto[s3]"]
+# `respx` is declared here, not inherited. Running `uv run pytest` from this
+# directory inside the workspace resolves against a shared venv where a
+# *service* has already pulled respx in, so a missing declaration passes
+# locally and fails only in CI, which installs this package on its own. Same
+# shape as the moto rule, different package. Verify with `uv run --isolated`.
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "jsonschema[format]",
+    "moto[s3]",
+    "respx",
+]
 
 [tool.uv]
 package = true
