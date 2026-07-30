@@ -619,8 +619,16 @@ def test_main_accepts_the_token_from_the_environment(monkeypatch):
 def test_main_refuses_token_plus_via_pod(monkeypatch, capsys):
     """--via-pod uses the pod's own token, so a --token here would never be
     sent. Ignoring it silently would leave an operator believing they had
-    authenticated with a token that went nowhere."""
+    authenticated with a token that went nowhere.
+
+    The pod transport is stubbed even though this run must never reach it —
+    without that, deleting the guard makes this test shell out to a real
+    `kubectl exec`, which is exactly the cluster dependency this suite forbids.
+    """
     _stub_fleet(monkeypatch)
+    monkeypatch.setattr(
+        rc, "post_refresh_pod", lambda *a, **k: pytest.fail("dispatched anyway")
+    )
     code = rc.main(["alpha", "--via-pod", "--token", SECRET_TOKEN])
     assert code == 2
     assert "--via-pod" in capsys.readouterr().err
