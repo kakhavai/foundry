@@ -46,7 +46,11 @@ on:
         required: false
         default: 'ramp,breakpoint'
       soak_minutes:
-        description: 'Soak duration in minutes, used only if soak is in shapes (the phase doc specifies 30; never run at that length)'
+        description: >-
+          Soak duration in minutes, used only if soak is in shapes (the phase
+          doc specifies 30; never run at that length). A 30-minute soak does
+          not fit this job's 45-minute cap alongside the default
+          ramp,breakpoint shapes -- dispatch it with shapes=soak on its own.
         required: false
         default: '5'
 
@@ -109,13 +113,22 @@ jobs:
       # non-zero exit, and every shape should run even after one fails so the
       # artifact is complete rather than truncated at the first red.
       - name: Run load shapes
+        env:
+          SHAPES: ${{ inputs.shapes }}
+          SOAK_MINUTES: ${{ inputs.soak_minutes }}
         run: |
           set -o pipefail
+          if [ -z "$(echo "$SHAPES" | tr -d '[:space:]')" ]; then
+            echo "::error::shapes input is empty -- a dispatch that clears the pre-filled" \
+                 "field runs zero shapes and exits 0, which would be a green run that" \
+                 "tested nothing. Set it to at least one of: ramp,soak,spike,breakpoint."
+            exit 1
+          fi
           failed=0
-          for shape in $(echo "${{ inputs.shapes }}" | tr ',' ' '); do
+          for shape in $(echo "$SHAPES" | tr ',' ' '); do
             echo "::group::$shape"
             uv run --with pyyaml==6.0.3 python scripts/run-load.py "$shape" \
-              --soak-minutes ${{ inputs.soak_minutes }} 2>&1 | tee -a load-report.txt \
+              --soak-minutes "$SOAK_MINUTES" 2>&1 | tee -a load-report.txt \
               || failed=1
             echo "::endgroup::"
           done
