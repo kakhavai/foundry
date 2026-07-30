@@ -182,7 +182,7 @@ collectors:
     path: /collectors/usage-share
     stage: 8B
     cadence_class: weekly
-    envelope_version: 1
+    envelope_version: "1"
     signal_types: [player_usage_weekly]
     scope_aware: true
     depends_on: [player-identity, roster-scope]

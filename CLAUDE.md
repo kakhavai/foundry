@@ -377,16 +377,20 @@ cannot drift. **A registered collector with no discoverable
 There is deliberately **no committed `/catalog` fixture**. A fixture is a copy
 of the answer, and a copy of the answer cannot detect that the answer changed.
 
-**Two known gaps, stated rather than implied:**
+**One known gap, stated rather than implied:** `scope_aware` is type-checked
+as a bool and nothing else. No code representation of it exists today, so its
+correctness is human-reviewed.
 
-- `scope_aware` is type-checked as a bool and nothing else. No code
-  representation of it exists today, so its correctness is human-reviewed.
-- `envelope_version` is an **int** in the registry (following the phase doc's
-  example) but the string `"1"` in `collector_core.envelope.ENVELOPE_VERSION`
-  (because it becomes the lake path segment `v1`), and `/catalog` returns the
-  string. Both sides of every comparison are `str()`-ed. This is a real
-  spec/code inconsistency awaiting a deliberate decision, not a bug to
-  "fix" by quietly changing one side.
+**`envelope_version` is a string** — `"1"`, quoted, in the registry. This was
+an open int-vs-string inconsistency and has been **settled**: everything else
+in the repo already used the string (`collector_core.envelope.ENVELOPE_VERSION`,
+`contracts/signal-envelope/envelope.v1.schema.json`'s `{"const": "1"}`, every
+committed fixture, `GET /catalog`'s response, and the lake path segment `v1`).
+The registry was the sole outlier, and only because one line of the phase doc
+wrote it unquoted. Both gates — `tests/test_collector_registry.py` and
+`scripts/check-registry.py` — now compare **exactly**; the old
+`str()`-on-both-sides comparison was a workaround for the undecided type, and
+it would also have passed `1` against `"1.0"`.
 
 `GET /collectors` — the phase doc has the gateway serving the registry live —
 is **not built**. See the follow-up notes in the Phase 8A PR: it needs a

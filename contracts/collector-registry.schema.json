@@ -54,9 +54,9 @@
           ]
         },
         "envelope_version": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Integer, per the phase doc's example. collector_core.envelope.ENVELOPE_VERSION is the string \"1\"; the gate compares str() on both sides. Typed as an integer here so it cannot quietly drift to a string."
+          "type": "string",
+          "pattern": "^[0-9]+$",
+          "description": "String, matching collector_core.envelope.ENVELOPE_VERSION, contracts/signal-envelope/envelope.v1.schema.json's {\"const\": \"1\"}, every committed fixture, and what GET /catalog returns. It becomes the lake path segment `v1`. Typed as a string here so it cannot drift back to an integer; both gates now compare exactly rather than str()-ing both sides."
         },
         "signal_types": {
           "type": "array",

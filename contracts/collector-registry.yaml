@@ -39,13 +39,19 @@
 #   stage            the phase-8 sub-stage that shipped it — documentary
 #   cadence_class    one of collector_core.cadence.CadenceClass's values;
 #                    must match what the service's CollectorDescriptor declares
-#   envelope_version integer. NOTE the type: collector_core's ENVELOPE_VERSION
-#                    is the STRING "1" because it becomes the lake path
-#                    segment `v1`, and `GET /catalog` returns that string. The
-#                    phase doc's registry example writes it as an int, so this
-#                    file follows the doc and the gate compares
-#                    str(registry) == str(catalog). Flagged as a real
-#                    spec/code inconsistency to be settled deliberately.
+#   envelope_version STRING — settled deliberately, not a formatting quirk.
+#                    Everything else in the repo already agreed:
+#                    collector_core.envelope.ENVELOPE_VERSION is the string
+#                    "1" because it becomes the lake path segment `v1`,
+#                    contracts/signal-envelope/envelope.v1.schema.json
+#                    declares {"const": "1"}, all six committed fixtures write
+#                    "1", and `GET /catalog` returns that string. The registry
+#                    was the sole outlier, and only because one line of the
+#                    phase doc wrote it unquoted — while that same doc's
+#                    ENVELOPE example writes it quoted. The old
+#                    str(registry) == str(catalog) comparison was rejected as
+#                    a workaround rather than a decision: it would also have
+#                    passed 1 against "1.0". Both gates now compare exactly.
 #   signal_types     must match the CollectorDescriptor's declared tuple
 #   scope_aware      whether the collector narrows to the roster scope.
 #                    TYPE-CHECKED ONLY. No code representation of this exists
@@ -59,7 +65,7 @@ collectors:
     path: /collectors/weather
     stage: 8A
     cadence_class: volatile
-    envelope_version: 1
+    envelope_version: "1"
     signal_types: [venue_forecast_kickoff, venue_conditions_current]
     scope_aware: false
     # Empty deliberately. The phase doc's "Depends on" line for weather names
@@ -72,7 +78,7 @@ collectors:
     path: /collectors/player-identity
     stage: 8A
     cadence_class: seasonal
-    envelope_version: 1
+    envelope_version: "1"
     signal_types: [player_identity_crosswalk, name_resolution_miss]
     # It must resolve names the scope deliberately excludes — deep bench
     # players and free agents that betting books and news feeds mention.
@@ -85,7 +91,7 @@ collectors:
     path: /collectors/roster-scope
     stage: 8A
     cadence_class: weekly
-    envelope_version: 1
+    envelope_version: "1"
     signal_types: [scope_membership_weekly, scope_change_event]
     # It defines the scope rather than consuming it.
     scope_aware: false
