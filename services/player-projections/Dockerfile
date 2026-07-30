@@ -1,3 +1,14 @@
+# player-projections is NOT a uv workspace member (see the root pyproject.toml's
+# [tool.uv.workspace].members) and does not consume libs/collector-core. It owns
+# its own uv.lock and builds from its own directory as the context:
+#
+#     docker build -f services/player-projections/Dockerfile \
+#         -t player-projections:local services/player-projections
+#
+# That is why it has no `workspace-manifests` stage: there is no workspace graph
+# to resolve, so the quadratic per-member COPY problem that stage solves does
+# not exist here. DO NOT COPY THIS FILE AS A COLLECTOR TEMPLATE —
+# services/weather/Dockerfile is the collector reference.
 FROM python:3.12-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
