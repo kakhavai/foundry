@@ -14,7 +14,7 @@ Phase 4 established the platform's stance on AI: if AI is in the critical path, 
 
 The work splits into two independently shippable tracks:
 
-1. **Track A — Runtime/Product AI Observability.** Observe the AI the platform *runs*: the Phase 4B triage narrator today, and the Phase 5 adversarial agents when they are built. Manual OpenTelemetry GenAI-convention spans, emitted through the existing Collector.
+1. **Track A — Runtime/Product AI Observability.** Observe the AI the platform *runs*: the Phase 4B triage narrator today, and any AI surface the platform adds later. Manual OpenTelemetry GenAI-convention spans, emitted through the existing Collector.
 2. **Track B — Developer AI Observability.** Observe the AI developers *use*: Claude Code (Copilot-ready), via its native OTLP exporter pointed at the existing Collector, with a governance processor and a delivery-metrics pairing that keeps the numbers honest.
 
 Both tracks are **governance-first, not dashboard-first**. The substantive design work is cost budgets, PII protection, identity anonymization, provenance, and honest attribution — not the plumbing, which the existing stack already provides.
@@ -29,7 +29,7 @@ Both tracks are **governance-first, not dashboard-first**. The substantive desig
 graph TD
     subgraph "Runtime AI (Track A)"
         Narrator["4B Narrator\nnarrator.py → Claude API"]
-        Agents["Phase 5 Adversarial Agents\n(future — inherit the helper)"]
+        Agents["Future AI surfaces\n(inherit the helper)"]
         Helper["ai_telemetry.py\nGenAI-semconv span helper\n+ derived cost (pricing.py)"]
         Narrator --> Helper
         Agents -.-> Helper
@@ -72,7 +72,7 @@ graph TD
 
 **The instrumented surface.** The 4B narrator's Claude call in `services/foundry-cli/foundry/triage/narrator.py` — today it calls `messages.create()` and emits nothing. It gets wrapped in a span using the OpenTelemetry GenAI semantic conventions.
 
-**A reusable helper, not a one-off.** The instrumentation lives in a small reusable module (`foundry/triage/ai_telemetry.py`) so that Phase 5's adversarial agents inherit the exact same span shape, cost derivation, and governance when they are built. Instrument the AI once; every future AI surface reuses it. This is the "instrument once, agents inherit" payoff.
+**A reusable helper, not a one-off.** The instrumentation lives in a small reusable module (`foundry/triage/ai_telemetry.py`) so that any AI surface added later inherits the exact same span shape, cost derivation, and governance when they are built. Instrument the AI once; every future AI surface reuses it. This is the "instrument once, agents inherit" payoff.
 
 **Signals captured per AI call:**
 
@@ -95,7 +95,7 @@ graph TD
 
 ### Deliverables
 
-- `services/foundry-cli/foundry/triage/ai_telemetry.py` — reusable GenAI-semconv span helper (narrator now, Phase 5 agents later)
+- `services/foundry-cli/foundry/triage/ai_telemetry.py` — reusable GenAI-semconv span helper (narrator now, any future AI surface later)
 - `services/foundry-cli/foundry/triage/pricing.py` — versioned per-model price table + cost function
 - Narrator instrumented; the AI-call span correlated with the incident trace
 - Grafana dashboard: token usage, derived cost (by model / feature / agent-run), operation duration, finish-reason / error rate, cache-hit rate
@@ -160,10 +160,10 @@ The research behind this phase was consistent that the substance is governance, 
 | **PII / content protection** | prompt/response capture off by default; redact before Loki | no prompt-content logging; processor backstop |
 | **Identity** | service-level only (which surface), no end-user identity | anonymize / hash user id + email at the Collector |
 | **Provenance** | record model id + prompt version per call | model id + Claude Code version as resource attributes |
-| **Audit** | audit-log adversarial-agent actions (Phase 5) | n/a |
+| **Audit** | audit-log autonomous agent actions, if such a surface is ever added | n/a |
 | **Eval gate (future)** | CI eval suite mirroring the required `integration-test` gate | n/a |
 
-The **CI eval gate is explicitly deferred** — designed for, not built in this phase. It needs Phase 5's agents and an evaluation corpus before it is worth wiring. It is named here as the forward hook so a later phase or implementation plan can pick it up.
+The **CI eval gate is explicitly deferred** — designed for, not built in this phase. It needs a broader AI surface and an evaluation corpus before it is worth wiring. It is named here as the forward hook so a later phase or implementation plan can pick it up.
 
 ---
 
@@ -193,7 +193,7 @@ The **CI eval gate is explicitly deferred** — designed for, not built in this 
 
 **Derive cost ourselves.** Cost in currency is not defined by the semconv. A small versioned per-model price table, owned by the platform, turns token counts into the number that actually matters for governance.
 
-**Instrument runtime AI once; agents inherit.** The helper is built for the narrator but shaped for reuse, so Phase 5's adversarial agents get identical observability and governance for free. Phase 7 does not introduce a new AI surface — it puts observability on the AI the platform already has.
+**Instrument runtime AI once; agents inherit.** The helper is built for the narrator but shaped for reuse, so any AI surface added later gets identical observability and governance for free. Phase 7 does not introduce a new AI surface — it puts observability on the AI the platform already has.
 
 **Keep detection out of the AI's hands (unchanged from Phase 4).** Track A instruments the narrator — the AI half of the triage engine — precisely because that is the only AI in the loop. The telemetry gathering and correlation stay in the deterministic 4A detector. Observing the AI does not expand what the AI is trusted to do.
 

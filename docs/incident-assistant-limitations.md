@@ -51,4 +51,4 @@ These are acceptable tradeoffs for an on-demand CLI. A continuously-maintained b
 
 The fault toggle is not a chaos engineering framework. It covers only the `weather` service's upstream calls, exposes only two failure modes (injected latency and a 5xx error rate), and is not suitable for testing infrastructure-level failures.
 
-Phase 5 ships a proper chaos layer (Chaos Mesh) that supersedes the fault toggle for all resilience and adversarial testing purposes. Once Phase 5 is in place, the fault toggle's only remaining use is bootstrapping the Phase 4 eval in environments where the Phase 5 chaos stack is not running.
+Phase 5 ships a proper chaos layer (Chaos Mesh) that supersedes the fault toggle for all resilience testing purposes. Once Phase 5 is in place, the fault toggle's only remaining use is bootstrapping the Phase 4 eval in environments where the Phase 5 chaos stack is not running.

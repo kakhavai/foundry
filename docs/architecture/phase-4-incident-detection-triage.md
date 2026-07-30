@@ -15,7 +15,7 @@ The Phase 4 detection engine is split on a single hard boundary — a structured
 
 The split matters because detection and explanation are different jobs. Detection — deciding what is abnormal, localizing a fault, ranking suspects — is a statistical and correlation problem that wants deterministic, testable code. Explanation is what an LLM is actually good at. Conflating the two produces an assistant that cannot be evaluated, has no accuracy numbers, and is the kind of AI theater this platform is designed to disprove.
 
-The detector is usable headless: `foundry triage --json` emits only the bundle, so Phase 5's adversarial harness can invoke detection without touching the LLM.
+The detector is usable headless: `foundry triage --json` emits only the bundle, so an automated harness can invoke detection without touching the LLM.
 
 ---
 
@@ -205,7 +205,7 @@ Baselines are computed on demand by querying Prometheus at triage time. There is
 
 ### Fault toggle
 
-The evaluation harness needs reproducible incidents, but the only fault-injection mechanism on the roadmap (chaos and adversarial agents) is Phase 5, which comes after Phase 4. Phase 4 therefore ships a minimal, deterministic fault toggle.
+The evaluation harness needs reproducible incidents, but the only fault-injection mechanism on the roadmap (Chaos Mesh) is Phase 5, which comes after Phase 4. Phase 4 therefore ships a minimal, deterministic fault toggle.
 
 Env-var-guarded fault behavior in the `weather` upstream client, mirroring the existing OTel-guard convention (behavior is inert unless the env var is set):
 

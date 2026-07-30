@@ -31,7 +31,7 @@ phase reaches its **Definition of Done** (its milestones in
 **Creating one**
 
 ```bash
-git tag -a phase-5 <merge-commit> -m "Phase 5 complete — Resilience + AI adversarial layer
+git tag -a phase-5 <merge-commit> -m "Phase 5 complete — Resilience testing
 
 Landed in #NN.
 Deployed image: <sha>."
