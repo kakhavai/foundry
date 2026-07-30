@@ -1,0 +1,76 @@
+# One ApplicationSet in place of one Application manifest per service.
+#
+# infra/gitops/argo/{weather,player-identity,roster-scope,player-projections}.yaml
+# were 26 lines each and differed in exactly three: metadata.name and the two
+# helm valueFiles paths, all of them the service name. At the twenty-six
+# collectors Phase 8 plans that is ~680 lines carrying ~78 lines of real
+# information.
+#
+# GENERATOR: git directory, over helm/values/*.
+#
+# Chosen over a list generator fed from contracts/collector-registry.yaml
+# because a list generator still has to hold the list — either literally in
+# this file (the duplication back, one indent deeper) or via a generation step
+# with its own drift gate. The directory generator holds nothing: it asks the
+# repo which services exist, and `helm/values/<name>/values.yaml` is already
+# mandatory for every deployed service, collector or not. That is also what
+# makes `player-projections` fall in without a special case — it has Helm
+# values like everything else, so it joins the set rather than staying a
+# standalone manifest.
+#
+# The one thing the directory generator cannot see is the *other* valueFile,
+# infra/gitops/envs/local/<name>/values.yaml, which holds only the live image
+# tag and is written by the update-gitops-tag CI job. It must exist before the
+# first sync — a service whose directory is missing renders as a failed
+# Application, not a missing one. Creating it is still step 3 of "Adding a New
+# Service" in CLAUDE.md.
+#
+# The generated Application spec is byte-identical to the hand-written ones it
+# replaces. Two additions come from the ApplicationSet controller itself and
+# cannot be suppressed: an ownerReference back to this ApplicationSet, and the
+# label argocd.argoproj.io/application-set-name. Both are enumerated in the PR
+# body — they are why deleting THIS file would delete every Application it
+# generated, where deleting one of the old manifests deleted only one app.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: foundry-services
+  namespace: argocd
+spec:
+  goTemplate: true
+  # Fail loudly on a typo'd field rather than substituting an empty string and
+  # generating an Application named "" or pointing at /helm/values//values.yaml.
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/kakhavai/foundry
+        revision: main
+        directories:
+          - path: helm/values/*
+  template:
+    metadata:
+      name: '{{.path.basename}}'
+      namespace: argocd
+      # Same finalizer the hand-written manifests carried: deleting an
+      # Application cascades to the resources it manages.
+      finalizers:
+        - resources-finalizer.argocd.io
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/kakhavai/foundry
+        targetRevision: main
+        path: helm/charts/generic-service
+        helm:
+          valueFiles:
+            - /helm/values/{{.path.basename}}/values.yaml
+            - /infra/gitops/envs/local/{{.path.basename}}/values.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: default
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

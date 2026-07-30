@@ -1,0 +1,241 @@
+name: services
+
+# One workflow for every deployable service, replacing the per-service files
+# (weather.yml, player-identity.yml, roster-scope.yml, player-projections.yml)
+# that were ~145 lines each and differed only in the service name. At the
+# twenty-six collectors Phase 8 plans, that pattern was ~3,700 lines that all
+# had to agree, and a CI fix was twenty-six edits with a silent failure mode
+# when one was missed — it had already drifted across the four that existed.
+#
+# The jobs and their order are unchanged: lint / test / helm-lint in parallel,
+# then build-push on push-to-main only, then update-gitops-tag. What changed is
+# that the service is a matrix leg instead of a file, and the matrix is
+# *computed* from the diff by .github/actions/changed-services so a PR still
+# only runs the services it touches.
+#
+# `services/foundry-cli` is deliberately NOT here — it has no Helm values, no
+# image and no GitOps entry, so three of the five jobs below do not apply to
+# it. It keeps .github/workflows/foundry-cli.yml. `libs/collector-core` is not
+# here either, for the same reason; it has its own collector-core.yml.
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+# The union of every path any per-service filter can name. Its only job is to
+# stop the workflow starting at all for a diff no service can care about —
+# most importantly the `chore(gitops): update <service> image tag` commits
+# update-gitops-tag itself pushes to main, which would otherwise start a run
+# on every deploy just to compute an empty matrix.
+#
+# It MUST stay a superset of .github/actions/changed-services/filters.py's
+# rules: a path filtered there but missing here never reaches the filter at
+# all, and that service's CI silently stops running.
+# tests/test_service_ci_coverage.py::test_workflow_trigger_covers_every_filter_path
+# is what holds those two in step.
+on:
+  pull_request:
+    paths:
+      - 'services/**'
+      - 'libs/**'
+      - 'helm/**'
+      - '.github/actions/**'
+      - '.github/workflows/services.yml'
+      - 'contracts/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'services/**'
+      - 'libs/**'
+      - 'helm/**'
+      - '.github/actions/**'
+      - '.github/workflows/services.yml'
+      - 'contracts/**'
+
+# Cancel superseded PR runs; serialize (never cancel) main pushes so an
+# in-flight build-push / update-gitops-tag deploy is not killed mid-commit.
+concurrency:
+  group: services-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      services: ${{ steps.changed.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/changed-services
+        id: changed
+
+  lint:
+    name: lint (${{ matrix.service.name }})
+    needs: changes
+    # An empty matrix vector is a workflow ERROR in GitHub Actions, not a
+    # skipped job. Every matrix job below needs this guard.
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-lint
+        with:
+          working-directory: services/${{ matrix.service.name }}
+
+  test:
+    name: test (${{ matrix.service.name }})
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-test
+        with:
+          working-directory: services/${{ matrix.service.name }}
+
+  helm-lint:
+    name: helm-lint (${{ matrix.service.name }})
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/helm-lint
+        with:
+          chart-path: helm/charts/generic-service
+          values-file: helm/values/${{ matrix.service.name }}/values.yaml
+
+  runtime-imports:
+    # The container installs with `--no-dev`. A module-level import of a
+    # dev-only dependency passes every test locally off the shared workspace
+    # virtualenv and crash-loops the pod. `collector-core` has done exactly
+    # this once already.
+    #
+    # This used to exist only in roster-scope.yml, so the other three services
+    # had no such check. Collapsing to a matrix generalises it for free — that
+    # is the coverage argument for this PR, not just the line count.
+    name: runtime-imports (${{ matrix.service.name }})
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Every service module must import with runtime deps only
+        shell: bash
+        working-directory: services/${{ matrix.service.name }}
+        env:
+          PACKAGE: ${{ matrix.service.package }}
+        run: |
+          uv sync --frozen --no-dev
+          uv run --no-sync python - <<'PY'
+          import importlib, os, pkgutil, sys
+          package = os.environ["PACKAGE"]
+          root = importlib.import_module(package)
+          failed = []
+          for module in pkgutil.walk_packages(root.__path__, prefix=f"{package}."):
+              try:
+                  importlib.import_module(module.name)
+              except Exception as exc:
+                  failed.append(f"{module.name}: {exc!r}")
+          if failed:
+              print("Modules that fail to import without dev dependencies:")
+              for f in failed:
+                  print("  ", f)
+              sys.exit(1)
+          print("all modules import with runtime dependencies only")
+          PY
+
+  build-push:
+    name: build-push (${{ matrix.service.name }})
+    needs: [changes, lint, test, helm-lint, runtime-imports]
+    if: >-
+      needs.changes.outputs.services != '[]'
+      && github.ref == 'refs/heads/main'
+      && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-push
+        with:
+          service: ${{ matrix.service.name }}
+          # '.' for collectors: they depend on libs/collector-core/ by path
+          # through the uv workspace, so the lock cannot resolve without the
+          # repo root in the context. Derived, not declared — see
+          # .github/actions/changed-services/filters.py.
+          context: ${{ matrix.service.context }}
+          dockerfile: services/${{ matrix.service.name }}/Dockerfile
+          image-name: ${{ matrix.service.image }}
+          tag: ${{ github.sha }}
+
+  update-gitops-tag:
+    name: update-gitops-tag (${{ matrix.service.name }})
+    needs: [changes, build-push]
+    if: >-
+      needs.changes.outputs.services != '[]'
+      && github.ref == 'refs/heads/main'
+      && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      # Every leg commits and pushes to main. As separate workflows these
+      # raced and relied on `git pull --rebase` to sort it out; as one matrix
+      # they can simply be serialised.
+      max-parallel: 1
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GITOPS_APP_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: ./.github/actions/update-gitops-tag
+        with:
+          service: ${{ matrix.service.name }}
+          tag: ${{ github.sha }}
