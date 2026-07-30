@@ -199,7 +199,10 @@ def plan(
     taken = {service.name for service in existing}
     if name in taken:
         raise ScaffoldError(
-            f"{name!r} is already in the fleet. The registry is append-only and "
+            f"{name!r} is already in the fleet, and --force does not override "
+            f"this — re-scaffolding a live collector would replace its capture "
+            f"logic with a placeholder. Remove the entry and the service first "
+            f"if that is genuinely what you want. The registry is append-only and "
             f"a name is the join key between it, services/, and the gateway."
         )
 
@@ -1630,7 +1633,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument(
-        "--force", action="store_true", help="Overwrite existing files."
+        "--force",
+        action="store_true",
+        help=(
+            "Overwrite files left behind by a partial run. It does NOT permit "
+            "re-scaffolding a collector that is already registered."
+        ),
     )
     parser.add_argument(
         "--dry-run",
