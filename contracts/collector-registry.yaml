@@ -67,3 +67,16 @@ collectors:
     # (arrives in 8E). `depends_on` names registered collectors, and neither
     # of those is one.
     depends_on: []
+
+  - name: player-identity
+    path: /collectors/player-identity
+    stage: 8A
+    cadence_class: seasonal
+    envelope_version: 1
+    signal_types: [player_identity_crosswalk, name_resolution_miss]
+    # It must resolve names the scope deliberately excludes — deep bench
+    # players and free agents that betting books and news feeds mention.
+    scope_aware: false
+    # Foundational, and the only entry that can be. Every other collector
+    # emits a player_id, and this is the collector that decides what one is.
+    depends_on: []

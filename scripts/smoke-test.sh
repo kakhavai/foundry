@@ -6,7 +6,7 @@ cleanup() {
   # Envoy Service lookup below, and if that lookup fails under set -e, these
   # three are never assigned; without the default, set -u would throw its own
   # "unbound variable" error on top of the real failure.
-  kill "${WEATHER_PF:-}" "${PP_PF:-}" "${GW_PF:-}" 2>/dev/null || true
+  kill "${WEATHER_PF:-}" "${PP_PF:-}" "${GW_PF:-}" "${PI_PF:-}" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -22,6 +22,8 @@ kubectl port-forward svc/player-projections 8001:8001 &
 PP_PF=$!
 kubectl port-forward -n envoy-gateway-system "svc/$ENVOY_SVC" 8080:80 &
 GW_PF=$!
+kubectl port-forward svc/player-identity 8002:8002 &
+PI_PF=$!
 sleep 3
 
 # Matches scripts/deploy-local.py's LOCAL_DEV_TOKEN. Kind-only.
@@ -147,6 +149,75 @@ echo "filters OK"
 STATUS=$(curl -o /dev/null -sw '%{http_code}' http://localhost:8001/projections/unknown-player)
 [ "$STATUS" = "404" ] && echo "404 OK" || (echo "expected 404, got $STATUS" && exit 1)
 echo "player-projections: OK"
+
+# player-identity
+#
+# Deliberately no POST /refresh here, unlike weather. This collector runs with
+# CAPTURE_ENABLED=false because the upstream players document is ~5 MB and
+# Sleeper asks for at-most-daily polling — and a dispatched /refresh reaches
+# the upstream regardless of that flag, so calling it would hit a third party
+# on every PR. The contract surface is what this asserts.
+PI_GATEWAY=http://localhost:8080/collectors/player-identity
+
+curl -sf http://localhost:8002/health | grep '"status":"ok"'
+curl -sf http://localhost:8002/metrics | grep '# HELP'
+
+curl -sf -H "$AUTH" "$PI_GATEWAY/catalog" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+assert data['collector'] == 'player-identity', data
+assert data['cadence_class'] == 'seasonal', data
+assert set(data['signal_types']) == {
+    'player_identity_crosswalk', 'name_resolution_miss'}, data
+print('player-identity catalog OK')
+"
+
+curl -sf -H "$AUTH" "$PI_GATEWAY/signals" | python3 -c "
+import sys, json
+assert 'envelopes' in json.load(sys.stdin)
+print('player-identity signals OK')
+"
+
+# The three routes beyond the standard five. With no capture run the index is
+# empty, so a resolve refuses rather than guessing — which is the contract.
+curl -sf -H "$AUTH" "$PI_GATEWAY/resolve?name=Patrick%20Mahomes&team=KC" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+assert data['resolved'] is False, data
+assert data['candidates'] == [], data
+print('resolve OK')
+"
+curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"queries":[{"name":"Patrick Mahomes","team":"KC"}]}' \
+  "$PI_GATEWAY/resolve/batch" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+assert data['count'] == 1, data
+print('resolve/batch OK')
+"
+curl -sf -H "$AUTH" "$PI_GATEWAY/unresolved" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+assert 'misses' in data, data
+print('unresolved OK')
+"
+
+# A resolve query with nothing to match on must be loud, not an empty list.
+STATUS=$(curl -o /dev/null -sw '%{http_code}' -H "$AUTH" "$PI_GATEWAY/resolve")
+[ "$STATUS" = "422" ] || (echo "empty resolve query should be 422, got $STATUS" && exit 1)
+
+# Same auth story as weather, including the direct-to-Service path that
+# bypasses the gateway entirely.
+STATUS=$(curl -o /dev/null -sw '%{http_code}' "$PI_GATEWAY/resolve?name=x")
+[ "$STATUS" = "401" ] || (echo "gateway without token should be 401, got $STATUS" && exit 1)
+STATUS=$(curl -o /dev/null -sw '%{http_code}' 'http://localhost:8002/resolve?name=x')
+[ "$STATUS" = "401" ] || (echo "direct Service call without token should be 401, got $STATUS" && exit 1)
+
+for p in health metrics; do
+  STATUS=$(curl -o /dev/null -sw '%{http_code}' "$PI_GATEWAY/$p")
+  [ "$STATUS" = "404" ] || (echo "$p must not be published at the edge, got $STATUS" && exit 1)
+done
+echo "player-identity: OK"
 
 # collector registry — the half of the drift gate that needs a live cluster.
 # tests/test_collector_registry.py checks everything decidable from files; this

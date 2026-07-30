@@ -133,6 +133,7 @@ combination for what it is before assuming the deploy itself is broken.
 |---|---|---|---|
 | `weather` | 8000 | Live | First data-source collector (Phase 8's 8A retrofit). Captures forecast-at-kickoff and current conditions per pro football stadium on a cadence, into the shared signal lake. Exposes `/health`, `/metrics`, `/catalog`, `/signals`, `/signals/convergence`, `/refresh` — bearer-token auth on every route except `/health` and `/metrics`; the stadium routes are gone |
 | `player-projections` | 8001 | Stub mode | Polls the S3 projections snapshots; returns empty until the generator publishes |
+| `player-identity` | 8002 | Live | Platform collector (Phase 8A). The only collector that decides what a `player_id` is: canonical `fdy-` records with a published-crosswalk `external_ids` block, plus the standing name-resolution miss queue. Exposes the standard five plus `GET /resolve`, `POST /resolve/batch` (≤500), `GET /unresolved`. Deployed with `CAPTURE_ENABLED=false` — the upstream document is ~5 MB and asks for at-most-daily polling, so the loop is off in CI and local clusters |
 
 ### player-projections — How It Works
 

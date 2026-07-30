@@ -31,6 +31,13 @@ SERVICES = {
         "remote_port": 8001,
         "url": "http://localhost:8001",
     },
+    "player-identity": {
+        "svc": "player-identity",
+        "namespace": "default",
+        "local_port": 8002,
+        "remote_port": 8002,
+        "url": "http://localhost:8002",
+    },
 }
 
 OBS_FORWARDS = [

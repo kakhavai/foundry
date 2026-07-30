@@ -1,0 +1,43 @@
+{
+  "captured_at": "2026-09-11T12:00:00Z",
+  "collector": "player-identity",
+  "coverage": {
+    "expected": 1,
+    "missing": [],
+    "present": 1
+  },
+  "envelope_version": "1",
+  "errors": [],
+  "scope": {
+    "season": 2026,
+    "week": 1
+  },
+  "signal_type": "name_resolution_miss",
+  "signals": [
+    {
+      "best_candidate_player_id": null,
+      "context": {
+        "birth_date": null,
+        "entry_year": null,
+        "jersey_number": null,
+        "position": null,
+        "season": null,
+        "team": "KC"
+      },
+      "disagreeing_attributes": [],
+      "first_seen_at": "2026-09-11T12:00:00Z",
+      "last_seen_at": "2026-09-11T12:00:00Z",
+      "match_margin": null,
+      "match_score": null,
+      "occurrence_count": 1,
+      "raw_name": "P. Mahomes",
+      "reason": "no_candidate",
+      "source": "book"
+    }
+  ],
+  "upstream": {
+    "adapter": "sleeper-players",
+    "fetched_at": "2026-09-11T12:00:00Z",
+    "source_ref": "W/\"abc123\""
+  }
+}

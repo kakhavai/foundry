@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/player-identity.json",
+  "title": "player-identity collector signal fields",
+  "signal_types": {
+    "player_identity_crosswalk": {
+      "type": "object",
+      "required": [
+        "player_id",
+        "full_name",
+        "first_name",
+        "last_name",
+        "name_suffix",
+        "normalized_key",
+        "aliases",
+        "position",
+        "position_group",
+        "jersey_number",
+        "jersey_as_of",
+        "team",
+        "team_as_of",
+        "roster_status",
+        "birth_date",
+        "entry_year",
+        "external_ids",
+        "superseded_by",
+        "last_verified_at"
+      ],
+      "properties": {
+        "player_id": { "type": "string", "pattern": "^fdy-[0-9a-f]{12}$" },
+        "full_name": { "type": "string", "minLength": 1 },
+        "first_name": { "type": "string" },
+        "last_name": { "type": "string" },
+        "name_suffix": { "enum": ["Jr", "Sr", "II", "III", "IV", "V", null] },
+        "normalized_key": { "type": "string", "pattern": "^[a-z0-9 ]*$" },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "source", "valid_from", "valid_to"],
+            "properties": {
+              "name": { "type": "string" },
+              "source": { "type": "string" },
+              "valid_from": { "type": "string", "format": "date-time" },
+              "valid_to": { "type": ["string", "null"], "format": "date-time" }
+            }
+          }
+        },
+        "position": { "type": "string", "minLength": 1 },
+        "position_group": {
+          "enum": ["offense_skill", "offense_line", "defense", "special_teams"]
+        },
+        "jersey_number": { "type": ["integer", "null"], "minimum": 0 },
+        "jersey_as_of": { "type": "string", "format": "date-time" },
+        "team": { "type": ["string", "null"] },
+        "team_as_of": { "type": "string", "format": "date-time" },
+        "roster_status": {
+          "enum": [
+            "active",
+            "inactive",
+            "ir",
+            "pup",
+            "practice_squad",
+            "free_agent",
+            "suspended",
+            "retired"
+          ]
+        },
+        "birth_date": { "type": ["string", "null"], "format": "date" },
+        "entry_year": { "type": ["integer", "null"] },
+        "external_ids": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "id",
+              "linked_at",
+              "link_method",
+              "match_score",
+              "match_margin"
+            ],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "linked_at": { "type": "string", "format": "date-time" },
+              "link_method": {
+                "enum": ["crosswalk", "exact_id", "attribute_score", "manual"]
+              },
+              "match_score": {
+                "type": ["number", "null"],
+                "minimum": 0,
+                "maximum": 1
+              },
+              "match_margin": { "type": ["number", "null"] }
+            }
+          }
+        },
+        "superseded_by": { "type": ["string", "null"] },
+        "last_verified_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "name_resolution_miss": {
+      "type": "object",
+      "required": [
+        "raw_name",
+        "source",
+        "context",
+        "best_candidate_player_id",
+        "match_score",
+        "match_margin",
+        "disagreeing_attributes",
+        "first_seen_at",
+        "occurrence_count"
+      ],
+      "properties": {
+        "raw_name": { "type": "string" },
+        "source": { "type": ["string", "null"] },
+        "context": { "type": "object" },
+        "best_candidate_player_id": { "type": ["string", "null"] },
+        "match_score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "match_margin": { "type": ["number", "null"] },
+        "disagreeing_attributes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "normalized_key",
+              "team",
+              "jersey_number",
+              "position_group",
+              "entry_year",
+              "birth_date"
+            ]
+          }
+        },
+        "reason": { "type": ["string", "null"] },
+        "first_seen_at": { "type": "string", "format": "date-time" },
+        "last_seen_at": { "type": "string", "format": "date-time" },
+        "occurrence_count": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}
