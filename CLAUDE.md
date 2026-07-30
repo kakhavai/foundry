@@ -205,8 +205,14 @@ libs/collector-core/     Shared library for the collector fleet: bearer auth,
                         the `weather` CI workflow AND the integration-test gate.
 helm/charts/generic-service/    Base Helm chart all services share
 helm/values/<name>/     Per-service value overrides
-.github/actions/        Composite CI actions: python-lint, python-test, helm-lint, build-push
-.github/workflows/      Per-service CI callers (one file per service)
+.github/actions/        Composite CI actions: python-lint, python-test, helm-lint,
+                        build-push, update-gitops-tag, and changed-services --
+                        the one that turns a diff into the job matrix, so
+                        services.yml needs no per-service file
+.github/workflows/      services.yml covers every deployable service as a matrix
+                        leg. foundry-cli.yml and collector-core.yml are the two
+                        deliberate exceptions (no Helm values, no image, no
+                        GitOps entry). There is no per-service workflow file.
 infra/grafana-stack/    Helmfile: OTel Collector, Prometheus, Loki, Tempo, Grafana
 infra/kind/             Kind cluster config for local dev
 scripts/                collectors.py (the fleet list every other script and
@@ -235,12 +241,46 @@ contracts/              Committed contracts — see contracts/README.md.
 
 ## How CI Works
 
-Each service has one workflow file (`.github/workflows/<service>.yml`) that calls shared composite actions directly. Four parallel/sequential jobs per PR:
+**One workflow covers every deployable service:** `.github/workflows/services.yml`.
+There is no `.github/workflows/<service>.yml` any more — a service is a **matrix
+leg**, not a file. The jobs and their order are unchanged:
 
 - `lint` → `.github/actions/python-lint` (ruff check + format)
 - `test` → `.github/actions/python-test` (pytest)
 - `helm-lint` → `.github/actions/helm-lint`
-- `build-push` → needs all three; runs only on push to main
+- `runtime-imports` → every module must import with `--no-dev` installed
+- `build-push` → needs all four; runs only on push to main
+- `update-gitops-tag` → needs `build-push`; writes the image tag into
+  `infra/gitops/envs/local/<name>/values.yaml`
+
+**Per-service path filtering survives the collapse, and that is the whole trick.**
+A naive matrix would run twenty-six services' jobs on a one-line change to one
+collector. Instead the `changes` job calls `.github/actions/changed-services`,
+which generates one `dorny/paths-filter` rule per service from
+`contracts/collector-registry.yaml` plus each service's Helm values, and emits
+**only the affected services** as the matrix. A PR touching `services/weather/`
+produces a one-element matrix, exactly as `weather.yml` used to.
+
+Two consequences worth knowing before you debug a surprising run:
+
+- **An empty matrix vector is a workflow *error* in GitHub Actions, not a skipped
+  job**, so every matrix job carries `if: needs.changes.outputs.services != '[]'`.
+  Remove that guard and every docs-only PR fails the run.
+- **`services.yml` also has a workflow-level `paths:` trigger**, which must stay a
+  *superset* of every generated per-service filter. A path filtered by
+  `changed-services` but missing from the trigger never reaches the filter,
+  because the workflow never starts — and the symptom is not a failure, it is
+  that a service's CI silently stops running.
+  `tests/test_service_ci_coverage.py::test_workflow_trigger_covers_every_filter_path`
+  is what holds the two in step. Its other job is to keep the gitops bot's
+  `chore(gitops): update <service> image tag` commits from starting a run.
+
+`services/foundry-cli` and `libs/collector-core` keep their own workflows
+(`foundry-cli.yml`, `collector-core.yml`): neither has Helm values, an image or a
+GitOps entry, so three of the matrix jobs do not apply. `collector-core.yml` is
+where the library's own lint/test live — they used to sit inside `weather.yml`,
+which meant the shared library's suite ran under one arbitrary consumer's name
+and a second collector wanting the same guarantee had to copy the jobs.
 
 There is also a **required** `integration-test` check that gate-keeps merges. It spins up a Kind cluster, deploys the full stack, and runs `scripts/smoke-test.sh`. It is **path-filtered**: a `changes` job inspects the PR diff and only runs the heavy test when the **deployable surface** (`services/`, `helm/`, `infra/`, `scripts/`) changed. For docs/CI-only PRs the `integration-test` job is skipped, and a skipped required check counts as a pass — so those PRs merge without spinning up a cluster. There is no label or manual gate: the test simply runs on every PR that touches code it can actually validate, and blocks the merge if it fails. The workflow uses `concurrency` with `cancel-in-progress`, so a new push to a PR cancels that PR's in-flight run rather than spinning a second cluster in parallel.
 
@@ -251,9 +291,16 @@ There is also a **required** `integration-test` check that gate-keeps merges. It
 See `docs/onboarding.md`. Short version:
 1. `services/<name>/` — FastAPI app, Dockerfile, pyproject.toml, uv.lock
 2. `helm/values/<name>/values.yaml`
-3. `infra/gitops/envs/local/<name>/values.yaml` — initial image tag (`0.1.0`)
-4. `infra/gitops/argo/<name>.yaml` — Argo CD Application manifest (copy from `infra/gitops/argo/weather.yaml`, update name and value paths)
-5. Copy `.github/workflows/player-projections.yml` → `.github/workflows/<name>.yml`, update service name in update-gitops-tag job
+3. `infra/gitops/envs/local/<name>/values.yaml` — initial image tag (`0.1.0`).
+   Still needed: the generated Application references it as its second
+   valueFile, and a missing one renders as a **failed** Application rather than
+   an absent one.
+4. **Argo CD: nothing.** `infra/gitops/argo/<name>.yaml` no longer exists for any
+   service. `infra/gitops/argo/applicationset.yaml` generates the Applications
+   from a git directory generator over `helm/values/*`, so step 2 *is* the
+   registration.
+5. **CI: nothing.** There is no `.github/workflows/<name>.yml` to copy.
+   `.github/workflows/services.yml` picks the service up as a matrix leg.
 6. **Collectors: nothing.** The registry entry from step 7 of *Adding a New
    Collector* below is the registration — `scripts/deploy-local.py`,
    `scripts/stack-up.py`, `scripts/smoke-test.sh` and both service-list steps
@@ -736,6 +783,17 @@ The **README Phases table** is the single source of truth for where the project 
 
 ## ArgoCD / GitOps Behavior
 
+**The Applications are generated, not written.** `infra/gitops/argo/` holds two
+files: `app-of-apps.yaml` and `applicationset.yaml`. The ApplicationSet's git
+directory generator globs `helm/values/*`, so every service with a Helm values
+directory gets an Application whose spec is identical to the hand-written ones
+that preceded it — same `project`, `source`, `destination`, `syncPolicy` and
+finalizer. Two things the controller adds that a hand-written manifest did not
+have: an `ownerReference` back to the ApplicationSet, and the label
+`argocd.argoproj.io/application-set-name`. The ownerReference is the one with
+teeth — **deleting `applicationset.yaml` deletes every Application it
+generated**, where deleting one old manifest deleted one app.
+
 All ArgoCD Applications have `selfHeal: true` and `automated.prune: true`. This means:
 
 - **Any manual `kubectl patch` or `kubectl apply` to a managed resource is reverted within seconds.** Do not try to fix live ConfigMaps, Deployments, or Service objects by hand — the change will disappear before the pod restarts.
@@ -750,7 +808,23 @@ If you need to verify a fix that isn't merged yet, work from inside the cluster 
 
 - **Split lint/test CI jobs** — parallel jobs catch failures independently, standard since ~2023.
 - **`--no-editable` Docker** — canonical uv pattern for packages; package dir copied directly into the build stage, wheels go into venv, no PYTHONPATH needed in runtime.
-- **Per-service workflow files** — one file to copy per onboard, no reusable workflow indirection.
+- **One matrix workflow, not per-service workflow files** — **reverses an earlier
+  decision**, deliberately. The original entry read *"per-service workflow files —
+  one file to copy per onboard, no reusable workflow indirection"*, and it was
+  right at two services: one file to copy, nothing to understand. It inverts at
+  twenty-six. Each file was ~145 lines of which ~6 were the service name, so the
+  fleet implied ~3,700 lines that all had to agree, and a CI fix became
+  twenty-six edits whose failure mode was silent — miss one and that service
+  quietly keeps the old behaviour. The four that existed had **already** drifted:
+  `weather.yml` carried the collector-core jobs, `roster-scope.yml` had a
+  `runtime-imports` check nothing else had, and the other two had neither. So
+  `.github/workflows/services.yml` runs every deployable service as a matrix leg,
+  and `.github/actions/changed-services` computes that matrix from the diff so a
+  PR still runs only the services it touches. A reusable `workflow_call` was
+  rejected as the smaller win: it shrinks the per-service file to ~10 lines but
+  keeps twenty-six of them, and keeps onboarding a copy-a-file step. `foundry-cli`
+  and `libs/collector-core` stay on their own workflows — neither has Helm values,
+  an image or a GitOps entry, so three of the five matrix jobs do not apply.
 - **OTel guard on env var** — no collector needed for local dev or tests; Kubernetes injects it.
 - **The projections generator lives outside this repo** — the ML/ranking methodology is the product's value and stays out of version control. It publishes snapshots to S3 for `player-projections` to poll, with S3 auth handled at the infrastructure level (see ADR 0002). Foundry never deploys or calls it; a file in a bucket is the whole interface.
 - **Stub mode for not-yet-built upstreams** — `PROJECTIONS_SNAPSHOT_URL` empty = service runs, returns empty data, no crashes. Lets the service be deployed and observed before its dependency exists.

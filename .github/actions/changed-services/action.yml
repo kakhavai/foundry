@@ -1,0 +1,88 @@
+name: Changed services
+description: >
+  Resolves which services a diff actually affects and emits them as a job
+  matrix. This is what preserves per-service path filtering after the
+  per-service workflow files were collapsed into one matrix workflow.
+
+outputs:
+  services:
+    description: >
+      JSON array of matrix legs, one per affected service, each with name,
+      package, context and image. '[]' when the diff affects no service —
+      callers MUST guard on that, because GitHub errors rather than skips on
+      an empty matrix vector.
+    value: ${{ steps.matrix.outputs.services }}
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v5
+
+    # One filter per service, derived from contracts/collector-registry.yaml
+    # plus each service's Helm values. Passed to paths-filter inline rather
+    # than written to a file so no generated artifact is left in the workspace
+    # for a later step (or a `git status` check) to trip over.
+    - name: Generate per-service path filters
+      id: generate
+      shell: bash
+      run: |
+        {
+          echo 'filters<<PATHS_FILTER_EOF'
+          uv run --no-project --with pyyaml==6.0.3 python3 \
+            "$GITHUB_ACTION_PATH/filters.py" --emit filters
+          echo 'PATHS_FILTER_EOF'
+          echo -n 'entries='
+          uv run --no-project --with pyyaml==6.0.3 python3 \
+            "$GITHUB_ACTION_PATH/filters.py" --emit entries
+          echo
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Show the generated filters
+      shell: bash
+      env:
+        FILTERS: ${{ steps.generate.outputs.filters }}
+      run: |
+        echo "::group::per-service path filters"
+        printf '%s\n' "$FILTERS"
+        echo "::endgroup::"
+
+    - uses: dorny/paths-filter@v3
+      id: filter
+      with:
+        filters: ${{ steps.generate.outputs.filters }}
+
+    # paths-filter's `changes` output is already the list of filter names that
+    # matched — i.e. the affected service names. Joined here with the matrix
+    # entry for each, so the jobs downstream carry no service literals at all.
+    - name: Build the job matrix
+      id: matrix
+      shell: bash
+      env:
+        # Via env, never interpolated into the script body: a `${{ }}` spliced
+        # straight into `run:` is a script-injection seam.
+        CHANGED: ${{ steps.filter.outputs.changes }}
+        ENTRIES: ${{ steps.generate.outputs.entries }}
+      run: |
+        python3 - <<'PY' >> "$GITHUB_OUTPUT"
+        import json, os
+        entries = json.loads(os.environ["ENTRIES"])
+        changed = json.loads(os.environ["CHANGED"])
+        matrix = [entries[name] for name in changed]
+        print(f"services={json.dumps(matrix)}")
+        PY
+
+    - name: Summarise
+      shell: bash
+      env:
+        SERVICES: ${{ steps.matrix.outputs.services }}
+      run: |
+        python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+        import json, os
+        matrix = json.loads(os.environ["SERVICES"])
+        if not matrix:
+            print("No service affected by this diff — service jobs skipped.")
+        else:
+            print("### Services affected by this diff\n")
+            for leg in matrix:
+                print(f"- `{leg['name']}` (context `{leg['context']}`)")
+        PY
