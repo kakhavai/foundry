@@ -1,6 +1,6 @@
 # Phase 5 — Resilience Testing & AI Agent Adversarial Layer
 
-> **Status:** 🚧 **In progress** — Stage 1 (rigorous service and platform testing) delivered; Stages 2 and 3 not started · [roadmap](../../README.md#phases)
+> **Status:** 🚧 **In progress** — Stages 1 and 2 delivered; Stage 3 (the AI adversarial layer) not started · [roadmap](../../README.md#phases)
 
 **Goal:** Prove the platform survives real-world conditions — not just happy-path deployments. Introduce rigorous service and platform-level testing in three escalating stages: exhaustive automated testing, chaos and scale validation, and finally an AI agent adversarial layer where synthetic engineers are released against the platform to test whether it can detect, recover, and iterate under realistic failure modes.
 
