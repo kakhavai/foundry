@@ -17,6 +17,7 @@ Exits non-zero if any shape failed.
 """
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -229,6 +230,29 @@ def parse_kube_duration(spec: str) -> int:
     return int(value) * {"s": 1, "m": 60, "h": 3600}[unit]
 
 
+def newest_pod(pods: list[dict]) -> dict | None:
+    """Pick the most recently created pod from a list of pod objects.
+
+    Kubernetes has no "Terminating" phase: a pod with a `deletionTimestamp`
+    set still reports `.status.phase == "Running"` until it actually
+    disappears. `-l job-name=<name>` matches on the label alone, so a rerun
+    of the same shape can briefly have two pods behind that selector — the
+    previous run's dying pod and the freshly created one — and the API gives
+    no ordering guarantee for which comes back first. Picking `.items[0]`
+    (the old approach) could silently read the dying pod instead of the one
+    that was just created.
+
+    Sorting by `.metadata.creationTimestamp` (RFC3339, lexicographically
+    sortable) and taking the last removes that ambiguity regardless of
+    list order — this is the part of the fix that makes selection correct;
+    `--cascade=foreground` on the Job delete (in run_shape) is the other
+    part, removing the race at its source instead of only reading around it.
+    """
+    if not pods:
+        return None
+    return sorted(pods, key=lambda pod: pod["metadata"]["creationTimestamp"])[-1]
+
+
 def interpret_exit(shape: str, code: int) -> tuple[bool, str]:
     """Turn a k6 exit code into (passed, verdict).
 
@@ -313,30 +337,44 @@ def apply_job(job: dict) -> None:
         raise RuntimeError(f"applying the Job failed: {result.stderr.strip()}")
 
 
+def get_shape_pods(shape: str) -> list[dict]:
+    """Fetch every pod matching the shape's Job, as parsed pod objects.
+
+    Full `-o json` rather than a `.items[0]` jsonpath: the jsonpath form
+    picks whichever pod the API happens to list first, which is not
+    guaranteed to be the newest — see newest_pod(). `check=False` because
+    "no pods yet" is a normal, expected state right after a Job is applied,
+    not an error to raise on.
+    """
+    result = kubectl(
+        ["get", "pod", "-l", f"job-name={job_name(shape)}", "-o", "json"],
+        check=False,
+    )
+    if not result.stdout.strip():
+        return []
+    return json.loads(result.stdout).get("items", [])
+
+
 def pod_exit_code(shape: str) -> int:
-    """Read the terminated container's exit code — the entire verdict."""
-    result = kubectl([
-        "get", "pod",
-        "-l", f"job-name={job_name(shape)}",
-        "-o", "jsonpath={.items[0].status.containerStatuses[0].state.terminated.exitCode}",
-    ])
-    text = result.stdout.strip()
-    if not text:
+    """Read the newest matching pod's terminated container's exit code —
+    the entire verdict."""
+    pod = newest_pod(get_shape_pods(shape))
+    if pod is None:
+        raise RuntimeError(f"{job_name(shape)}: no pod found to read")
+    try:
+        exit_code = pod["status"]["containerStatuses"][0]["state"]["terminated"]["exitCode"]
+    except (KeyError, IndexError):
         raise RuntimeError(f"{job_name(shape)}: no terminated container to read")
-    return int(text)
+    return int(exit_code)
 
 
 def pod_phase(shape: str) -> str:
-    """Read the shape's pod's current `.status.phase` ('' if no pod exists yet)."""
-    result = kubectl(
-        [
-            "get", "pod",
-            "-l", f"job-name={job_name(shape)}",
-            "-o", "jsonpath={.items[0].status.phase}",
-        ],
-        check=False,
-    )
-    return result.stdout.strip()
+    """Read the newest matching pod's current `.status.phase` ('' if no pod
+    exists yet at all)."""
+    pod = newest_pod(get_shape_pods(shape))
+    if pod is None:
+        return ""
+    return pod.get("status", {}).get("phase", "")
 
 
 def wait_for_pod_action(shape: str, timeout_s: float, poll_interval: float = 2.0) -> str:
@@ -344,9 +382,17 @@ def wait_for_pod_action(shape: str, timeout_s: float, poll_interval: float = 2.0
 
     Deliberately not `kubectl wait --for=condition=ready` — this repo has
     been bitten repeatedly by that selector also matching a still-`Terminating`
-    pod from a previous run, which never reaches Ready and hangs the wait.
-    Polling `.status.phase` directly and asking phase_action what it means
-    avoids that trap; phase_action is what decides when to stop waiting.
+    pod from a previous run (Kubernetes has no "Terminating" phase; a pod with
+    a `deletionTimestamp` set still reports `.status.phase == "Running"` until
+    it actually disappears), which never reaches Ready and hangs the wait
+    indefinitely. Polling `.status.phase` directly and asking phase_action for
+    a bounded decision avoids that specific hang.
+
+    This function does not by itself guarantee the phase it reads came from
+    the *right* pod when more than one matches the job-name selector — that
+    is pod_phase()'s job, via newest_pod(), combined with `--cascade=foreground`
+    on the Job delete in run_shape so a stale pod from a previous run is gone
+    before this one starts polling.
     """
     deadline = time.monotonic() + timeout_s
     while True:
@@ -391,7 +437,16 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
 
     try:
         configmap_up()
-        kubectl(["delete", "job", job_name(shape), "--ignore-not-found"])
+        # --cascade=foreground: the default (background) cascade returns as
+        # soon as the Job object itself is gone, before its pod has actually
+        # terminated — a rerun of the same shape could then apply a new Job
+        # while the old pod was still Running (Kubernetes has no
+        # "Terminating" phase), leaving two pods behind the same job-name
+        # selector. Waiting here removes that race at its source; newest_pod()
+        # in pod_phase/pod_exit_code is the second, independent line of
+        # defence if a pod from outside this tool's own lifecycle ever
+        # matches anyway.
+        kubectl(["delete", "job", job_name(shape), "--ignore-not-found", "--cascade=foreground"])
         apply_job(render_job(shape, soak_minutes))
 
         # The very first live run of this tool found kubectl logs -f giving up
@@ -469,7 +524,15 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
         print(f"\nresult: {verdict}")
         return passed
     finally:
-        kubectl(["delete", "job", job_name(shape), "--ignore-not-found"], check=False)
+        # Same --cascade=foreground reasoning as the pre-run delete above:
+        # leaving this one on the default background cascade would mean the
+        # *next* invocation's pre-run delete is what ends up waiting out the
+        # old pod instead, which still works but makes this cleanup's own
+        # "done" signal a lie in the meantime.
+        kubectl(
+            ["delete", "job", job_name(shape), "--ignore-not-found", "--cascade=foreground"],
+            check=False,
+        )
         kubectl(["delete", "configmap", CONFIGMAP, "--ignore-not-found"], check=False)
 
 

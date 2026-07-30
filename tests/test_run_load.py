@@ -346,3 +346,45 @@ def test_parses_hours():
 def test_rejects_an_unrecognized_duration():
     with pytest.raises(ValueError):
         rl.parse_kube_duration("10")
+
+
+# ── newest_pod ────────────────────────────────────────────────────────────────
+#
+# Kubernetes has no "Terminating" phase: a pod with a deletionTimestamp set
+# still reports .status.phase == "Running" until it actually disappears, so a
+# rerun of the same shape can briefly have two pods behind the same
+# `-l job-name=...` selector — the previous run's dying pod and the freshly
+# created one — with no guarantee the API lists them in creation order.
+# Picking `.items[0]` (the old approach, flagged in Task 2's review) could
+# silently read the wrong one. These fixtures are shaped like real
+# `kubectl get pod -o json` output, trimmed to the fields newest_pod reads.
+
+def _pod(name: str, created: str, phase: str = "Running") -> dict:
+    return {
+        "metadata": {"name": name, "creationTimestamp": created},
+        "status": {"phase": phase},
+    }
+
+
+def test_newest_pod_of_an_empty_list_is_none():
+    assert rl.newest_pod([]) is None
+
+
+def test_newest_pod_with_a_single_pod_returns_it():
+    pod = _pod("k6-ramp-abc", "2026-07-29T23:10:00Z")
+    assert rl.newest_pod([pod]) == pod
+
+
+def test_newest_pod_picks_the_later_timestamp_when_it_is_listed_first():
+    newer = _pod("k6-ramp-new", "2026-07-29T23:15:00Z")
+    older = _pod("k6-ramp-old", "2026-07-29T23:10:00Z")
+    assert rl.newest_pod([newer, older]) == newer
+
+
+def test_newest_pod_picks_the_later_timestamp_when_it_is_listed_last():
+    """This is the exact failure the review flagged: the API has no ordering
+    guarantee, and `.items[0]` would have silently returned the dying pod
+    from a previous run instead of the one just created."""
+    older = _pod("k6-ramp-old", "2026-07-29T23:10:00Z", phase="Running")
+    newer = _pod("k6-ramp-new", "2026-07-29T23:15:00Z", phase="Pending")
+    assert rl.newest_pod([older, newer]) == newer
