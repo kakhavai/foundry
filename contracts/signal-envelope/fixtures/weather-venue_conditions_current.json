@@ -1,0 +1,35 @@
+{
+  "captured_at": "2026-09-11T12:00:00Z",
+  "collector": "weather",
+  "coverage": {
+    "expected": 1,
+    "missing": [],
+    "present": 1
+  },
+  "envelope_version": "1",
+  "errors": [],
+  "scope": {
+    "season": 2026,
+    "week": 1
+  },
+  "signal_type": "venue_conditions_current",
+  "signals": [
+    {
+      "feels_like_f": 67.0,
+      "humidity_pct": 62.0,
+      "precipitation_probability": 0.1,
+      "precipitation_rate_in_hr": 0.0,
+      "precipitation_type": "none",
+      "temperature_f": 68.0,
+      "venue_id": "CAR00",
+      "wind_direction_deg": 210,
+      "wind_gust_mph": 18.0,
+      "wind_speed_mph": 11.0
+    }
+  ],
+  "upstream": {
+    "adapter": "open-meteo",
+    "fetched_at": "2026-09-11T12:00:00Z",
+    "source_ref": null
+  }
+}

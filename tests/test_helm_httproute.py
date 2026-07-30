@@ -57,7 +57,7 @@ def test_weather_values_render_one_httproute_at_the_collector_path():
     rule = found[0]["spec"]["rules"][0]
     match = rule["matches"][0]["path"]
     assert match["type"] == "PathPrefix"
-    assert match["value"] == "/collectors/weather"
+    assert match["value"] == "/collectors/weather/catalog"
 
 
 def test_route_attaches_to_the_foundry_gateway():
@@ -70,15 +70,17 @@ def test_route_attaches_to_the_foundry_gateway():
 
 def test_route_strips_the_collector_prefix():
     """Without the rewrite the collector receives /collectors/weather/... and
-    404s every request."""
+    404s every request. Each rule now rewrites to its own service-relative
+    path, not a shared bare "/" — see test_each_rule_rewrites_to_the_service_
+    relative_path for the per-rule mapping."""
     docs = render(VALUES_DIR / "weather" / "values.yaml")
-    filters = routes(docs)[0]["spec"]["rules"][0]["filters"]
-
-    rewrite = [f for f in filters if f["type"] == "URLRewrite"]
-    assert len(rewrite) == 1
-    path = rewrite[0]["urlRewrite"]["path"]
-    assert path["type"] == "ReplacePrefixMatch"
-    assert path["replacePrefixMatch"] == "/"
+    for rule in routes(docs)[0]["spec"]["rules"]:
+        filters = rule["filters"]
+        rewrite = [f for f in filters if f["type"] == "URLRewrite"]
+        assert len(rewrite) == 1
+        path = rewrite[0]["urlRewrite"]["path"]
+        assert path["type"] == "ReplacePrefixMatch"
+        assert path["replacePrefixMatch"] in {"/catalog", "/signals", "/refresh"}
 
 
 def test_route_backend_points_at_the_service_port():
@@ -88,6 +90,81 @@ def test_route_backend_points_at_the_service_port():
 
     assert backend["name"] == services[0]["metadata"]["name"]
     assert backend["port"] == services[0]["spec"]["ports"][0]["port"]
+
+
+def _weather_route() -> dict:
+    """The single rendered HTTPRoute for weather's values file, with one rule
+    per gateway.publicPaths entry."""
+    docs = render(VALUES_DIR / "weather" / "values.yaml")
+    found = routes(docs)
+    assert len(found) == 1
+    return found[0]
+
+
+def test_one_rule_per_public_path():
+    rules = _weather_route()["spec"]["rules"]
+    matched = [r["matches"][0]["path"]["value"] for r in rules]
+    assert matched == [
+        "/collectors/weather/catalog",
+        "/collectors/weather/signals",
+        "/collectors/weather/refresh",
+    ]
+
+
+def test_each_rule_rewrites_to_the_service_relative_path():
+    """The gateway strips the collector prefix and nothing else, so
+    /collectors/weather/signals/convergence still reaches /signals/convergence."""
+    for rule in _weather_route()["spec"]["rules"]:
+        matched = rule["matches"][0]["path"]["value"]
+        rewrite = rule["filters"][0]["urlRewrite"]["path"]["replacePrefixMatch"]
+        assert matched == f"/collectors/weather{rewrite}"
+
+
+def test_health_is_not_published_at_the_edge():
+    """Auth-exempt by necessity in-cluster; that is not a reason to publish it."""
+    matched = [
+        r["matches"][0]["path"]["value"] for r in _weather_route()["spec"]["rules"]
+    ]
+    assert not any(m.endswith("/health") for m in matched)
+
+
+def test_metrics_is_not_published_at_the_edge():
+    """In-cluster this exposes collector_* series — poll cadence, failure
+    reasons, coverage, and auth-failure counts. Not an edge surface."""
+    matched = [
+        r["matches"][0]["path"]["value"] for r in _weather_route()["spec"]["rules"]
+    ]
+    assert not any(m.endswith("/metrics") for m in matched)
+
+
+def test_no_rule_matches_the_bare_collector_prefix():
+    """A bare prefix rule would republish everything and silently undo this."""
+    matched = [
+        r["matches"][0]["path"]["value"] for r in _weather_route()["spec"]["rules"]
+    ]
+    assert "/collectors/weather" not in matched
+    assert "/collectors/weather/" not in matched
+
+
+def test_empty_public_paths_fails_the_render(tmp_path):
+    """Fail loudly rather than rendering a route that publishes nothing, or
+    worse, falls back to a bare prefix."""
+    values_file = tmp_path / "values.yaml"
+    values_file.write_text(
+        yaml.dump(
+            {
+                "service": {"name": "test", "port": 8000},
+                "image": {"repository": "test"},
+                "gateway": {
+                    "enabled": True,
+                    "pathPrefix": "/collectors/x",
+                    "publicPaths": [],
+                },
+            }
+        )
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        render(values_file)
 
 
 def test_enabling_the_gateway_without_a_path_prefix_fails_the_render():

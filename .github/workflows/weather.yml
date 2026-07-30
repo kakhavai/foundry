@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - 'services/weather/**'
+      - 'libs/**'
       - 'helm/values/weather/**'
       - 'helm/charts/generic-service/**'
       - '.github/actions/**'
@@ -16,6 +17,7 @@ on:
       - main
     paths:
       - 'services/weather/**'
+      - 'libs/**'
       - 'helm/values/weather/**'
       - 'helm/charts/generic-service/**'
       - '.github/actions/**'
@@ -30,6 +32,7 @@ concurrency:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -40,6 +43,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -50,6 +54,7 @@ jobs:
 
   helm-lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -59,9 +64,54 @@ jobs:
           chart-path: helm/charts/generic-service
           values-file: helm/values/weather/values.yaml
 
+  collector-core-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-lint
+        with:
+          working-directory: libs/collector-core
+
+  collector-core-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-test
+        with:
+          working-directory: libs/collector-core
+      - name: Every library module must import with runtime deps only
+        shell: bash
+        working-directory: libs/collector-core
+        run: |
+          uv sync --frozen --no-dev
+          uv run --no-sync python - <<'PY'
+          import importlib, pkgutil, sys
+          import collector_core
+          failed = []
+          for m in pkgutil.iter_modules(collector_core.__path__):
+              name = f"collector_core.{m.name}"
+              try:
+                  importlib.import_module(name)
+              except Exception as exc:
+                  failed.append(f"{name}: {exc!r}")
+          if failed:
+              print("Modules that fail to import without dev dependencies:")
+              for f in failed:
+                  print("  ", f)
+              sys.exit(1)
+          print("all modules import with runtime dependencies only")
+          PY
+
   build-push:
     runs-on: ubuntu-latest
-    needs: [lint, test, helm-lint]
+    timeout-minutes: 10
+    needs: [lint, test, helm-lint, collector-core-lint, collector-core-test]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
       contents: read
@@ -71,11 +121,14 @@ jobs:
       - uses: ./.github/actions/build-push
         with:
           service: weather
+          context: .
+          dockerfile: services/weather/Dockerfile
           image-name: ghcr.io/kakhavai/foundry/weather
           tag: ${{ github.sha }}
 
   update-gitops-tag:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [build-push]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:

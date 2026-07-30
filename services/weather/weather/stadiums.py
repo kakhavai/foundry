@@ -6,6 +6,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Kansas City, MO",
         "latitude": 39.0489,
         "longitude": -94.4839,
+        "stadium_id": "KAN00",
+        "roof_type": "open",
     },
     "highmark": {
         "id": "highmark",
@@ -14,6 +16,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Orchard Park, NY",
         "latitude": 42.7738,
         "longitude": -78.7870,
+        "stadium_id": "BUF00",
+        "roof_type": "open",
     },
     "lambeau": {
         "id": "lambeau",
@@ -22,6 +26,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Green Bay, WI",
         "latitude": 44.5013,
         "longitude": -88.0622,
+        "stadium_id": "GNB00",
+        "roof_type": "open",
     },
     "gillette": {
         "id": "gillette",
@@ -30,6 +36,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Foxborough, MA",
         "latitude": 42.0909,
         "longitude": -71.2643,
+        "stadium_id": "BOS00",
+        "roof_type": "open",
     },
     "metlife": {
         "id": "metlife",
@@ -38,6 +46,8 @@ STADIUMS: dict[str, dict] = {
         "city": "East Rutherford, NJ",
         "latitude": 40.8135,
         "longitude": -74.0745,
+        "stadium_id": "NYC01",
+        "roof_type": "open",
     },
     "lincoln-financial": {
         "id": "lincoln-financial",
@@ -46,6 +56,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Philadelphia, PA",
         "latitude": 39.9008,
         "longitude": -75.1675,
+        "stadium_id": "PHI00",
+        "roof_type": "open",
     },
     "bank-of-america": {
         "id": "bank-of-america",
@@ -54,6 +66,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Charlotte, NC",
         "latitude": 35.2258,
         "longitude": -80.8528,
+        "stadium_id": "CAR00",
+        "roof_type": "open",
     },
     "mercedes-benz": {
         "id": "mercedes-benz",
@@ -62,6 +76,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Atlanta, GA",
         "latitude": 33.7554,
         "longitude": -84.4010,
+        "stadium_id": "ATL97",
+        "roof_type": "retractable",
     },
     "raymond-james": {
         "id": "raymond-james",
@@ -70,6 +86,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Tampa, FL",
         "latitude": 27.9759,
         "longitude": -82.5033,
+        "stadium_id": "TAM00",
+        "roof_type": "open",
     },
     "soldier-field": {
         "id": "soldier-field",
@@ -78,6 +96,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Chicago, IL",
         "latitude": 41.8623,
         "longitude": -87.6167,
+        "stadium_id": "CHI98",
+        "roof_type": "open",
     },
     "us-bank": {
         "id": "us-bank",
@@ -86,6 +106,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Minneapolis, MN",
         "latitude": 44.9737,
         "longitude": -93.2577,
+        "stadium_id": "MIN01",
+        "roof_type": "fixed_dome",
     },
     "ford-field": {
         "id": "ford-field",
@@ -94,6 +116,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Detroit, MI",
         "latitude": 42.3400,
         "longitude": -83.0456,
+        "stadium_id": "DET00",
+        "roof_type": "fixed_dome",
     },
     "paycor": {
         "id": "paycor",
@@ -102,6 +126,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Cincinnati, OH",
         "latitude": 39.0954,
         "longitude": -84.5160,
+        "stadium_id": "CIN00",
+        "roof_type": "open",
     },
     "huntington-bank": {
         "id": "huntington-bank",
@@ -110,6 +136,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Cleveland, OH",
         "latitude": 41.5061,
         "longitude": -81.6995,
+        "stadium_id": "CLE00",
+        "roof_type": "open",
     },
     "acrisure": {
         "id": "acrisure",
@@ -118,6 +146,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Pittsburgh, PA",
         "latitude": 40.4468,
         "longitude": -80.0158,
+        "stadium_id": "PIT00",
+        "roof_type": "open",
     },
     "mt-bank": {
         "id": "mt-bank",
@@ -126,6 +156,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Baltimore, MD",
         "latitude": 39.2779,
         "longitude": -76.6227,
+        "stadium_id": "BAL00",
+        "roof_type": "open",
     },
     "northwest": {
         "id": "northwest",
@@ -134,6 +166,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Landover, MD",
         "latitude": 38.9076,
         "longitude": -76.8645,
+        "stadium_id": "WAS00",
+        "roof_type": "open",
     },
     "att": {
         "id": "att",
@@ -142,6 +176,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Arlington, TX",
         "latitude": 32.7473,
         "longitude": -97.0945,
+        "stadium_id": "DAL00",
+        "roof_type": "retractable",
     },
     "allegiant": {
         "id": "allegiant",
@@ -150,6 +186,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Paradise, NV",
         "latitude": 36.0909,
         "longitude": -115.1833,
+        "stadium_id": "VEG00",
+        "roof_type": "fixed_dome",
     },
     "sofi": {
         "id": "sofi",
@@ -158,6 +196,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Inglewood, CA",
         "latitude": 33.9535,
         "longitude": -118.3392,
+        "stadium_id": "LAX01",
+        "roof_type": "fixed_dome",
     },
     "lumen-field": {
         "id": "lumen-field",
@@ -166,6 +206,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Seattle, WA",
         "latitude": 47.5952,
         "longitude": -122.3316,
+        "stadium_id": "SEA00",
+        "roof_type": "open",
     },
     "levis": {
         "id": "levis",
@@ -174,6 +216,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Santa Clara, CA",
         "latitude": 37.4033,
         "longitude": -121.9694,
+        "stadium_id": "SFO01",
+        "roof_type": "open",
     },
     "state-farm": {
         "id": "state-farm",
@@ -182,6 +226,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Glendale, AZ",
         "latitude": 33.5276,
         "longitude": -112.2626,
+        "stadium_id": "PHO00",
+        "roof_type": "retractable",
     },
     "empower-field": {
         "id": "empower-field",
@@ -190,6 +236,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Denver, CO",
         "latitude": 39.7439,
         "longitude": -105.0201,
+        "stadium_id": "DEN00",
+        "roof_type": "open",
     },
     "nissan": {
         "id": "nissan",
@@ -198,6 +246,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Nashville, TN",
         "latitude": 36.1665,
         "longitude": -86.7713,
+        "stadium_id": "NAS00",
+        "roof_type": "open",
     },
     "lucas-oil": {
         "id": "lucas-oil",
@@ -206,6 +256,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Indianapolis, IN",
         "latitude": 39.7601,
         "longitude": -86.1639,
+        "stadium_id": "IND00",
+        "roof_type": "retractable",
     },
     "evo": {
         "id": "evo",
@@ -214,6 +266,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Jacksonville, FL",
         "latitude": 30.3239,
         "longitude": -81.6373,
+        "stadium_id": "JAX00",
+        "roof_type": "open",
     },
     "hard-rock": {
         "id": "hard-rock",
@@ -222,6 +276,8 @@ STADIUMS: dict[str, dict] = {
         "city": "Miami Gardens, FL",
         "latitude": 25.9580,
         "longitude": -80.2388,
+        "stadium_id": "MIA00",
+        "roof_type": "open",
     },
     "caesars-superdome": {
         "id": "caesars-superdome",
@@ -230,6 +286,8 @@ STADIUMS: dict[str, dict] = {
         "city": "New Orleans, LA",
         "latitude": 29.9511,
         "longitude": -90.0812,
+        "stadium_id": "NOR00",
+        "roof_type": "fixed_dome",
     },
     "nrg": {
         "id": "nrg",
@@ -238,5 +296,20 @@ STADIUMS: dict[str, dict] = {
         "city": "Houston, TX",
         "latitude": 29.6847,
         "longitude": -95.4107,
+        "stadium_id": "HOU00",
+        "roof_type": "retractable",
     },
 }
+
+# This is a proto-`venue` table. It migrates wholesale into the `venue`
+# collector at 8E, which is also where wind-sheltering (enclosure_class) lands
+# — it needs real per-venue sourcing and a consumer, and 8A has neither.
+
+BY_STADIUM_ID: dict[str, dict] = {s["stadium_id"]: s for s in STADIUMS.values()}
+
+# Exactly the venues the schedule feed leaves `roof` empty for before kickoff.
+# Membership is what makes an empty roof mean "not yet decided" rather than
+# "the feed broke" — without it the two are indistinguishable.
+RETRACTABLE_STADIUM_IDS: frozenset[str] = frozenset(
+    s["stadium_id"] for s in STADIUMS.values() if s["roof_type"] == "retractable"
+)

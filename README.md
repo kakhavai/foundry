@@ -73,7 +73,7 @@ foundry/
 | 5 | Resilience testing + AI agent adversarial layer | 🚧 In progress | Stage 1 delivered; no tag until all stages land |
 | 6 | AWS deployment — EKS via Terraform, ECR, ALB ingress, IRSA + OIDC | 📋 Planned | — |
 | 7 | AI observability & governance — instrument runtime AI (triage narrator) + developer AI (Claude Code) into the OTel/Grafana stack | 📋 Planned | — |
-| 8 | Data source collectors — the 26-collector catalog feeding the projections generator, on a uniform contract + signal lake (8A–8F) | 📋 Planned | — |
+| 8 | Data source collectors — the 26-collector catalog feeding the projections generator, on a uniform contract + signal lake (8A–8F) | 🚧 In progress | 8A delivered — `weather` retrofitted onto the capture model; 8B–8F not started |
 
 ---
 
@@ -156,7 +156,11 @@ python scripts/deploy-local.py weather
 ```
 
 This runs:
-1. `docker build -t weather:local services/weather/`
+1. `docker build -f services/weather/Dockerfile -t weather:local .` — from the
+   repo root, not `services/weather/`: `weather` depends on the
+   `libs/collector-core/` workspace member by path, so the build context has
+   to include it. Services that don't consume the shared library still build
+   from their own service directory.
 2. `kind load docker-image weather:local --name foundry`
 3. `helm upgrade --install weather helm/charts/generic-service -f helm/values/weather/values.yaml ...`
 

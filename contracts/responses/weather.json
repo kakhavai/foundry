@@ -1,34 +1,48 @@
 {
+  "/catalog": [
+    "cadence_class",
+    "collector",
+    "coverage.venue_conditions_current.expected",
+    "coverage.venue_conditions_current.missing[]",
+    "coverage.venue_conditions_current.present",
+    "coverage.venue_forecast_kickoff.expected",
+    "coverage.venue_forecast_kickoff.missing[]",
+    "coverage.venue_forecast_kickoff.present",
+    "envelope_version",
+    "filters[]",
+    "last_capture_at",
+    "signal_types[]"
+  ],
   "/health": [
     "status"
   ],
-  "/weather/stadiums": [
-    "count",
-    "stadiums[].city",
-    "stadiums[].id",
-    "stadiums[].latitude",
-    "stadiums[].longitude",
-    "stadiums[].name",
-    "stadiums[].team",
-    "stadiums[].weather.precipitation_mm",
-    "stadiums[].weather.relative_humidity_pct",
-    "stadiums[].weather.temperature_c",
-    "stadiums[].weather.time",
-    "stadiums[].weather.weather_code",
-    "stadiums[].weather.wind_speed_kmh"
+  "/refresh": [
+    "refresh_id",
+    "scope.season",
+    "scope.week"
   ],
-  "/weather/stadiums/{stadium_id}": [
-    "city",
-    "id",
-    "latitude",
-    "longitude",
-    "name",
-    "team",
-    "weather.precipitation_mm",
-    "weather.relative_humidity_pct",
-    "weather.temperature_c",
-    "weather.time",
-    "weather.weather_code",
-    "weather.wind_speed_kmh"
+  "/signals": [
+    "count",
+    "envelopes[].captured_at",
+    "envelopes[].collector",
+    "envelopes[].coverage.expected",
+    "envelopes[].coverage.missing[]",
+    "envelopes[].coverage.present",
+    "envelopes[].envelope_version",
+    "envelopes[].errors[]",
+    "envelopes[].scope.season",
+    "envelopes[].scope.week",
+    "envelopes[].signal_type",
+    "envelopes[].signals[].game_id",
+    "envelopes[].signals[].team",
+    "envelopes[].signals[].venue_id",
+    "envelopes[].upstream.adapter",
+    "envelopes[].upstream.fetched_at",
+    "envelopes[].upstream.source_ref"
+  ],
+  "/signals/convergence": [
+    "count",
+    "game_id",
+    "series[]"
   ]
 }

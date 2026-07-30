@@ -80,16 +80,20 @@ the gateway and enforces a bearer token in-process.
 
 **Gateway:** Envoy Gateway (pinned, `infra/gateway/`) implementing Gateway API.
 One `Gateway` named `foundry` in `envoy-gateway-system` holds the front door;
-each collector's Helm chart templates its own `HTTPRoute` via `gateway.enabled`
-and `gateway.pathPrefix` in its values file. On Kind it is reachable at
-`http://localhost:8080` through the NodePort 30080 mapping in
+each collector's Helm chart templates its own `HTTPRoute` via `gateway.enabled`,
+`gateway.pathPrefix`, and `gateway.publicPaths` in its values file. On Kind it
+is reachable at `http://localhost:8080` through the NodePort 30080 mapping in
 `infra/kind/cluster.yaml`.
 
-The gateway strips `/collectors/<name>` and passes the rest through — one rule
-for the whole fleet, no per-collector rewrite target. Because `weather`'s own
-routes are namespaced under `/weather/`, the external path today reads
-`/collectors/weather/weather/stadiums`. The doubled segment is expected, not a
-bug; Phase 8's 8A replaces those routes with `/signals` and it disappears.
+The gateway strips `/collectors/<name>` and rewrites onto each declared
+`publicPaths` entry — the gateway publishes only a collector's declared
+contract paths, not its whole route surface. `weather`'s routes moved off the
+`/weather/` prefix during Phase 8's 8A retrofit, so the doubled segment that
+used to appear in the external path (`/collectors/weather/weather/stadiums`) is
+gone; the external path today reads `/collectors/weather/signals`. `/health`
+and `/metrics` are exempt from bearer auth in-process (so the kubelet's probes
+and Prometheus's scrape work) but are deliberately **not** in `publicPaths`, so
+they 404 at the gateway and only answer in-cluster.
 
 **Auth is enforced in the service, not at the gateway** (`weather/auth.py`).
 Middleware, so a route added later is protected by default. `/health` and
@@ -125,7 +129,7 @@ combination for what it is before assuming the deploy itself is broken.
 
 | Service | Port | Status | Purpose |
 |---|---|---|---|
-| `weather` | 8000 | Live | Current conditions per pro football stadium (Open-Meteo, no auth). Exposes exactly `/health`, `/metrics`, `/weather/stadiums`, `/weather/stadiums/{stadium_id}` — there is no by-location route |
+| `weather` | 8000 | Live | First data-source collector (Phase 8's 8A retrofit). Captures forecast-at-kickoff and current conditions per pro football stadium on a cadence, into the shared signal lake. Exposes `/health`, `/metrics`, `/catalog`, `/signals`, `/signals/convergence`, `/refresh` — bearer-token auth on every route except `/health` and `/metrics`; the stadium routes are gone |
 | `player-projections` | 8001 | Stub mode | Polls the S3 projections snapshots; returns empty until the generator publishes |
 
 ### player-projections — How It Works
@@ -176,6 +180,12 @@ order — not keyed by `id` — and the frontend does the grouping.
 
 ```
 services/<name>/        Python service (FastAPI, uv, pyproject.toml)
+libs/collector-core/     Shared library for the collector fleet: bearer auth,
+                        the five-route contract surface, the capture loop,
+                        the append-only S3 lake, the signal envelope. Every
+                        collector (weather is the first) depends on it via
+                        the uv workspace; changes here fall under the
+                        `weather` CI workflow AND the integration-test gate.
 helm/charts/generic-service/    Base Helm chart all services share
 helm/values/<name>/     Per-service value overrides
 .github/actions/        Composite CI actions: python-lint, python-test, helm-lint, build-push
@@ -226,6 +236,15 @@ If the service needs secrets: add `extraEnv` to the values file with a `secretKe
 ---
 
 ## Dockerfile Pattern (Canonical)
+
+**Collectors build from the repo root**, not the service directory, because they
+depend on the `libs/collector-core/` workspace member by path:
+
+    docker build -f services/<name>/Dockerfile -t <name>:local .
+
+The build stage copies `libs/collector-core/` before `uv sync`, since the lock
+cannot resolve without the member present. Services that do not consume the
+shared library keep the original service-directory context.
 
 All services use uv's official multi-stage pattern for packaged services:
 
@@ -331,7 +350,12 @@ cd services/<name>
 uv run pytest -v
 ```
 
-Tests use `respx` to mock `httpx` calls. OTel not initialized in tests. State-based endpoint tests pre-populate the in-memory cache via `_state` directly.
+```bash
+cd libs/collector-core
+uv run pytest -v
+```
+
+Tests use `respx` to mock `httpx` calls. OTel not initialized in tests. State-based endpoint tests pre-populate the in-memory cache via `_state` directly. `libs/collector-core`'s own suite (`libs/collector-core/tests/`) proves the shared router and capture loop against a fake two-signal-type collector, independent of `weather`; `services/weather/tests/` pins the same shapes against the real service and additionally validates real capture output against `contracts/signal-envelope/collectors/weather.json`.
 
 ---
 

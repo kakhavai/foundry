@@ -1,10 +1,14 @@
+from datetime import UTC, datetime
+
 import pytest
+from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
 from fastapi.testclient import TestClient
 from opentelemetry import metrics as otel_metrics
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider
 from prometheus_client import REGISTRY, generate_latest
 
+from weather import main
 from weather.main import app
 
 
@@ -91,3 +95,73 @@ def client(_collector_token):
     """
     with TestClient(app, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as c:
         yield c
+
+
+@pytest.fixture(autouse=True)
+def _reset_collector_singletons():
+    """`main._state` and `main._refresh_gate` are module-level singletons —
+    that's what lets `/signals` serve from a cache and `/refresh` enforce an
+    interval floor across requests in production — but it makes them a
+    shared-state hazard between tests unless something resets them.
+
+    Autouse (unlike `seeded_state`) because leaving this to opt-in would let
+    one test's `/refresh` call leak a populated cache, or an armed interval
+    floor, into a completely unrelated test later in the run. Runs before
+    `seeded_state` populates its fixture data — pytest instantiates autouse
+    fixtures ahead of explicitly-requested ones at the same scope — and after
+    it tears that data down, so either way the baseline here is what a test
+    with no fixture at all should see: empty.
+    """
+    main._state.envelopes = {}
+    main._state.last_capture_at = None
+    main._refresh_gate._last_allowed_at = None
+    yield
+    main._state.envelopes = {}
+    main._state.last_capture_at = None
+    main._refresh_gate._last_allowed_at = None
+
+
+NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
+
+
+def make_envelope(signal_type: str, signals: list[dict]) -> Envelope:
+    return Envelope(
+        envelope_version=ENVELOPE_VERSION,
+        collector="weather",
+        signal_type=signal_type,
+        captured_at=NOW,
+        upstream=Upstream("open-meteo", NOW),
+        scope={"season": 2026, "week": 1},
+        coverage=Coverage(expected=len(signals), present=len(signals), missing=[]),
+        errors=[],
+        signals=signals,
+    )
+
+
+@pytest.fixture
+def seeded_state():
+    """State-based route tests pre-populate the cache directly, per the repo's
+    existing convention — the routes never call an upstream.
+
+    Not autouse: most of the suite (auth, telemetry, metrics) never touches
+    `main._state`, and forcing it into every test would make the fixture's own
+    teardown a hidden dependency for unrelated tests. Tests that need seeded
+    data request it by name.
+    """
+    main._state.envelopes = {
+        "venue_forecast_kickoff": make_envelope(
+            "venue_forecast_kickoff",
+            [
+                {"game_id": "2026_01_CHI_CAR", "venue_id": "CAR00", "team": "CAR"},
+                {"game_id": "2026_01_BUF_HOU", "venue_id": "HOU00", "team": "HOU"},
+            ],
+        ),
+        "venue_conditions_current": make_envelope(
+            "venue_conditions_current",
+            [{"venue_id": "CAR00", "team": "CAR"}],
+        ),
+    }
+    main._state.last_capture_at = NOW
+    yield
+    main._state.envelopes = {}
+    main._state.last_capture_at = None
