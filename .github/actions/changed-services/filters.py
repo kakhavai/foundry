@@ -63,15 +63,27 @@ COLLECTOR_PATHS: tuple[str, ...] = ("libs/**",)
 IMAGE_PREFIX = "ghcr.io/kakhavai/foundry"
 
 
+class FilterError(Exception):
+    """Something this module needs is not where it expects it."""
+
+
 def load_fleet(root: Path):
     """Import `scripts/collectors.py` and return its service list.
 
     Loaded by path rather than `import collectors` so this works from any cwd
     and does not depend on `scripts/` being importable as a package.
     """
-    spec = importlib.util.spec_from_file_location(
-        "fleet_collectors", root / "scripts" / "collectors.py"
-    )
+    source = root / "scripts" / "collectors.py"
+    if not source.exists():
+        # A traceback here sends the reader looking for a bug in this file when
+        # the actual problem is always the directory it was run from: the
+        # composite action relies on the runner's default cwd being the
+        # workspace root.
+        raise FilterError(
+            f"no {source} — this must run from the repository root, or be "
+            f"given one with --root (got {root})"
+        )
+    spec = importlib.util.spec_from_file_location("fleet_collectors", source)
     module = importlib.util.module_from_spec(spec)
     sys.modules["fleet_collectors"] = module
     spec.loader.exec_module(module)
@@ -138,7 +150,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    rules, entries = build(load_fleet(args.root))
+    # Bad input exits with a message, not a traceback: this runs inside a
+    # composite action step whose failure output is the only thing a reader
+    # sees, and a stack dump buries the one line that identifies the cause.
+    try:
+        fleet = load_fleet(args.root)
+    except FilterError as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 2
+
+    rules, entries = build(fleet)
     if args.emit == "filters":
         sys.stdout.write(render_filters(rules))
     else:
