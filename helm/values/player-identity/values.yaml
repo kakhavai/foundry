@@ -1,0 +1,93 @@
+service:
+  name: player-identity
+  port: 8002
+
+image:
+  repository: ghcr.io/kakhavai/foundry/player-identity
+
+containerPort: 8002
+
+resources:
+  limits:
+    cpu: 500m
+    # The canonical crosswalk is ~2,900 records held in memory, plus the
+    # index built over it — several times weather's ~16 rows.
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+otel:
+  resourceAttributes: "service.name=player-identity,service.namespace=foundry"
+
+grafanaAnnotations:
+  enabled: true
+
+gateway:
+  enabled: true
+  pathPrefix: /collectors/player-identity
+  # The chart's default three plus this collector's own resolve surface.
+  # /resolve covers /resolve/batch, since the rule is a PathPrefix match.
+  # /health and /metrics stay off the list deliberately — they are exempt
+  # from bearer auth in-process so the kubelet's probes and Prometheus's
+  # scrape work, and that is not a reason to publish them at the edge.
+  publicPaths:
+    - /catalog
+    - /signals
+    - /refresh
+    - /resolve
+    - /unresolved
+
+extraEnv:
+  # optional: true lets the pod start before the Secret exists. The
+  # collector then answers 503 on every data route until it arrives — see
+  # libs/collector-core/collector_core/auth.py.
+  - name: COLLECTOR_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: player-identity-collector-token
+        key: token
+        optional: true
+  - name: LAKE_BUCKET
+    value: "foundry-signals"
+  - name: LAKE_ENDPOINT_URL
+    value: "http://minio.monitoring.svc.cluster.local:9000"
+  - name: REFRESH_MIN_INTERVAL_SECONDS
+    value: "3600"
+  # DELIBERATELY false, unlike weather's true.
+  #
+  # The upstream players document is ~5 MB and Sleeper's own guidance is to
+  # poll it at most once per day. weather's precedent would hit a third
+  # party on every PR push and on every pod restart, from a cluster that is
+  # recreated per CI run. The cadence class is `seasonal` (a daily base
+  # interval), so switching this on is a one-line change in an environment
+  # that should actually be polling — it is off here, not off everywhere.
+  #
+  # Consequence for the smoke test: it must not POST /refresh either, since
+  # a dispatched refresh reaches the upstream regardless of this flag.
+  - name: CAPTURE_ENABLED
+    value: "false"
+  - name: CAPTURE_SEASON
+    value: "2026"
+  - name: CAPTURE_WEEK
+    value: "1"
+  # A single pass walks ~2,900 records after one fetch, so the ceiling is
+  # dominated by that fetch rather than by per-item calls.
+  - name: CAPTURE_DEADLINE_SECONDS
+    value: "300"
+  # Same optional:true pattern as COLLECTOR_TOKEN — the pod starts before
+  # the Secret exists and the lake simply has no credentials until it does.
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: player-identity-lake-credentials
+        key: access-key-id
+        optional: true
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: player-identity-lake-credentials
+        key: secret-access-key
+        optional: true
+  - name: AWS_DEFAULT_REGION
+    value: "us-east-1"

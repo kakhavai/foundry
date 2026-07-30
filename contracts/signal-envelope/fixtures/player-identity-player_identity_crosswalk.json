@@ -1,0 +1,130 @@
+{
+  "captured_at": "2026-09-11T12:00:00Z",
+  "collector": "player-identity",
+  "coverage": {
+    "expected": 2,
+    "missing": [],
+    "present": 2
+  },
+  "envelope_version": "1",
+  "errors": [],
+  "scope": {
+    "season": 2026,
+    "week": 1
+  },
+  "signal_type": "player_identity_crosswalk",
+  "signals": [
+    {
+      "aliases": [],
+      "birth_date": "1992-12-24",
+      "entry_year": 2014,
+      "external_ids": {
+        "espn": {
+          "id": "e1",
+          "link_method": "crosswalk",
+          "linked_at": "2026-09-11T12:00:00Z",
+          "match_margin": null,
+          "match_score": null
+        },
+        "fantasy_data": {
+          "id": "f1",
+          "link_method": "crosswalk",
+          "linked_at": "2026-09-11T12:00:00Z",
+          "match_margin": null,
+          "match_score": null
+        },
+        "gsis": {
+          "id": "00-001",
+          "link_method": "crosswalk",
+          "linked_at": "2026-09-11T12:00:00Z",
+          "match_margin": null,
+          "match_score": null
+        },
+        "rotowire": {
+          "id": "r1",
+          "link_method": "crosswalk",
+          "linked_at": "2026-09-11T12:00:00Z",
+          "match_margin": null,
+          "match_score": null
+        },
+        "sleeper": {
+          "id": "1",
+          "link_method": "exact_id",
+          "linked_at": "2026-09-11T12:00:00Z",
+          "match_margin": null,
+          "match_score": null
+        },
+        "sportradar": {
+          "id": "s1",
+          "link_method": "crosswalk",
+          "linked_at": "2026-09-11T12:00:00Z",
+          "match_margin": null,
+          "match_score": null
+        },
+        "yahoo": {
+          "id": "y1",
+          "link_method": "crosswalk",
+          "linked_at": "2026-09-11T12:00:00Z",
+          "match_margin": null,
+          "match_score": null
+        }
+      },
+      "first_name": "Davante",
+      "full_name": "Davante Adams",
+      "jersey_as_of": "2026-09-11T12:00:00Z",
+      "jersey_number": 17,
+      "last_name": "Adams",
+      "last_verified_at": "2026-09-11T12:00:00Z",
+      "name_suffix": null,
+      "normalized_key": "davante adams",
+      "player_id": "fdy-9462ea6c6936",
+      "position": "WR",
+      "position_group": "offense_skill",
+      "roster_status": "active",
+      "superseded_by": null,
+      "team": "LV",
+      "team_as_of": "2026-09-11T12:00:00Z"
+    },
+    {
+      "aliases": [
+        {
+          "name": "Odell Beckham",
+          "source": "sleeper",
+          "valid_from": "2026-09-11T12:00:00Z",
+          "valid_to": null
+        }
+      ],
+      "birth_date": "1992-12-24",
+      "entry_year": 2014,
+      "external_ids": {
+        "sleeper": {
+          "id": "2",
+          "link_method": "exact_id",
+          "linked_at": "2026-09-11T12:00:00Z",
+          "match_margin": null,
+          "match_score": null
+        }
+      },
+      "first_name": "Odell",
+      "full_name": "Odell Beckham Jr.",
+      "jersey_as_of": "2026-09-11T12:00:00Z",
+      "jersey_number": 3,
+      "last_name": "Beckham",
+      "last_verified_at": "2026-09-11T12:00:00Z",
+      "name_suffix": "Jr",
+      "normalized_key": "odell beckham",
+      "player_id": "fdy-8eda476753e0",
+      "position": "WR",
+      "position_group": "offense_skill",
+      "roster_status": "active",
+      "superseded_by": null,
+      "team": "MIA",
+      "team_as_of": "2026-09-11T12:00:00Z"
+    }
+  ],
+  "upstream": {
+    "adapter": "sleeper-players",
+    "fetched_at": "2026-09-11T12:00:00Z",
+    "source_ref": "W/\"abc123\""
+  }
+}

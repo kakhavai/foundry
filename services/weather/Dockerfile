@@ -12,9 +12,16 @@ WORKDIR /app
 # services/weather/uv.lock (Task 1 deleted it). The root pyproject.toml and
 # root uv.lock both come in, plus every member's manifest, because uv resolves
 # the whole workspace graph before it can sync any single member.
+#
+# That is why player-identity's manifest is here despite weather not
+# depending on it: `--package weather` still resolves the whole graph first,
+# so a member missing from the context fails the build with "the lockfile
+# needs to be updated" — a break that no pytest run can see, because pytest
+# never touches the Dockerfile. Every new workspace member adds a line here.
 COPY pyproject.toml uv.lock ./
 COPY libs/collector-core/ ./libs/collector-core/
 COPY services/weather/pyproject.toml ./services/weather/
+COPY services/player-identity/pyproject.toml ./services/player-identity/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project --package weather

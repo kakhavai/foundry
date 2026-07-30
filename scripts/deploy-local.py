@@ -15,6 +15,12 @@ SERVICES = {
         "build_context_root": True,
     },
     "player-projections": {"port": 8001},
+    "player-identity": {
+        "port": 8002,
+        "secret": "player-identity-collector-token",
+        "lake_secret": "player-identity-lake-credentials",
+        "build_context_root": True,
+    },
 }
 
 # Kind-only. A real token is created out of band and never enters Git; on EKS

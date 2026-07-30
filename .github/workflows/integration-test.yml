@@ -123,6 +123,7 @@ jobs:
         run: |
           python3 scripts/deploy-local.py weather
           python3 scripts/deploy-local.py player-projections
+          python3 scripts/deploy-local.py player-identity
 
       - name: Wait for pods ready
         run: |
@@ -136,6 +137,7 @@ jobs:
           # is in fact healthy.
           kubectl rollout status deployment/weather --timeout=120s
           kubectl rollout status deployment/player-projections --timeout=120s
+          kubectl rollout status deployment/player-identity --timeout=120s
 
       - name: Smoke test services
         run: bash scripts/smoke-test.sh
