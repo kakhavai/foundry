@@ -264,7 +264,23 @@ is caught by nothing until somebody triggers a run. Accepted deliberately — se
 called out again because chaos is where it would most plausibly have been
 caught: nothing tests the process → Collector → Tempo path.
 
+**A load number measured in stub mode proves throughput, not performance.**
+`tests/load/` drives `player-projections` at up to several hundred RPS and the
+thresholds are real — a crossed one fails the run — but the response is
+`{"projections": [], "count": 0}`. What is measured is uvicorn, FastAPI, and the
+250m CPU limit; a real ~45 KB document, where serialization dominates, is not.
+The >20% P95 regression gate is deliberately absent for exactly this reason. The
+soak shape is the extreme case: with no upstream client, no per-request
+allocation, and no background task in stub mode, it has nothing to accumulate and
+so cannot currently detect the leaks it exists to detect. `weather` is not
+covered at all — it is a synchronous proxy to a rate-limited free API, deferred
+to Phase 8's 8A. All of this is stated in `docs/scale-baselines.md`.
+
 ## Not Covered Here
 
-Load and scale testing, and adversarial agent sessions, are Phase 5C. See
+Adversarial agent sessions are Phase 5 Stage 3. See
 `docs/architecture/phase-5-resilience-and-ai-testing.md`.
+
+Load and scale testing now exists — `tests/load/` with a k6 harness — but covers
+`player-projections` only, in stub mode. See `docs/scale-baselines.md` for what
+those numbers claim and what they do not.

@@ -142,7 +142,12 @@ counted as coverage. Both corrections above were found by reading the code rathe
 than by running the scenarios, which is the only reason they did not ship as
 passing.
 
-**Load and scale testing with k6.** `tests/load/` contains k6 scripts for each service:
+**Load and scale testing with k6.** `tests/load/` contains k6 scripts for
+`player-projections`. `weather` is deliberately **not** covered: it is a
+synchronous proxy whose 30-call list route would send ~15,000 requests to
+Open-Meteo for a single ramp against a free tier of roughly 10,000 per day.
+Load coverage for `weather` is deferred to [Phase 8](phase-8-data-source-collectors.md)'s
+8A, which rebuilds it to serve from memory. The four shapes:
 - Ramp test: 0 → 100 RPS over 5 minutes, measure P95 latency and error rate
 - Soak test: 50 RPS sustained for 30 minutes, detect memory leaks or connection pool exhaustion
 - Spike test: 10x normal load for 60 seconds, validate graceful degradation
@@ -202,7 +207,10 @@ service logs anything today — and chaos criteria need metrics, not prose.
   upstream calls, classified by `reason`
 - `infra/chaos-mesh/` — Chaos Mesh helmfile installation
 - `chaos/scenarios/` — Chaos Mesh scenario manifests with documented hypotheses
-- `tests/load/` — k6 scripts per service
+- `tests/load/` — k6 scripts for `player-projections`, run in-cluster as a Job by
+  `scripts/run-load.py` (`weather` deferred to 8A — see above)
+- `.github/workflows/load-test.yml` — **`workflow_dispatch` only**, with a
+  `soak_minutes` input; not a required check
 - `.github/workflows/chaos-test.yml` — **decided: `workflow_dispatch`, plus `pull_request` scoped to the chaos machinery** — see the decisions table above.
 - `docs/chaos-runbook.md` — how to run scenarios manually, how to read results, known failure modes
 - `docs/scale-baselines.md` — documented performance baselines per service, updated after each phase
@@ -293,7 +301,7 @@ The catalog is updated after every adversarial test session. It becomes the livi
 ## Milestones
 
 - [x] Stage 1: Coverage thresholds enforced, schema contract tests in CI, Hypothesis suites for all external data parsers
-- [ ] Stage 2: Collector gateway + bearer auth live with `weather` as the first collector, failure-path metrics emitting, Chaos Mesh running, every chaos scenario documented and passing against a criterion it is capable of failing, k6 harness wired with stub-mode reference baselines (regression gate deferred until real documents flow)
+- [x] Stage 2: Collector gateway + bearer auth live with `weather` as the first collector, failure-path metrics emitting, Chaos Mesh running, every chaos scenario documented and passing against a criterion it is capable of failing, k6 harness wired with stub-mode reference baselines (regression gate deferred until real documents flow)
 - [ ] Stage 3: Agent scaffolding built, first adversarial session run against weather and player-projections, fault catalog seeded with results
 
 ---
