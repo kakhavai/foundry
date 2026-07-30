@@ -357,27 +357,55 @@ depend on the `libs/collector-core/` workspace member by path:
 
     docker build -f services/<name>/Dockerfile -t <name>:local .
 
-The build stage copies `libs/collector-core/` before `uv sync`, since the lock
-cannot resolve without the member present. Services that do not consume the
-shared library keep the original service-directory context.
+`player-projections` is **not** a workspace member, owns its own `uv.lock`, and
+still builds from its own directory as the context. Do not use it as a collector
+template — `services/weather/Dockerfile` is the collector reference.
 
-All services use uv's official multi-stage pattern for packaged services:
+**Every collector opens with the shared `workspace-manifests` stage, and it is
+not optional.** `uv sync --locked --package <x>` resolves the ENTIRE workspace
+graph before it can sync any single member, so every member's `pyproject.toml`
+must be in the build context — including members the service does not depend on.
+Listing them one `COPY` line at a time is quadratic (26 lines in each of 26
+Dockerfiles), and the line you forget breaks an **unrelated** service's image
+with `the lockfile needs to be updated`. **No pytest run can see that break**,
+because pytest never touches a Dockerfile — adding `roster-scope` broke
+`services/weather/Dockerfile` exactly this way.
+
+The stage names no member, so adding a workspace member requires no Dockerfile
+edit anywhere. `tests/test_dockerfile_workspace.py` fails the build if a
+collector loses the stage or reintroduces a per-member `COPY`.
+
+Note `COPY services/*/pyproject.toml ./services/` does **not** work as a
+shortcut: Docker flattens a multi-source `COPY` into the destination directory.
 
 ```dockerfile
+FROM python:3.12-slim AS workspace-manifests
+WORKDIR /src
+COPY . .
+RUN set -eu; \
+    mkdir -p /manifests; \
+    cp pyproject.toml uv.lock /manifests/; \
+    cp -a libs /manifests/libs; \
+    find services -mindepth 2 -maxdepth 2 -name pyproject.toml \
+        -exec cp --parents {} /manifests/ \;
+
 FROM python:3.12-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
 WORKDIR /app
-# Step 1: deps only (layer cached until uv.lock/pyproject.toml change)
+# Step 1: deps only. BuildKit keys `COPY --from` on the CONTENT it copies, so
+# this layer survives a service source edit and busts on a manifest/lock change.
+COPY --from=workspace-manifests /manifests/ ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --locked --no-dev --no-install-project
-# Step 2: install package as wheel (--no-editable bakes it into the venv)
-COPY pyproject.toml uv.lock ./
-COPY <pkg>/ ./<pkg>/
+    uv sync --locked --no-dev --no-install-project --package <name>
+# Step 2: install package as wheel (--no-editable bakes it into the venv).
+# --reinstall-package is REQUIRED: the version never changes (0.1.0), so uv's
+# build cache can serve a previously built wheel for changed source and the
+# image silently ships stale code. Observed twice on roster-scope.
+COPY services/<name>/<pkg>/ ./services/<name>/<pkg>/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable
+    uv sync --locked --no-dev --no-editable --package <name> \
+        --reinstall-package <name>
 
 FROM python:3.12-slim
 # Use numeric UID — Kubernetes runAsNonRoot requires a numeric user to verify non-root
