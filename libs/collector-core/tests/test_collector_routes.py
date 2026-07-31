@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from collector_core.cadence import CadenceClass
+from collector_core.conditional import UpstreamUnchanged
 from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
 from collector_core.metrics import CollectorMetrics
 from collector_core.refresh import RefreshGate
@@ -94,6 +95,23 @@ class _StubCapture:
                 "beta", [{"widget_id": "w1"}], season=season, week=week
             ),
         }
+
+
+class _RecordingMetrics:
+    """A minimal `CollectorMetrics` stand-in for the `_run_capture` /
+    `UpstreamUnchanged` tests: records which outcome fired (`"unchanged"` vs.
+    `"failure"`) rather than caring about label values. Mirrors
+    `test_scheduler.py`'s fake of the same shape for the loop's own 304
+    tests -- `_run_capture` never calls `.staleness`, so this one omits it."""
+
+    def __init__(self, recorded: list[str]) -> None:
+        self._recorded = recorded
+
+    def upstream_unchanged(self) -> None:
+        self._recorded.append("unchanged")
+
+    def capture_failure(self, exc: BaseException) -> None:
+        self._recorded.append("failure")
 
 
 class _NullLake:
@@ -434,6 +452,53 @@ def test_mark_unchanged_never_moves_the_clock_backwards():
     state.mark_unchanged(NOW - timedelta(minutes=15))
 
     assert state.last_capture_at == NOW
+
+
+async def test_a_304_via_refresh_does_not_replace_the_last_good_envelopes(spec):
+    """The regression this whole mechanism must not cause, on the dispatched
+    `/refresh` path this time: an unchanged upstream must never cost
+    `/signals` the data it is already serving."""
+    good = {"alpha": make_envelope("alpha", [{"widget_id": "w1"}])}
+    spec.state.apply_capture(good, NOW)
+
+    async def capture(season, week, *, client, lake, now, deadline=None):
+        raise UpstreamUnchanged("http://x/d.csv", source_ref='W/"v1"')
+
+    spec.capture = capture
+
+    await _run_capture(spec, 2026, 1, clock=lambda: NOW + timedelta(minutes=15))
+
+    assert spec.state.envelopes is good
+
+
+async def test_a_304_via_refresh_advances_last_capture_at(spec):
+    """Staleness resets, because the data was confirmed current."""
+    spec.state.apply_capture({"alpha": make_envelope("alpha", [])}, NOW)
+
+    async def capture(season, week, *, client, lake, now, deadline=None):
+        raise UpstreamUnchanged("http://x/d.csv")
+
+    spec.capture = capture
+
+    await _run_capture(spec, 2026, 1, clock=lambda: NOW + timedelta(minutes=15))
+
+    assert spec.state.last_capture_at == NOW + timedelta(minutes=15)
+
+
+async def test_a_304_via_refresh_is_counted_as_unchanged_not_as_a_failure(spec):
+    spec.state.apply_capture({"alpha": make_envelope("alpha", [])}, NOW)
+    recorded: list[str] = []
+    spec.metrics = _RecordingMetrics(recorded)
+
+    async def capture(season, week, *, client, lake, now, deadline=None):
+        raise UpstreamUnchanged("http://x/d.csv")
+
+    spec.capture = capture
+
+    await _run_capture(spec, 2026, 1, clock=lambda: NOW + timedelta(minutes=15))
+
+    assert "unchanged" in recorded
+    assert "failure" not in recorded
 
 
 async def test_the_loop_and_a_dispatched_refresh_serialize_on_the_shared_lock(spec):
