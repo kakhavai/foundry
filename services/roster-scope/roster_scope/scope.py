@@ -45,6 +45,7 @@ from .rules import (
     EXCLUDED_PLAYERS,
     GRACE_WEEKS,
     MANUAL_OVERRIDES,
+    MATCHUP_RULES,
     MAX_DEPTH_CHART_AGE_HOURS,
     TEAMS,
     canonical_position,
@@ -593,11 +594,22 @@ async def scope_players_view(
 
 
 def scope_rules_view(spec) -> dict:
-    """`GET /scope/rules` — the config *as applied*.
+    """`GET /scope/rules` — the config *as applied*, for both rule sets.
 
     Including which rules produced zero slots, which is the whole reason this
     route exists: a rule silently matching nothing is otherwise indis-
-    tinguishable from a rule that is working.
+    tinguishable from a rule that is working. That reasoning applies exactly
+    as much to `MATCHUP_RULES` (Task 6's opposing-player scope) as it does to
+    `ALL_RULES` — a matchup rule silently matching nothing is invisible
+    without this, same as a player-scope one — so both are reported here.
+
+    Kept as **two separate lists** (`rules`, `matchup_rules`) rather than one
+    merged one. The two scopes have independent `CoverageAccumulator`s for
+    the same reason `capture.py` and `matchups.py`'s docstrings give: a
+    matchup-scope outage must not read as a player-scope problem or vice
+    versa, and merging their `produced_zero_slots` signal into one list would
+    make "which scope is actually unhealthy" a string-matching exercise on
+    `rule_id` instead of a field on the response.
     """
     envelope = spec.state.envelopes.get(MEMBERSHIP_SIGNAL)
     rows = [] if envelope is None else envelope.signals
@@ -605,6 +617,18 @@ def scope_rules_view(spec) -> dict:
     for row in rows:
         if row.get("membership_status") == "active":
             filled[row["rule_id"]] = filled.get(row["rule_id"], 0) + 1
+
+    # Deferred: `matchups.py` imports `split_co_listed` from this module at
+    # its own top level, so importing `matchups.py` from here at module level
+    # would be circular. Both modules are fully loaded by the time any route
+    # handler runs, so a call-time import is safe.
+    from .matchups import MATCHUP_SIGNAL
+
+    matchup_envelope = spec.state.envelopes.get(MATCHUP_SIGNAL)
+    matchup_rows = [] if matchup_envelope is None else matchup_envelope.signals
+    matchup_filled: dict[str, int] = {}
+    for row in matchup_rows:
+        matchup_filled[row["rule_id"]] = matchup_filled.get(row["rule_id"], 0) + 1
 
     version = None if envelope is None else envelope.scope.get("scope_version")
     return {
@@ -627,6 +651,17 @@ def scope_rules_view(spec) -> dict:
                 "produced_zero_slots": filled.get(rule.rule_id, 0) == 0,
             }
             for rule in ALL_RULES
+        ],
+        "matchup_rules": [
+            {
+                "rule_id": rule.rule_id,
+                "position": rule.position,
+                "max_depth": rule.max_depth,
+                "slots_expected": len(TEAMS) * rule.max_depth,
+                "slots_filled": matchup_filled.get(rule.rule_id, 0),
+                "produced_zero_slots": matchup_filled.get(rule.rule_id, 0) == 0,
+            }
+            for rule in MATCHUP_RULES
         ],
     }
 
