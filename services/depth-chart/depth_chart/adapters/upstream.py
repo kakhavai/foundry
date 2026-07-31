@@ -263,7 +263,13 @@ async def fetch_depth_charts(
     truncated = False
 
     rows = stream_csv_dicts(
-        client, source_ref(season, week), required_columns=REQUIRED_COLUMNS
+        client,
+        source_ref(season, week),
+        required_columns=REQUIRED_COLUMNS,
+        # The URL is the cache key: one ETag per season's asset. `source_ref`
+        # already returns exactly that string, so the key and the thing the
+        # envelope records as its provenance cannot drift apart.
+        etag_key=source_ref(season, week),
     )
     async for row in rows:
         if rows_kept > MAX_ROWS:
