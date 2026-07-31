@@ -210,6 +210,53 @@ jobs:
             kubectl rollout status "deployment/$svc" --timeout=120s
           done
 
+      # The collector that publishes the fleet's scope lists ships
+      # CAPTURE_ENABLED=false (its upstream is a ~37 MB weekly document, and
+      # this cluster is rebuilt on every run — see that collector's own Helm
+      # values), so no scope envelope ever reaches the lake here, and every
+      # collector that narrows against it then *correctly* fails closed: no
+      # scope means no fetch and zero upstream calls. That is right behaviour
+      # that reads as a broken integration test. Enabling that capture in CI
+      # and having this step POST /refresh were both rejected — the latter
+      # reaches the real upstream regardless of CAPTURE_ENABLED, which is
+      # exactly why its values file says the smoke test must not. Seeding a
+      # fixture is what lets that decision stand while still exercising the
+      # narrowed path. (No collector is named here on purpose —
+      # tests/test_collector_tooling.py fails this file if one is; see that
+      # test's docstring.)
+      - name: Seed a scope fixture into the lake
+        run: |
+          # MinIO's in-cluster DNS name (what every collector's own
+          # LAKE_ENDPOINT_URL points at) is not reachable directly from this
+          # container: it sits on the cluster's pod network, and this
+          # container is only bridged to the Kind control-plane node's own
+          # network interface (see "Fix kubeconfig for container networking"
+          # above). kubectl port-forward tunnels through the API server
+          # instead, the same way scripts/smoke-test.sh reaches every
+          # in-cluster service from this same container.
+          kubectl port-forward -n monitoring svc/minio 9000:9000 &
+          PF_PID=$!
+          trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
+          sleep 3
+
+          # Credentials match scripts/deploy-local.py's LOCAL_LAKE_ACCESS_KEY /
+          # LOCAL_LAKE_SECRET_KEY — the same values infra/grafana-stack/values/
+          # minio.yaml's rootUser/rootPassword seed MinIO with. Kind-only,
+          # committed deliberately, same as the collector bearer token.
+          #
+          # --with ./libs/collector-core, not --with boto3 alone: the script
+          # builds its envelopes through collector_core.envelope and writes
+          # them through collector_core.lake rather than a second, hand-rolled
+          # implementation of either, and collector-core already declares
+          # boto3 as its own runtime dependency, so this pulls both in.
+          LAKE_BUCKET=foundry-signals \
+          LAKE_ENDPOINT_URL=http://localhost:9000 \
+          AWS_ACCESS_KEY_ID=foundry \
+          AWS_SECRET_ACCESS_KEY=foundry-local-dev \
+          AWS_DEFAULT_REGION=us-east-1 \
+          uv run --no-project --with ./libs/collector-core python3 \
+            scripts/seed-scope-fixture.py --season 2026 --week 1 --lake
+
       - name: Smoke test services
         run: bash scripts/smoke-test.sh
 
