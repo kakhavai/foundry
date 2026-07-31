@@ -44,20 +44,73 @@ class ScopeClient:
         self._lake = lake
 
     async def fetch(self, signal_type: str, season: int, week: int) -> Scope:
-        keys = await alist_keys(self._lake, SCOPE_COLLECTOR, signal_type, season, week)
-        if not keys:
-            raise ScopeUnavailable("scope_unavailable")
+        """The newest usable scope for `week`, falling back to `week - 1`.
 
-        # `list_keys` returns captured_at order, so the newest is last.
-        envelope = await aread(self._lake, keys[-1])
-        members = frozenset(
-            row["player_id"] for row in envelope["signals"] if row.get("player_id")
-        )
-        if not members:
-            raise ScopeUnavailable("scope_empty")
+        `roster-scope`'s cadence is weekly; a collector calling this can run
+        hourly-to-volatile. Without the fallback, every week rollover fails
+        every collector closed until the new week's capture lands -- even
+        though last week's scope is sitting right there in the lake and is
+        ~99% correct. `roster_scope.scope.load_previous_scope` already
+        solves the identical problem for the version ledger; this mirrors
+        its two-candidate shape (`week`, then `week - 1`, never further --
+        two weeks stale is a different judgement than one, and is left to
+        raise rather than silently reached for).
 
-        return Scope(
-            members=members,
-            captured_at=_parse_captured_at(envelope["captured_at"]),
-            signal_type=signal_type,
-        )
+        A candidate is skipped, not just an absent partition: a total
+        capture failure still writes a `present: 0` envelope for the
+        *current* week (see `roster_scope.capture.capture_scope`'s
+        ledger-unavailable path), so an envelope that exists but resolved
+        zero members must fall back exactly like a missing one does, or the
+        fallback would never fire for the failure mode it exists for.
+
+        The raised reason describes `week`'s own state, not `week - 1`'s --
+        an operator debugging "why did this collector narrow to nothing"
+        wants to know what happened to the week they asked for, not that the
+        fallback also came up empty.
+
+        `Scope.captured_at` on a fallback result is `week - 1`'s, which is
+        what makes the fallback visible: `age_seconds(now)` reads roughly a
+        week rather than however stale the scope would read on a healthy
+        capture, with no separate flag required to know a fallback happened.
+        """
+        reason = "scope_unavailable"
+        for candidate_week in (week, week - 1):
+            if candidate_week < 1:
+                continue
+
+            keys = await alist_keys(
+                self._lake, SCOPE_COLLECTOR, signal_type, season, candidate_week
+            )
+            if not keys:
+                continue
+
+            # `list_keys` returns captured_at order, so the newest is last.
+            envelope = await aread(self._lake, keys[-1])
+            members = frozenset(
+                row["player_id"]
+                for row in envelope["signals"]
+                if row.get("player_id")
+                # `grace` is intended: it is exactly the "keep fetching for
+                # someone who fell out this week" state `GRACE_WEEKS` exists
+                # for. `excluded` is not -- `roster_scope.scope._carry_forward`
+                # emits an `excluded` row exactly once, in the version where
+                # the departure happens, specifically to ANNOUNCE it, and a
+                # collector reading it as still-in-scope would keep fetching
+                # for a player who is gone. Rows with no `membership_status`
+                # at all (every `scope_matchup_weekly` row) are unaffected --
+                # `.get(...)` reads as `None`, which never equals the literal
+                # string, so this only ever drops a genuinely `excluded` row.
+                if row.get("membership_status") != "excluded"
+            )
+            if not members:
+                if candidate_week == week:
+                    reason = "scope_empty"
+                continue
+
+            return Scope(
+                members=members,
+                captured_at=_parse_captured_at(envelope["captured_at"]),
+                signal_type=signal_type,
+            )
+
+        raise ScopeUnavailable(reason)
