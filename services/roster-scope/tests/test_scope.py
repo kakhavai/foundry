@@ -3,7 +3,11 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from collector_core.coverage import CoverageAccumulator
+from collector_core.coverage import (
+    ERRORS_TRUNCATED,
+    MAX_ERRORS,
+    CoverageAccumulator,
+)
 
 from roster_scope.adapters.depth_chart import (
     DepthChart,
@@ -254,8 +258,13 @@ async def test_total_outage_flows_through_the_same_loop():
     assert round(coverage.ratio, 3) == 0.077
     assert len(rows) == 32
     assert {r["entity_type"] for r in rows} == {"team_defense"}
-    assert len(acc.errors) == 384
-    assert {e["reason"] for e in acc.errors} == {"depth_chart_unavailable"}
+    # 384 failures, capped to 50 plus a marker that states the true total.
+    # The coverage numbers above are the accounting; `errors` is the sample.
+    assert len(acc.errors) == MAX_ERRORS + 1
+    assert {e["reason"] for e in acc.errors[:MAX_ERRORS]} == {"depth_chart_unavailable"}
+    assert acc.errors[-1]["reason"] == ERRORS_TRUNCATED
+    assert acc.errors[-1]["total"] == 384
+    assert acc.errors[-1]["omitted"] == 384 - MAX_ERRORS
 
 
 async def test_team_defense_slots_are_config_derived_and_deterministic():
@@ -277,9 +286,11 @@ async def test_the_deadline_truncates_and_records_the_rest():
     coverage = acc.result()
     assert coverage.present == 26, "two teams x 13 slots resolved before the deadline"
     assert len(rows) == 26
-    reasons = {e["reason"] for e in acc.errors}
-    assert reasons == {"deadline_exceeded"}
-    assert len(acc.errors) == 390
+    assert {e["reason"] for e in acc.errors[:MAX_ERRORS]} == {"deadline_exceeded"}
+    assert len(acc.errors) == MAX_ERRORS + 1
+    assert acc.errors[-1]["total"] == 390
+    # Truncating the *sample* must not truncate the *accounting*.
+    assert len(coverage.missing) == 390
 
 
 async def test_a_manual_override_fills_the_slot_and_is_recorded(monkeypatch):

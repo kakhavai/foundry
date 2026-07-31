@@ -1,23 +1,26 @@
 """Tests for scripts/argocd-deploy.py."""
 
-import sys
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 import base64
 import importlib.util
+import sys
 from itertools import cycle
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 # Import argocd-deploy.py (hyphenated) as a module
 scripts_dir = Path(__file__).parent.parent / "scripts"
-spec = importlib.util.spec_from_file_location("argocd_deploy", scripts_dir / "argocd-deploy.py")
+spec = importlib.util.spec_from_file_location(
+    "argocd_deploy", scripts_dir / "argocd-deploy.py"
+)
 ad = importlib.util.module_from_spec(spec)
 sys.modules["argocd_deploy"] = ad
 spec.loader.exec_module(ad)
 
 
 # ── discover_services ─────────────────────────────────────────────────────────
+
 
 def test_discover_services_returns_sorted_dirs(tmp_path):
     for name in ["weather", "player-projections"]:
@@ -42,6 +45,7 @@ def test_discover_services_ignores_files(tmp_path):
 
 # ── app_name ──────────────────────────────────────────────────────────────────
 
+
 def test_app_name_local():
     assert ad.app_name("weather", "local") == "weather"
 
@@ -55,6 +59,7 @@ def test_app_name_prod():
 
 
 # ── write_tag ─────────────────────────────────────────────────────────────────
+
 
 def test_write_tag_creates_new_file(tmp_path):
     f = tmp_path / "values.yaml"
@@ -79,6 +84,7 @@ def test_write_tag_creates_parent_dirs(tmp_path):
 
 # ── read_tag ──────────────────────────────────────────────────────────────────
 
+
 def test_read_tag_returns_value(tmp_path):
     f = tmp_path / "values.yaml"
     f.write_text('image:\n  tag: "abc123"\n')
@@ -99,9 +105,13 @@ def test_read_tag_no_tag_key_exits(tmp_path):
 
 # ── argo_values_file ──────────────────────────────────────────────────────────
 
+
 def test_argo_values_file_env_specific_when_exists(tmp_path):
     (tmp_path / "values-staging.yaml").write_text("")
-    assert ad.argo_values_file("staging", argo_dir=tmp_path) == tmp_path / "values-staging.yaml"
+    assert (
+        ad.argo_values_file("staging", argo_dir=tmp_path)
+        == tmp_path / "values-staging.yaml"
+    )
 
 
 def test_argo_values_file_falls_back_to_default(tmp_path):
@@ -110,6 +120,7 @@ def test_argo_values_file_falls_back_to_default(tmp_path):
 
 
 # ── subprocess helpers ────────────────────────────────────────────────────────
+
 
 def test_kubectl_capture_passes_context():
     with patch("subprocess.run") as mock:
@@ -147,61 +158,89 @@ def test_argo_password_returns_placeholder_on_failure():
 
 # ── poll_applications ─────────────────────────────────────────────────────────
 
+
 def test_poll_applications_returns_true_when_all_healthy():
-    with patch("argocd_deploy.kubectl_capture", return_value=(0, "Synced,Healthy")):
-        with patch("time.sleep"):
-            result = ad.poll_applications(["weather"], "local", None, timeout=30, poll_interval=1)
+    with (
+        patch("argocd_deploy.kubectl_capture", return_value=(0, "Synced,Healthy")),
+        patch("time.sleep"),
+    ):
+        result = ad.poll_applications(
+            ["weather"], "local", None, timeout=30, poll_interval=1
+        )
     assert result is True
 
 
 def test_poll_applications_returns_false_on_timeout():
     call_count = 0
+
     def fake_time():
         nonlocal call_count
         call_count += 1
         return 0 if call_count == 1 else 31  # immediate timeout on second call
 
-    with patch("argocd_deploy.kubectl_capture", return_value=(0, "OutOfSync,Progressing")):
-        with patch("time.sleep"):
-            with patch("time.time", side_effect=fake_time):
-                result = ad.poll_applications(["weather"], "local", None, timeout=30, poll_interval=1)
+    with (
+        patch(
+            "argocd_deploy.kubectl_capture", return_value=(0, "OutOfSync,Progressing")
+        ),
+        patch("time.sleep"),
+        patch("time.time", side_effect=fake_time),
+    ):
+        result = ad.poll_applications(
+            ["weather"], "local", None, timeout=30, poll_interval=1
+        )
     assert result is False
 
 
 def test_poll_applications_all_services_must_be_healthy():
     # Cycle through responses: one always healthy, one always unhealthy
-    responses = cycle([
-        (0, "Synced,Healthy"),
-        (0, "OutOfSync,Progressing"),
-    ])
+    responses = cycle(
+        [
+            (0, "Synced,Healthy"),
+            (0, "OutOfSync,Progressing"),
+        ]
+    )
     call_count = 0
+
     def fake_time():
         nonlocal call_count
         call_count += 1
         return 0 if call_count <= 3 else 31
 
-    with patch("argocd_deploy.kubectl_capture", side_effect=lambda *a, **kw: next(responses)):
-        with patch("time.sleep"):
-            with patch("time.time", side_effect=fake_time):
-                result = ad.poll_applications(
-                    ["weather", "player-projections"], "local", None, timeout=30, poll_interval=1
-                )
+    with (
+        patch(
+            "argocd_deploy.kubectl_capture",
+            side_effect=lambda *a, **kw: next(responses),
+        ),
+        patch("time.sleep"),
+        patch("time.time", side_effect=fake_time),
+    ):
+        result = ad.poll_applications(
+            ["weather", "player-projections"],
+            "local",
+            None,
+            timeout=30,
+            poll_interval=1,
+        )
     assert result is False
 
 
 def test_poll_applications_uses_app_name_per_env():
     captured_names = []
+
     def fake_capture(*args, **kwargs):
         captured_names.append(args[2])
         return (0, "Synced,Healthy")
 
-    with patch("argocd_deploy.kubectl_capture", side_effect=fake_capture):
-        with patch("time.sleep"):
-            ad.poll_applications(["weather"], "staging", None, timeout=30, poll_interval=1)
+    with (
+        patch("argocd_deploy.kubectl_capture", side_effect=fake_capture),
+        patch("time.sleep"),
+    ):
+        ad.poll_applications(["weather"], "staging", None, timeout=30, poll_interval=1)
     assert captured_names[0] == "weather-staging"
 
 
 # ── git_commit_and_push ───────────────────────────────────────────────────────
+
 
 def test_git_commit_and_push_stages_commits_and_pushes(tmp_path):
     f = tmp_path / "values.yaml"
@@ -228,59 +267,101 @@ def test_git_commit_and_push_exits_on_commit_failure(tmp_path):
             ad.git_commit_and_push([f], "chore: update tag")
 
 
-# ── ensure_application_manifest ───────────────────────────────────────────────
-
-def test_ensure_application_manifest_local_returns_none(tmp_path):
-    result = ad.ensure_application_manifest("weather", "local", argo_manifests_dir=tmp_path)
-    assert result is None
-
-
-def test_ensure_application_manifest_existing_returns_none(tmp_path):
-    (tmp_path / "weather-staging.yaml").write_text("existing")
-    result = ad.ensure_application_manifest("weather", "staging", argo_manifests_dir=tmp_path)
-    assert result is None
-    assert (tmp_path / "weather-staging.yaml").read_text() == "existing"
-
-
-def test_ensure_application_manifest_creates_env_manifest(tmp_path):
-    (tmp_path / "weather.yaml").write_text(
-        "apiVersion: argoproj.io/v1alpha1\n"
-        "kind: Application\n"
-        "metadata:\n"
-        "  name: weather\n"
-        "  namespace: argocd\n"
-        "spec:\n"
-        "  source:\n"
-        "    helm:\n"
-        "      valueFiles:\n"
-        "        - /infra/gitops/envs/local/weather/values.yaml\n"
-    )
-    result = ad.ensure_application_manifest("weather", "staging", argo_manifests_dir=tmp_path)
-    assert result == tmp_path / "weather-staging.yaml"
-    content = result.read_text()
-    assert "name: weather-staging" in content
-    assert "/infra/gitops/envs/staging/weather/values.yaml" in content
-    assert "/infra/gitops/envs/local/" not in content
+# ── require_promotion_target ──────────────────────────────────────────────────
+#
+# These replace a `ensure_application_manifest` block that PASSED against a tree
+# it no longer described. It fixtured `infra/gitops/argo/weather.yaml` into a
+# tmpdir and asserted the copy-and-rewrite worked — but Wave 0 deleted every
+# per-service Application manifest, so the source it fixtured does not exist and
+# `promote --to staging|prod` died on "source manifest not found: .../weather.yaml".
+# `tests/test_service_ci_coverage.py`'s
+# `test_argo_directory_holds_only_the_app_of_apps_and_the_set` is the test that
+# proves the deletion, and it is green — the two could not both be describing
+# the same repository.
 
 
-def test_ensure_application_manifest_missing_source_exits(tmp_path):
+def test_promotion_target_is_the_argo_directory_the_repo_actually_has():
+    """The tree fact the old tests contradicted, asserted here so this file
+    cannot drift from it again: there is no per-service source manifest to copy,
+    and the ApplicationSet that replaced them is present."""
+    argo_dir = Path(ad.__file__).parent.parent / "infra" / "gitops" / "argo"
+    found = sorted(p.name for p in argo_dir.glob("*.yaml"))
+    assert found == ["app-of-apps.yaml", "applicationset.yaml"], found
+    assert ad.APPLICATIONSET.exists()
+
+
+def test_require_promotion_target_allows_local():
+    assert ad.require_promotion_target("weather", "local") is None
+
+
+def test_require_promotion_target_refuses_staging_and_says_why(capsys):
+    with pytest.raises(SystemExit) as exc:
+        ad.require_promotion_target("weather", "staging")
+    assert exc.value.code == 1
+
+    out = capsys.readouterr().out
+    # The message has to name the thing that replaced the manifests, or the
+    # next reader repeats the "someone forgot a file" diagnosis this fixes.
+    assert "applicationset.yaml" in out
+    assert "deleted deliberately" in out
+    assert "Nothing was written and nothing was committed." in out
+    assert "weather" in out and "staging" in out
+    # And it must NOT claim a file is missing.
+    assert "source manifest not found" not in out
+
+
+def test_require_promotion_target_refuses_prod(capsys):
     with pytest.raises(SystemExit):
-        ad.ensure_application_manifest("unknown-svc", "staging", argo_manifests_dir=tmp_path)
+        ad.require_promotion_target("player-projections", "prod")
+    assert "applicationset.yaml" in capsys.readouterr().out
+
+
+def test_require_promotion_target_refuses_every_non_generated_env(capsys):
+    """`all(...)` over an empty collection is True, so the count is asserted
+    alongside it."""
+    envs = ["staging", "prod"]
+    assert len(envs) == 2
+    refused = []
+    for env in envs:
+        with pytest.raises(SystemExit):
+            ad.require_promotion_target("weather", env)
+        refused.append(env)
+    capsys.readouterr()
+    assert len(refused) == len(envs)
+    assert all(env not in ad.GENERATED_ENVS for env in refused)
+
+
+def test_generated_envs_matches_the_applicationset_template():
+    """The refusal is only honest while the ApplicationSet really is local-only.
+    If somebody makes it env-aware and forgets this constant, this fails rather
+    than leaving `promote` refusing a target that now exists."""
+    text = ad.APPLICATIONSET.read_text()
+    assert "/infra/gitops/envs/local/{{.path.basename}}/values.yaml" in text
+    assert list(ad.GENERATED_ENVS) == ["local"]
+
+
+def test_ensure_application_manifest_is_gone():
+    """It wrote per-service Application manifests. Wave 0 made those a
+    regression; a caller reintroducing the helper should not compile."""
+    assert not hasattr(ad, "ensure_application_manifest")
 
 
 # ── cmd_install ───────────────────────────────────────────────────────────────
+
 
 def _make_install_args(env="local", context=None):
     return type("Args", (), {"env": env, "context": context})()
 
 
 def test_cmd_install_calls_helmfile_and_kubectl(tmp_path):
-    with patch("argocd_deploy.helmfile_run") as mock_helm, \
-         patch("argocd_deploy.kubectl_run") as mock_kubectl, \
-         patch("argocd_deploy.poll_applications", return_value=True), \
-         patch("argocd_deploy.discover_services", return_value=["weather"]), \
-         patch("argocd_deploy.argo_password", return_value="pwd"), \
-         patch("argocd_deploy.argo_values_file", return_value=tmp_path / "values.yaml"):
+    with (
+        patch("argocd_deploy.helmfile_run") as mock_helm,
+        patch("argocd_deploy.kubectl_run") as mock_kubectl,
+        patch("argocd_deploy.poll_applications", return_value=True),
+        patch("argocd_deploy.discover_services", return_value=["weather"]),
+        patch("argocd_deploy.argo_password", return_value="pwd"),
+        patch("argocd_deploy.argo_values_file", return_value=tmp_path / "values.yaml"),
+    ):
         ad.cmd_install(_make_install_args())
     assert mock_helm.call_count >= 2  # repos + apply
     kubectl_calls = [str(c) for c in mock_kubectl.call_args_list]
@@ -289,16 +370,19 @@ def test_cmd_install_calls_helmfile_and_kubectl(tmp_path):
 
 
 def test_cmd_install_exits_on_sync_timeout():
-    with patch("argocd_deploy.helmfile_run"), \
-         patch("argocd_deploy.kubectl_run"), \
-         patch("argocd_deploy.poll_applications", return_value=False), \
-         patch("argocd_deploy.discover_services", return_value=["weather"]), \
-         patch("argocd_deploy.argo_values_file", return_value=Path("values.yaml")):
-        with pytest.raises(SystemExit):
-            ad.cmd_install(_make_install_args())
+    with (
+        patch("argocd_deploy.helmfile_run"),
+        patch("argocd_deploy.kubectl_run"),
+        patch("argocd_deploy.poll_applications", return_value=False),
+        patch("argocd_deploy.discover_services", return_value=["weather"]),
+        patch("argocd_deploy.argo_values_file", return_value=Path("values.yaml")),
+        pytest.raises(SystemExit),
+    ):
+        ad.cmd_install(_make_install_args())
 
 
 # ── cmd_verify ────────────────────────────────────────────────────────────────
+
 
 def _make_verify_args(env="local", context=None):
     return type("Args", (), {"env": env, "context": context})()
@@ -307,12 +391,14 @@ def _make_verify_args(env="local", context=None):
 def test_cmd_verify_passes_when_all_healthy():
     pod_output = "argocd-server-xxx   1/1   Running   0   5m"
     app_output = "Synced,Healthy,2026-06-10T00:00:00Z"
-    with patch("argocd_deploy.kubectl_capture") as mock_capture, \
-         patch("argocd_deploy.discover_services", return_value=["weather"]):
+    with (
+        patch("argocd_deploy.kubectl_capture") as mock_capture,
+        patch("argocd_deploy.discover_services", return_value=["weather"]),
+    ):
         mock_capture.side_effect = [
-            (0, pod_output),           # get pods
-            (0, ""),                   # annotate refresh
-            (0, app_output),           # get application status
+            (0, pod_output),  # get pods
+            (0, ""),  # annotate refresh
+            (0, app_output),  # get application status
         ]
         ad.cmd_verify(_make_verify_args())  # should not raise
 
@@ -325,19 +411,23 @@ def test_cmd_verify_exits_when_pods_not_running():
 
 
 def test_cmd_verify_exits_when_kubectl_unreachable():
-    with patch("argocd_deploy.kubectl_capture", return_value=(1, "")):
-        with pytest.raises(SystemExit):
-            ad.cmd_verify(_make_verify_args())
+    with (
+        patch("argocd_deploy.kubectl_capture", return_value=(1, "")),
+        pytest.raises(SystemExit),
+    ):
+        ad.cmd_verify(_make_verify_args())
 
 
 def test_cmd_verify_exits_when_app_not_synced():
     pod_output = "argocd-server-xxx   1/1   Running   0   5m"
-    with patch("argocd_deploy.kubectl_capture") as mock_capture, \
-         patch("argocd_deploy.discover_services", return_value=["weather"]):
+    with (
+        patch("argocd_deploy.kubectl_capture") as mock_capture,
+        patch("argocd_deploy.discover_services", return_value=["weather"]),
+    ):
         mock_capture.side_effect = [
             (0, pod_output),
-            (0, ""),                            # annotate
-            (0, "OutOfSync,Degraded,"),         # get application
+            (0, ""),  # annotate
+            (0, "OutOfSync,Degraded,"),  # get application
         ]
         with pytest.raises(SystemExit):
             ad.cmd_verify(_make_verify_args())
@@ -345,88 +435,146 @@ def test_cmd_verify_exits_when_app_not_synced():
 
 # ── cmd_promote ───────────────────────────────────────────────────────────────
 
-def _make_promote_args(service="weather", from_env="local", to_env="staging", context=None, timeout=300):
-    return type("Args", (), {
-        "service": service, "from_env": from_env, "to_env": to_env,
-        "context": context, "timeout": timeout,
-    })()
+
+def _make_promote_args(
+    service="weather", from_env="local", to_env="staging", context=None, timeout=300
+):
+    return type(
+        "Args",
+        (),
+        {
+            "service": service,
+            "from_env": from_env,
+            "to_env": to_env,
+            "context": context,
+            "timeout": timeout,
+        },
+    )()
+
+
+def _seeded_gitops(tmp_path, env="local", service="weather", tag="sha123"):
+    """A gitops root holding one env's values file for one service."""
+    values = tmp_path / "envs" / env / service / "values.yaml"
+    values.parent.mkdir(parents=True)
+    values.write_text(f'image:\n  tag: "{tag}"\n')
+    return values
 
 
 def test_cmd_promote_copies_tag_and_commits(tmp_path):
-    from_file = tmp_path / "envs" / "local" / "weather" / "values.yaml"
-    from_file.parent.mkdir(parents=True)
-    from_file.write_text('image:\n  tag: "sha123"\n')
+    """The only promotion with a generated Application behind it: into `local`.
+    Every other env refuses — see the require_promotion_target tests."""
+    _seeded_gitops(tmp_path, env="prod")
 
-    with patch("argocd_deploy.GITOPS_ROOT", tmp_path), \
-         patch("argocd_deploy.ARGO_MANIFESTS_DIR", tmp_path / "argo"), \
-         patch("argocd_deploy.git_commit_and_push") as mock_git, \
-         patch("argocd_deploy.poll_applications", return_value=True), \
-         patch("argocd_deploy.ensure_application_manifest", return_value=None):
-        ad.cmd_promote(_make_promote_args())
+    with (
+        patch("argocd_deploy.GITOPS_ROOT", tmp_path),
+        patch("argocd_deploy.git_commit_and_push") as mock_git,
+        patch("argocd_deploy.poll_applications", return_value=True),
+    ):
+        ad.cmd_promote(_make_promote_args(from_env="prod", to_env="local"))
 
     mock_git.assert_called_once()
     committed_files = mock_git.call_args[0][0]
     msg = mock_git.call_args[0][1]
-    assert any("staging" in str(f) for f in committed_files)
+    assert len(committed_files) == 1, (
+        "a promotion commits the image tag and nothing else — the Application "
+        "is generated by the ApplicationSet, never written here"
+    )
+    assert "envs" in str(committed_files[0]) and "local" in str(committed_files[0])
     assert "sha123" in msg
 
-    to_file = tmp_path / "envs" / "staging" / "weather" / "values.yaml"
+    to_file = tmp_path / "envs" / "local" / "weather" / "values.yaml"
     assert to_file.exists()
     assert 'tag: "sha123"' in to_file.read_text()
 
 
 def test_cmd_promote_exits_on_sync_timeout(tmp_path):
-    from_file = tmp_path / "envs" / "local" / "weather" / "values.yaml"
-    from_file.parent.mkdir(parents=True)
-    from_file.write_text('image:\n  tag: "sha123"\n')
+    _seeded_gitops(tmp_path, env="prod")
 
-    with patch("argocd_deploy.GITOPS_ROOT", tmp_path), \
-         patch("argocd_deploy.ARGO_MANIFESTS_DIR", tmp_path / "argo"), \
-         patch("argocd_deploy.git_commit_and_push"), \
-         patch("argocd_deploy.poll_applications", return_value=False), \
-         patch("argocd_deploy.ensure_application_manifest", return_value=None):
-        with pytest.raises(SystemExit):
-            ad.cmd_promote(_make_promote_args())
+    with (
+        patch("argocd_deploy.GITOPS_ROOT", tmp_path),
+        patch("argocd_deploy.git_commit_and_push"),
+        patch("argocd_deploy.poll_applications", return_value=False),
+        pytest.raises(SystemExit),
+    ):
+        ad.cmd_promote(_make_promote_args(from_env="prod", to_env="local"))
+
+
+def test_cmd_promote_to_staging_writes_nothing_and_commits_nothing(tmp_path, capsys):
+    """The regression, at the level a user hits it.
+
+    Before: `promote weather --from local --to staging` died on
+    "Error: source manifest not found: infra/gitops/argo/weather.yaml" — a file
+    Wave 0 deleted on purpose. Now it refuses with the reason, and — as before,
+    but now asserted — leaves the working tree untouched."""
+    _seeded_gitops(tmp_path)
+
+    with (
+        patch("argocd_deploy.GITOPS_ROOT", tmp_path),
+        patch("argocd_deploy.git_commit_and_push") as mock_git,
+        patch("argocd_deploy.poll_applications", return_value=True) as mock_poll,
+        pytest.raises(SystemExit),
+    ):
+        ad.cmd_promote(_make_promote_args(to_env="staging"))
+
+    mock_git.assert_not_called()
+    mock_poll.assert_not_called()
+    assert not (tmp_path / "envs" / "staging" / "weather" / "values.yaml").exists()
+    assert not list(tmp_path.glob("argo/*.yaml"))
+    assert "applicationset.yaml" in capsys.readouterr().out
 
 
 def test_cmd_promote_exits_when_from_equals_to():
-    with patch("argocd_deploy.git_commit_and_push") as mock_git:
-        with pytest.raises(SystemExit):
-            ad.cmd_promote(_make_promote_args(from_env="prod", to_env="prod"))
+    with (
+        patch("argocd_deploy.git_commit_and_push") as mock_git,
+        pytest.raises(SystemExit),
+    ):
+        ad.cmd_promote(_make_promote_args(from_env="prod", to_env="prod"))
     mock_git.assert_not_called()
 
 
 # ── cmd_watch ─────────────────────────────────────────────────────────────────
 
+
 def _make_watch_args(service="weather", env="local", context=None, timeout=180):
-    return type("Args", (), {"service": service, "env": env, "context": context, "timeout": timeout})()
+    return type(
+        "Args",
+        (),
+        {"service": service, "env": env, "context": context, "timeout": timeout},
+    )()
 
 
 def test_cmd_watch_exits_zero_when_healthy():
-    with patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run, \
-         patch("argocd_deploy.poll_applications", return_value=True):
+    with (
+        patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
+        patch("argocd_deploy.poll_applications", return_value=True),
+    ):
         ad.cmd_watch(_make_watch_args())
     rollout_calls = [c for c in mock_run.call_args_list if "rollout" in str(c)]
     assert len(rollout_calls) >= 1
 
 
 def test_cmd_watch_exits_nonzero_when_app_not_healthy():
-    with patch("subprocess.run", return_value=MagicMock(returncode=0)), \
-         patch("argocd_deploy.poll_applications", return_value=False):
-        with pytest.raises(SystemExit):
-            ad.cmd_watch(_make_watch_args())
+    with (
+        patch("subprocess.run", return_value=MagicMock(returncode=0)),
+        patch("argocd_deploy.poll_applications", return_value=False),
+        pytest.raises(SystemExit),
+    ):
+        ad.cmd_watch(_make_watch_args())
 
 
 def test_cmd_watch_polls_application_as_authoritative_gate():
     # Even when the rollout step exits non-zero, a Synced+Healthy Application
     # means success — the Argo CD poll is the gate, not the rollout exit code.
-    with patch("subprocess.run", return_value=MagicMock(returncode=1)), \
-         patch("argocd_deploy.poll_applications", return_value=True) as mock_poll:
+    with (
+        patch("subprocess.run", return_value=MagicMock(returncode=1)),
+        patch("argocd_deploy.poll_applications", return_value=True) as mock_poll,
+    ):
         ad.cmd_watch(_make_watch_args())
     mock_poll.assert_called_once()
 
 
 # ── cmd_ui ────────────────────────────────────────────────────────────────────
+
 
 def _make_ui_args(context=None, port=8080):
     return type("Args", (), {"context": context, "port": port})()
@@ -434,15 +582,18 @@ def _make_ui_args(context=None, port=8080):
 
 def test_cmd_ui_starts_portforward_and_prints_credentials():
     sleep_count = 0
+
     def fake_sleep(duration):
         nonlocal sleep_count
         sleep_count += 1
         if sleep_count > 1:  # First sleep is OK, second raises
             raise KeyboardInterrupt()
 
-    with patch("subprocess.Popen") as mock_popen, \
-         patch("argocd_deploy.argo_password", return_value="testpwd"), \
-         patch("time.sleep", side_effect=fake_sleep):
+    with (
+        patch("subprocess.Popen") as mock_popen,
+        patch("argocd_deploy.argo_password", return_value="testpwd"),
+        patch("time.sleep", side_effect=fake_sleep),
+    ):
         mock_proc = MagicMock()
         mock_popen.return_value = mock_proc
         ad.cmd_ui(_make_ui_args())
@@ -456,6 +607,7 @@ def test_cmd_ui_starts_portforward_and_prints_credentials():
 
 
 # ── CLI wiring ────────────────────────────────────────────────────────────────
+
 
 def test_parser_install_defaults():
     parser = ad.build_parser()
@@ -473,7 +625,9 @@ def test_parser_install_env_and_context():
 
 def test_parser_promote_required_args():
     parser = ad.build_parser()
-    args = parser.parse_args(["promote", "weather", "--from", "local", "--to", "staging"])
+    args = parser.parse_args(
+        ["promote", "weather", "--from", "local", "--to", "staging"]
+    )
     assert args.service == "weather"
     assert args.from_env == "local"
     assert args.to_env == "staging"

@@ -1,34 +1,26 @@
-"""Local deploy: docker build → kind load → helm upgrade for a given service."""
+"""Local deploy: docker build → kind load → helm upgrade for a given service.
+
+The service list is not kept here. It is derived from
+`contracts/collector-registry.yaml` plus each service's Helm values by
+`scripts/collectors.py` — see that module's docstring for why the deployment
+facts are read out of the artifact Kubernetes applies rather than copied into
+a second list. Adding a collector means appending a registry entry; this file
+does not change.
+
+Needs PyYAML, via scripts/collectors.py. The CI runner image ships a bare
+python3, so CI invokes it as:
+
+    uv run --no-project --with pyyaml==6.0.3 python3 scripts/deploy-local.py <name>
+"""
 
 import os
 import subprocess
 import sys
+from pathlib import Path
 
-SERVICES = {
-    "weather": {
-        "port": 8000,
-        "secret": "weather-collector-token",
-        "lake_secret": "weather-lake-credentials",
-        # weather is a uv workspace member depending on libs/collector-core/
-        # by path, so the build needs the repo root in its context. Future
-        # collectors that consume collector-core inherit this same value.
-        "build_context_root": True,
-    },
-    "player-projections": {"port": 8001},
-    "player-identity": {
-        "port": 8002,
-        "secret": "player-identity-collector-token",
-        "lake_secret": "player-identity-lake-credentials",
-        "build_context_root": True,
-    },
-    "roster-scope": {
-        "port": 8003,
-        "secret": "roster-scope-collector-token",
-        "lake_secret": "roster-scope-lake-credentials",
-        # Also a uv workspace member depending on libs/collector-core/ by path.
-        "build_context_root": True,
-    },
-}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import collectors as fleet  # noqa: E402  (needs the path insert above)
 
 # Kind-only. A real token is created out of band and never enters Git; on EKS
 # the Secret is backed by AWS Secrets Manager.
@@ -45,7 +37,7 @@ _BUILD_ENV = {**os.environ, "DOCKER_BUILDKIT": "1"}
 
 def run(cmd: list[str], env: dict | None = None) -> None:
     print(f"\n$ {' '.join(str(c) for c in cmd)}")
-    result = subprocess.run(cmd, env=env)
+    result = subprocess.run(cmd, check=False, env=env)
     if result.returncode != 0:
         sys.exit(result.returncode)
 
@@ -53,6 +45,7 @@ def run(cmd: list[str], env: dict | None = None) -> None:
 def deployment_exists(service: str) -> bool:
     result = subprocess.run(
         ["kubectl", "get", "deployment", service],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -66,12 +59,12 @@ def run_piped(render_cmd: list[str], apply_cmd: list[str]) -> None:
     apply -f -`, which is idempotent across every deploy after the first,
     unlike `kubectl create secret` alone.
     """
-    rendered = subprocess.run(render_cmd, capture_output=True, text=True)
+    rendered = subprocess.run(render_cmd, check=False, capture_output=True, text=True)
     if rendered.returncode != 0:
         print(rendered.stderr)
         sys.exit(rendered.returncode)
 
-    applied = subprocess.run(apply_cmd, input=rendered.stdout, text=True)
+    applied = subprocess.run(apply_cmd, check=False, input=rendered.stdout, text=True)
     if applied.returncode != 0:
         sys.exit(applied.returncode)
 
@@ -81,9 +74,15 @@ def ensure_collector_secret(name: str) -> None:
     print(f"\n$ kubectl create secret generic {name} | kubectl apply -f -")
     run_piped(
         [
-            "kubectl", "create", "secret", "generic", name,
+            "kubectl",
+            "create",
+            "secret",
+            "generic",
+            name,
             f"--from-literal=token={LOCAL_DEV_TOKEN}",
-            "--dry-run=client", "-o", "yaml",
+            "--dry-run=client",
+            "-o",
+            "yaml",
         ],
         ["kubectl", "apply", "-f", "-"],
     )
@@ -94,61 +93,101 @@ def ensure_lake_secret(name: str) -> None:
     print(f"\n$ kubectl create secret generic {name} | kubectl apply -f -")
     run_piped(
         [
-            "kubectl", "create", "secret", "generic", name,
+            "kubectl",
+            "create",
+            "secret",
+            "generic",
+            name,
             f"--from-literal=access-key-id={LOCAL_LAKE_ACCESS_KEY}",
             f"--from-literal=secret-access-key={LOCAL_LAKE_SECRET_KEY}",
-            "--dry-run=client", "-o", "yaml",
+            "--dry-run=client",
+            "-o",
+            "yaml",
         ],
         ["kubectl", "apply", "-f", "-"],
     )
 
 
 def main() -> None:
+    try:
+        services = fleet.by_name()
+    except fleet.FleetError as exc:
+        print(f"FAIL: {exc}")
+        sys.exit(2)
+
     if len(sys.argv) < 2:
         print("Usage: python scripts/deploy-local.py <service-name>")
-        print(f"Available: {', '.join(SERVICES)}")
+        print(f"Available: {', '.join(services)}")
         sys.exit(1)
 
-    service = sys.argv[1]
-    if service not in SERVICES:
-        print(f"Unknown service: {service}")
-        print(f"Available: {', '.join(SERVICES)}")
+    name = sys.argv[1]
+    if name not in services:
+        print(f"Unknown service: {name}")
+        print(f"Available: {', '.join(services)}")
         sys.exit(1)
 
-    port = SERVICES[service]["port"]
+    service = services[name]
 
     # Checked before the upgrade, because the upgrade is what creates it.
-    already_deployed = deployment_exists(service)
+    already_deployed = deployment_exists(name)
 
-    if SERVICES[service].get("build_context_root"):
+    if service.build_context_root:
+        # Collectors are uv workspace members depending on libs/collector-core/
+        # by path, so the build needs the repo root in its context — and they
+        # all build from ONE Dockerfile. The three build args are the only
+        # things that differ between collectors, and all three are derived:
+        # PACKAGE from the name, PORT from the Helm values file Kubernetes
+        # actually applies, so the port the container listens on cannot drift
+        # from the one the probes dial.
         run(
-            ["docker", "build", "-f", f"services/{service}/Dockerfile",
-             "-t", f"{service}:local", "."],
+            [
+                "docker",
+                "build",
+                "-f",
+                "Dockerfile.collector",
+                "--build-arg",
+                f"SERVICE={name}",
+                "--build-arg",
+                f"PACKAGE={service.package}",
+                "--build-arg",
+                f"PORT={service.port}",
+                "-t",
+                f"{name}:local",
+                ".",
+            ],
             env=_BUILD_ENV,
         )
     else:
         run(
-            ["docker", "build", "-t", f"{service}:local", f"services/{service}/"],
+            ["docker", "build", "-t", f"{name}:local", f"services/{name}/"],
             env=_BUILD_ENV,
         )
-    run(["kind", "load", "docker-image", f"{service}:local", "--name", "foundry"])
+    run(["kind", "load", "docker-image", f"{name}:local", "--name", "foundry"])
 
-    secret = SERVICES[service].get("secret")
-    if secret:
-        ensure_collector_secret(secret)
+    # Both Secret names come from the values file's own secretKeyRefs, so the
+    # Secret created here is by construction the one the pod references.
+    if service.token_secret:
+        ensure_collector_secret(service.token_secret)
+    if service.lake_secret:
+        ensure_lake_secret(service.lake_secret)
 
-    lake_secret = SERVICES[service].get("lake_secret")
-    if lake_secret:
-        ensure_lake_secret(lake_secret)
-
-    run([
-        "helm", "upgrade", "--install", service,
-        "helm/charts/generic-service",
-        "-f", f"helm/values/{service}/values.yaml",
-        "--set", f"image.repository={service}",
-        "--set", "image.tag=local",
-        "--set", "image.pullPolicy=Never",
-    ])
+    run(
+        [
+            "helm",
+            "upgrade",
+            "--install",
+            name,
+            "helm/charts/generic-service",
+            "-f",
+            f"helm/values/{name}/values.yaml",
+            "--set",
+            f"image.repository={name}",
+            "--set",
+            "image.tag=local",
+            "--set",
+            "image.pullPolicy=Never",
+        ]
+    )
 
     # image.tag is pinned to "local" on every deploy, so a rebuilt image (or a
     # just-updated token Secret) produces a byte-identical PodSpec and
@@ -160,13 +199,13 @@ def main() -> None:
     # <label>` matches it and waits for a readiness it will never reach. That is
     # a fresh-cluster CI failure, not a local-dev inconvenience.
     if already_deployed:
-        run(["kubectl", "rollout", "restart", f"deployment/{service}"])
-    run(["kubectl", "rollout", "status", f"deployment/{service}", "--timeout=180s"])
+        run(["kubectl", "rollout", "restart", f"deployment/{name}"])
+    run(["kubectl", "rollout", "status", f"deployment/{name}", "--timeout=180s"])
 
     print(f"\n{'=' * 50}")
-    print(f"Deployed {service}. To access it:\n")
-    print(f"  kubectl port-forward svc/{service} {port}:{port}")
-    print(f"  -> http://localhost:{port}")
+    print(f"Deployed {name}. To access it:\n")
+    print(f"  kubectl port-forward svc/{name} {service.port}:{service.port}")
+    print(f"  -> http://localhost:{service.port}")
     print(f"{'=' * 50}")
 
 

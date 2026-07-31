@@ -8,6 +8,8 @@ real capture — the routes under test never call an upstream themselves, only
 `/refresh` does.
 """
 
+import time
+
 import httpx
 import respx
 from collector_core.envelope import ENVELOPE_VERSION
@@ -52,6 +54,31 @@ def mock_capture_upstreams() -> None:
         return_value=httpx.Response(200, text=f"{SCHEDULE_HEADER}\n{SCHEDULE_ROW}\n")
     )
     respx.get(FORECAST_URL).mock(return_value=httpx.Response(200, json=_empty_hourly()))
+
+
+def wait_for_signals(client, *, count: int, timeout: float = 10.0) -> dict:
+    """Poll `/signals` until the dispatched capture has landed.
+
+    `POST /refresh` is 202 by contract: the capture runs as a background task
+    and lands in `CaptureState` whenever it finishes. Reading `/signals`
+    straight afterwards is a race — one this suite used to win by accident,
+    because nothing in the capture path yielded to the event loop. Now the lake
+    write goes through `asyncio.to_thread`, so it genuinely can suspend.
+
+    Bounded and loud: on timeout this fails with what it actually saw rather
+    than hanging or silently asserting against an empty envelope.
+    """
+    deadline = time.monotonic() + timeout
+    body = {"count": 0}
+    while time.monotonic() < deadline:
+        body = client.get("/signals").json()
+        if body["count"] >= count:
+            return body
+        time.sleep(0.05)
+    raise AssertionError(
+        f"dispatched capture did not land within {timeout}s: "
+        f"expected count >= {count}, last saw {body}"
+    )
 
 
 def test_old_stadium_routes_are_gone(client):
@@ -150,9 +177,23 @@ def test_second_refresh_inside_the_floor_is_429(client):
 
 @respx.mock
 def test_refresh_populates_state_for_subsequent_signals_calls(client):
+    """`POST /refresh` returns 202 -- *accepted*, not *done*. The capture runs
+    as a background task, so an observer has to wait for it rather than assume
+    the next request happens to arrive afterwards.
+
+    This test used to read `/signals` immediately and pass by accident: the
+    dispatched capture ran start-to-finish on the event loop without ever
+    yielding, so it always completed before the next request was serviced.
+    Routing the lake write through `asyncio.to_thread` (boto3 is synchronous
+    and must not block the loop) introduced a real suspension point, and the
+    latent race became a CI failure. Polling is the honest way to observe a
+    202 -- the fix belongs in the test, not in the contract.
+    """
     mock_capture_upstreams()
-    client.post("/refresh", json={})
-    body = client.get("/signals").json()
+    accepted = client.post("/refresh", json={})
+    assert accepted.status_code == 202
+
+    body = wait_for_signals(client, count=2)
     assert body["count"] == 2
 
 

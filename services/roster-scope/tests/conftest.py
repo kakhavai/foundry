@@ -10,6 +10,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from prometheus_client import REGISTRY, generate_latest
 
 from roster_scope.main import app
+from roster_scope.matchups import MATCHUP_SIGNAL
 from roster_scope.rules import ALL_RULES, TEAMS
 from roster_scope.scope import CHANGE_SIGNAL, MEMBERSHIP_SIGNAL
 
@@ -70,13 +71,19 @@ def _lookup(series):
 def scrape():
     """Take one Prometheus scrape, then look series up from it.
 
-    **Every gauge assertion must go through this, not `metric_value`.** OTel's
-    synchronous Gauge is last-value aggregated: a data point is exported only
-    on the first collection *after* a measurement, and `generate_latest`
-    triggers a collection. Two `metric_value` calls therefore mean two
-    collections, and the second one silently reports the gauge as absent —
-    indistinguishable from a gauge that was never recorded, which is exactly
-    the bug these tests exist to catch.
+    This used to exist because OTel's *synchronous* Gauge is last-value
+    aggregated with the point consumed by a collection: it was exported on the
+    first collection after a measurement and absent from every one after that,
+    so two `metric_value` calls silently reported the second as missing. That
+    was a real defect rather than a test-harness quirk — Prometheus scrapes
+    every 15-30s against a capture cadence of minutes, so almost every real
+    scrape saw nothing — and it is fixed:
+    `collector_core.metrics.LastValueGauge` makes every fleet and per-collector
+    gauge observable, reporting current state on every collection.
+
+    The fixture stays, because taking one scrape and asserting several series
+    against it is the honest shape for a test that means "this is what
+    Prometheus sees".
     """
 
     def take():
@@ -90,8 +97,8 @@ def metric_value():
     """Read one series out of real /metrics output, so these tests check
     exactly what Prometheus scrapes — including OTel's name mangling.
 
-    Safe for counters, which accumulate across collections. For gauges use
-    `scrape`; see the warning there.
+    Prefer `scrape` when one test asserts several series, so they all come
+    from one collection rather than one each.
 
     Returns None when the series is absent, which is distinct from a series
     present with value 0.0. That distinction is the entire point of
@@ -397,3 +404,44 @@ def seeded_state():
     yield
     state.envelopes = {}
     state.last_capture_at = None
+
+
+@pytest.fixture
+def seeded_matchup_state():
+    """Populates only the matchup envelope — kept separate from `seeded_state`
+    so `/signals`' count-of-two assertions (membership + change) are not
+    disturbed by a third envelope appearing in `spec.state.envelopes`; nothing
+    in `/signals` tests wants a matchup row and `MATCHUP_SIGNAL` is not one of
+    the signal types `/signals` iterates for those tests to fail loudly on.
+    """
+    state = app.state.collector_spec.state
+    state.envelopes[MATCHUP_SIGNAL] = Envelope(
+        envelope_version=ENVELOPE_VERSION,
+        collector="roster-scope",
+        signal_type=MATCHUP_SIGNAL,
+        captured_at=NOW,
+        upstream=Upstream("nflverse-depth-charts", NOW),
+        scope={"season": 2026, "week": 1, "scope_version": 3},
+        coverage=Coverage(expected=2, present=2, missing=[]),
+        errors=[],
+        signals=[
+            {
+                "player_id": "fdy-corner-1",
+                "slot_key": "KC:cb_matchup_le_4:1",
+                "rule_id": "cb_matchup_le_4",
+                "team": "KC",
+                "position": "CB",
+                "depth_rank": 1,
+            },
+            {
+                "player_id": "fdy-corner-2",
+                "slot_key": "KC:cb_matchup_le_4:2",
+                "rule_id": "cb_matchup_le_4",
+                "team": "KC",
+                "position": "CB",
+                "depth_rank": 2,
+            },
+        ],
+    )
+    yield
+    state.envelopes.pop(MATCHUP_SIGNAL, None)

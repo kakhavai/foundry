@@ -129,12 +129,22 @@ combination for what it is before assuming the deploy itself is broken.
 
 ## Current Services
 
+**This table is documentation, not registration.** The inventory of collectors
+is `contracts/collector-registry.yaml`, and the local/CI tooling reads *that* —
+nothing reads this table. A new collector is **not required** to add a row, and
+the drift gate deliberately does not ask for one: twenty-four collectors each
+editing one markdown table is twenty-four merge conflicts on a file that no
+machine consumes. The rows below are the services with a bespoke story worth
+reading before you touch them. Add one only when a collector has something
+genuinely surprising to say; the registry already carries name, gateway path,
+cadence class and signal types for every collector, surprising or not.
+
 | Service | Port | Status | Purpose |
 |---|---|---|---|
 | `weather` | 8000 | Live | First data-source collector (Phase 8's 8A retrofit). Captures forecast-at-kickoff and current conditions per pro football stadium on a cadence, into the shared signal lake. Exposes `/health`, `/metrics`, `/catalog`, `/signals`, `/signals/convergence`, `/refresh` — bearer-token auth on every route except `/health` and `/metrics`; the stadium routes are gone |
 | `player-projections` | 8001 | Stub mode | Polls the S3 projections snapshots; returns empty until the generator publishes |
 | `player-identity` | 8002 | Live | Platform collector (Phase 8A). The only collector that decides what a `player_id` is: canonical `fdy-` records with a published-crosswalk `external_ids` block, plus the standing name-resolution miss queue. Exposes the standard five plus `GET /resolve`, `POST /resolve/batch` (≤500), `GET /unresolved`. Deployed with `CAPTURE_ENABLED=false` — the upstream document is ~5 MB and asks for at-most-daily polling, so the loop is off in CI and local clusters |
-| `roster-scope` | 8003 | Live (stub resolver) | Platform collector (Phase 8A). Resolves config rules (`QB≤2/RB≤3/WR≤4/TE≤2` per team, plus every kicker and all 32 team defenses) against the live depth chart into a versioned membership list — the 416-slot universe every other collector fetches before pulling anything. Standard five plus `/scope/players`, `/scope/rules`, `/scope/diff`. Depends on `player-identity` conceptually, not in code: an empty `PLAYER_IDENTITY_URL` selects a deterministic stub resolver |
+| `roster-scope` | 8003 | Live (stub resolver) | Platform collector (Phase 8A). Resolves config rules (`QB≤2/RB≤3/WR≤4/TE≤2` per team, plus every kicker and all 32 team defenses) against the live depth chart into a versioned membership list — the 416-slot universe every other collector fetches before pulling anything. Standard five plus `/scope/players`, `/scope/rules`, `/scope/diff`. Depends on `player-identity` conceptually, not in code: an empty `PLAYER_IDENTITY_URL` selects a deterministic stub resolver. When the URL *is* set, the HTTP resolver obeys `/resolve`'s `resolved` flag and ranks nothing itself — `resolved: false` becomes a missing slot with a reason, never an adopted id, because `player-identity` populates `candidates` precisely when it has refused |
 
 ### player-projections — How It Works
 
@@ -191,16 +201,34 @@ libs/collector-core/     Shared library for the collector fleet: bearer auth,
                         wiring (env parsing, lifespan, auth, routes) every
                         collector's `main.py` calls instead of assembling by
                         hand. Every collector (weather is the first) depends
-                        on it via the uv workspace; changes here fall under
-                        the `weather` CI workflow AND the integration-test gate.
+                        on it via the uv workspace, so `libs/**` is in every
+                        collector's CI path filter; its own lint/test live in
+                        collector-core.yml, and it is also covered by the
+                        integration-test gate.
 helm/charts/generic-service/    Base Helm chart all services share
 helm/values/<name>/     Per-service value overrides
-.github/actions/        Composite CI actions: python-lint, python-test, helm-lint, build-push
-.github/workflows/      Per-service CI callers (one file per service)
+.github/actions/        Composite CI actions: python-lint, python-test, helm-lint,
+                        build-push, update-gitops-tag, and changed-services --
+                        the one that turns a diff into the job matrix, so
+                        services.yml needs no per-service file
+.github/workflows/      services.yml covers every deployable service as a matrix
+                        leg. foundry-cli.yml and collector-core.yml are the two
+                        deliberate exceptions (no Helm values, no image, no
+                        GitOps entry). There is no per-service workflow file.
 infra/grafana-stack/    Helmfile: OTel Collector, Prometheus, Loki, Tempo, Grafana
 infra/kind/             Kind cluster config for local dev
-scripts/                deploy-local.py, stack-up.py
-docs/                   Architecture, onboarding, service contract
+scripts/                collectors.py (the fleet list every other script and
+                        the integration workflow derives from — reads the
+                        registry + each service's Helm values, and is the
+                        reason adding a collector edits neither),
+                        new-collector.py (the scaffolder: the ONLY supported
+                        way to start a collector, gated by
+                        tests/test_new_collector.py), then deploy-local.py,
+                        stack-up.py, smoke-test.sh, check-registry.py,
+                        rollback.py, run-chaos.py, run-load.py,
+                        argocd-deploy.py
+docs/                   Architecture, onboarding, service contract, and
+                        collectors.md — the collector authoring guide
 tests/                  Platform tests — things no single service can see: scripts/
                         (rollback, argocd-deploy) and Helm chart render assertions.
                         Per-service tests live in services/<name>/tests/, not here.
@@ -219,12 +247,46 @@ contracts/              Committed contracts — see contracts/README.md.
 
 ## How CI Works
 
-Each service has one workflow file (`.github/workflows/<service>.yml`) that calls shared composite actions directly. Four parallel/sequential jobs per PR:
+**One workflow covers every deployable service:** `.github/workflows/services.yml`.
+There is no `.github/workflows/<service>.yml` any more — a service is a **matrix
+leg**, not a file. The jobs and their order are unchanged:
 
 - `lint` → `.github/actions/python-lint` (ruff check + format)
 - `test` → `.github/actions/python-test` (pytest)
 - `helm-lint` → `.github/actions/helm-lint`
-- `build-push` → needs all three; runs only on push to main
+- `runtime-imports` → every module must import with `--no-dev` installed
+- `build-push` → needs all four; runs only on push to main
+- `update-gitops-tag` → needs `build-push`; writes the image tag into
+  `infra/gitops/envs/local/<name>/values.yaml`
+
+**Per-service path filtering survives the collapse, and that is the whole trick.**
+A naive matrix would run twenty-six services' jobs on a one-line change to one
+collector. Instead the `changes` job calls `.github/actions/changed-services`,
+which generates one `dorny/paths-filter` rule per service from
+`contracts/collector-registry.yaml` plus each service's Helm values, and emits
+**only the affected services** as the matrix. A PR touching `services/weather/`
+produces a one-element matrix, exactly as `weather.yml` used to.
+
+Two consequences worth knowing before you debug a surprising run:
+
+- **An empty matrix vector is a workflow *error* in GitHub Actions, not a skipped
+  job**, so every matrix job carries `if: needs.changes.outputs.services != '[]'`.
+  Remove that guard and every docs-only PR fails the run.
+- **`services.yml` also has a workflow-level `paths:` trigger**, which must stay a
+  *superset* of every generated per-service filter. A path filtered by
+  `changed-services` but missing from the trigger never reaches the filter,
+  because the workflow never starts — and the symptom is not a failure, it is
+  that a service's CI silently stops running.
+  `tests/test_service_ci_coverage.py::test_workflow_trigger_covers_every_filter_path`
+  is what holds the two in step. Its other job is to keep the gitops bot's
+  `chore(gitops): update <service> image tag` commits from starting a run.
+
+`services/foundry-cli` and `libs/collector-core` keep their own workflows
+(`foundry-cli.yml`, `collector-core.yml`): neither has Helm values, an image or a
+GitOps entry, so three of the matrix jobs do not apply. `collector-core.yml` is
+where the library's own lint/test live — they used to sit inside `weather.yml`,
+which meant the shared library's suite ran under one arbitrary consumer's name
+and a second collector wanting the same guarantee had to copy the jobs.
 
 There is also a **required** `integration-test` check that gate-keeps merges. It spins up a Kind cluster, deploys the full stack, and runs `scripts/smoke-test.sh`. It is **path-filtered**: a `changes` job inspects the PR diff and only runs the heavy test when the **deployable surface** (`services/`, `helm/`, `infra/`, `scripts/`) changed. For docs/CI-only PRs the `integration-test` job is skipped, and a skipped required check counts as a pass — so those PRs merge without spinning up a cluster. There is no label or manual gate: the test simply runs on every PR that touches code it can actually validate, and blocks the merge if it fails. The workflow uses `concurrency` with `cancel-in-progress`, so a new push to a PR cancels that PR's in-flight run rather than spinning a second cluster in parallel.
 
@@ -232,62 +294,156 @@ There is also a **required** `integration-test` check that gate-keeps merges. It
 
 ## Adding a New Service
 
+**If it is a collector, do not do any of this by hand — run
+`scripts/new-collector.py`.** See the next section. This list is what the
+scaffolder is doing on your behalf, and what a non-collector service still does
+manually.
+
 See `docs/onboarding.md`. Short version:
-1. `services/<name>/` — FastAPI app, Dockerfile, pyproject.toml, uv.lock
+1. `services/<name>/` — FastAPI app, Dockerfile, pyproject.toml. A **collector**
+   is a uv workspace member and shares the root `uv.lock`; the root
+   `[tool.uv.workspace]` globs `services/*`, so there is no member list to
+   append to — but you must still run `uv lock`, because the lockfile records
+   members. A **non-collector** (`player-projections`, `foundry-cli`) is named
+   in that table's `exclude` and owns its own `uv.lock`.
 2. `helm/values/<name>/values.yaml`
-3. `infra/gitops/envs/local/<name>/values.yaml` — initial image tag (`0.1.0`)
-4. `infra/gitops/argo/<name>.yaml` — Argo CD Application manifest (copy from `infra/gitops/argo/weather.yaml`, update name and value paths)
-5. Copy `.github/workflows/player-projections.yml` → `.github/workflows/<name>.yml`, update service name in update-gitops-tag job
-6. Register in `scripts/deploy-local.py` and `scripts/stack-up.py`
+3. `infra/gitops/envs/local/<name>/values.yaml` — initial image tag (`0.1.0`).
+   Still needed: the generated Application references it as its second
+   valueFile, and a missing one renders as a **failed** Application rather than
+   an absent one.
+4. **Argo CD: nothing.** `infra/gitops/argo/<name>.yaml` no longer exists for any
+   service. `infra/gitops/argo/applicationset.yaml` generates the Applications
+   from a git directory generator over `helm/values/*`, so step 2 *is* the
+   registration.
+5. **CI: nothing.** There is no `.github/workflows/<name>.yml` to copy.
+   `.github/workflows/services.yml` picks the service up as a matrix leg.
+6. **Collectors: nothing.** The registry entry the scaffolder appends is the
+   registration — `scripts/deploy-local.py`,
+   `scripts/stack-up.py`, `scripts/smoke-test.sh` and both service-list steps
+   of `.github/workflows/integration-test.yml` derive from it via
+   `scripts/collectors.py`. A **non-collector** service (there is one,
+   `player-projections`) has no registry entry, so it is named in
+   `scripts/collectors.py`'s `NON_COLLECTOR_SERVICES`.
 
 If the service needs secrets: add `extraEnv` to the values file with a `secretKeyRef` (see the Helm Chart — Secret Support section below for the pattern).
 
+**The values file is where the tooling reads a service's deployment facts
+from** — its port (`service.port`), its bearer-token Secret (whatever
+`COLLECTOR_TOKEN`'s `secretKeyRef` names), its lake-credentials Secret
+(`AWS_ACCESS_KEY_ID`'s), and `CAPTURE_ENABLED`. None of those are duplicated
+into the registry or into a deploy file, on purpose: the values file is the
+artifact Kubernetes actually applies, so a second copy could only ever drift
+away from it. Concretely, `deploy-local.py` creates *the Secret the pod
+references* rather than one named by convention — a values file naming a
+Secret the tooling never creates would otherwise give you a pod that starts,
+reports Healthy, and 503s on every data route.
+
 ### Adding a New Collector
 
-A collector's process wiring is not written by hand — `libs/collector-core/collector_core/app.py`
-owns it. `services/weather/` (the first collector) is the reference: its
-`main.py` is under 50 lines and contains only the things that are genuinely
-weather's.
+**Run the scaffolder. Do not copy an existing collector.**
 
-1. Build `services/<name>/` per the steps above, depending on `collector-core`
-   via the uv workspace (see `services/weather/pyproject.toml`'s
-   `[tool.uv.sources]`).
-2. Write a `capture(season, week, *, client, lake, now, deadline=None)`
-   function returning `dict[str, Envelope]` — one envelope per signal type —
-   and a `CollectorMetrics(name)` instance for it to record against.
-3. Write a `signal_matches(row, params) -> bool` predicate for whatever
-   filters beyond `season`/`week`/`signal_type` the collector's rows support.
-4. In `main.py`, build a `CollectorDescriptor` (name, cadence class, signal
-   types, supported filters, `capture`, `signal_matches`, `metrics`, and
-   optionally `next_event_at`/`telemetry_module`/`client_factory`) and pass it
-   to `build_collector_app`. That call gets you environment parsing
-   (`REFRESH_MIN_INTERVAL_SECONDS`, `CAPTURE_DEADLINE_SECONDS`,
-   `CAPTURE_SEASON`, `CAPTURE_WEEK`, `CAPTURE_ENABLED`), `CaptureState`,
-   `RefreshGate`, the lake writer, the lifespan (capture loop start/stop,
-   OTel guard, graceful shutdown), bearer auth, and the standard five routes
-   — all without writing any of it again.
-   `telemetry_module` is a **dotted module path string**, e.g.
-   `telemetry_module="<pkg>.telemetry"` — not a callable, and not
-   `from .telemetry import setup_telemetry` anywhere in `main.py`.
-   `build_collector_app` is the only thing that imports it, via
-   `importlib.import_module`, and only once `OTEL_EXPORTER_OTLP_ENDPOINT` is
-   actually set. Passing a callable instead (importing `<pkg>.telemetry` at
-   `main.py`'s own top level and handing the function in already bound) is
-   legal Python and every test stays green, but it silently reintroduces the
-   eager import the guard exists to prevent — that is exactly why the field
-   takes a string, not a function. If the collector has no telemetry wired
-   yet, leave it `None`; the app still builds and starts fine.
-5. There is no `auth.py` and no `scheduler.py` wrapper to copy — the shared
-   loop and the bearer middleware are mounted by `build_collector_app`
-   itself. A collector only writes a `scheduler.py` if it has its own
-   `next_event_at` lookup (weather's `next_kickoff` is the model); most
-   collectors will not need one.
-6. Any route beyond the standard five (weather's `/signals/convergence` is
-   the example) is a plain `@app.get`/`@app.post` added to `main.py` after
-   the `build_collector_app` call, reaching the lake and collector name via
-   `app.state.collector_spec` rather than a module-level global.
-7. Append an entry to `contracts/collector-registry.yaml` — **in the same PR
-   as the service**. See the next section.
+```bash
+uv run --no-project --with pyyaml==6.0.3 python3 scripts/new-collector.py \
+    betting-lines --cadence volatile --signal-types game_line_snapshot
+uv lock
+cd services/betting-lines && uv run pytest -v
+```
+
+[`docs/collectors.md`](docs/collectors.md) is the authoring guide — descriptor
+fields, the five-route contract, coverage, the failure envelope, the memory
+rules, and what the five generated TODOs actually ask of you. Read it before
+writing capture logic. What follows is only what a reader of *this* file needs.
+
+`scripts/new-collector.py` generates `services/<name>/` (package, `main.py`,
+`capture.py`, `metrics.py`, `signals.py`, an adapter stub, `Dockerfile`,
+`pyproject.toml`, `README.md`, three test files, optional `smoke.sh`),
+`helm/values/<name>/values.yaml`, `infra/gitops/envs/local/<name>/values.yaml`,
+`contracts/signal-envelope/collectors/<name>.json`, and **one appended registry
+entry** — which is the only shared file it touches.
+
+It deliberately generates **no** CI workflow, **no** Argo CD Application, **no**
+`telemetry.py`, **no** `auth.py`, **no** `scheduler.py`, and **no** per-member
+Dockerfile `COPY` lines, because Wave 0 made every one of those either derived
+or shared. Copying a collector by hand is how they grow back, twenty-four times
+over.
+
+**If a new collector needs you to edit `deploy-local.py`, `stack-up.py`,
+`smoke-test.sh`, `integration-test.yml`, `services.yml`, the root
+`pyproject.toml` or the ApplicationSet, that is a bug in the tooling — report
+it rather than working around it.** `tests/test_collector_tooling.py` makes it
+a test failure, and `tests/test_new_collector.py` scaffolds a collector into a
+tmpdir and asserts the result lints, renders through Helm, satisfies the
+registry drift gate and reaches every derived list **unmodified**.
+
+Three things that fail *silently* and therefore survive review:
+
+- **`telemetry_module` is a dotted string, never a callable, and you should not
+  set it at all.** It defaults to `"collector_core.telemetry"`, the fleet's
+  shared wiring, and `build_collector_app` passes your descriptor's `name` as
+  the service name. Wave 0 deleted three identical copies of that file; do not
+  add a fourth. `build_collector_app` is the only thing that imports it, via
+  `importlib.import_module`, and only once `OTEL_EXPORTER_OTLP_ENDPOINT` is
+  set. Importing the module at `main.py`'s own top level and handing the
+  function in already bound is legal Python and every test stays green — and it
+  reintroduces exactly the eager import the guard exists to prevent. That is
+  why the field takes a string. Set it to `None` only to disable telemetry, or
+  to your own dotted path if the collector genuinely needs more, in which case
+  call the shared `setup_telemetry(app, service_name)` rather than forking it.
+- **`coverage.expected` must never derive from what succeeded.** A collector
+  that builds its expectation from the document it just fetched reports a
+  truncated upstream — 100 of 2,900 records — as `expected: 100, present: 100`,
+  ratio 1.0. `CoverageAccumulator(floor=...)` is how you avoid it, and the
+  scaffolder generates the pattern.
+- **`POST /refresh` returns 202 — accepted, not done.** A test that reads
+  `/signals` on the next line is a race. It used to be won by accident, because
+  nothing in the capture path yielded until the lake write moved to
+  `asyncio.to_thread`. Poll with a bounded, loud helper; the scaffolder
+  generates one.
+
+A collector writes none of its own coverage floor, error cap, failure envelope
+or lake offloading. `collector_core.coverage` supplies `CoverageAccumulator` and
+`cap_errors`; `collector_core.failure.fail_capture` writes the `present: 0`
+envelope and re-raises; `collector_core.publish.publish_capture` is the
+**success** path's tail — write, record coverage, return the envelopes;
+`collector_core.lake` supplies `awrite`/`alist_keys`/
+`aread`, and the lake you are handed **refuses a synchronous call from the event
+loop thread** — boto3 on the loop gates readiness on object-store latency.
+`collector_core.streaming.stream_csv_dicts` is how a large CSV upstream is read:
+stream and filter as you parse, never hold the response twice.
+
+**An object-store outage costs freshness, not availability — same as an
+upstream one.** `publish_capture` records a failed lake write on
+`collector_capture_failures_total` and returns the envelopes anyway, so a
+capture that succeeded still reaches `/signals`. Nine collectors used to
+hand-roll that tail and eight re-raised, which discarded a good capture over a
+missing archival copy. `fail_capture` keeps the opposite answer for the
+opposite case: there the capture itself failed, and installing `present: 0`
+envelopes over the last good ones destroys good data.
+
+**The library owns `collector_capture_failures_total` for a failure that ends a
+pass.** Both `fail_capture` and `publish_capture` record it. Do not call
+`metrics.capture_failure(exc)` before either — that double-counts. Record it
+yourself only for a failure the library cannot see: one bad row, one item's
+fetch inside a multi-call pass, or a degraded path that builds its own
+envelopes. See [`docs/collectors.md`](docs/collectors.md).
+
+Any route beyond the standard five (weather's `/signals/convergence` is the
+example) is a plain `@app.get`/`@app.post` added to `main.py` after the
+`build_collector_app` call, reaching the lake and collector name via
+`app.state.collector_spec` rather than a module-level global — and it must be
+added to `gateway.publicPaths` in the values file, or it 404s at the gateway
+while working in-cluster.
+
+Extra routes are also the only reason to pass `--smoke-hook`, which generates
+`services/<name>/smoke.sh`. `scripts/smoke-test.sh` runs it after the standard
+contract surface passes, with `SMOKE_COLLECTOR`, `SMOKE_BASE_URL` (direct to
+the Service), `SMOKE_GATEWAY_URL`, `SMOKE_TOKEN` and `SMOKE_CAPTURE_ENABLED` in
+the environment; `services/weather/smoke.sh` is the model. A collector with no
+extra routes writes no file — the standard surface is asserted for every
+registered collector automatically, so `scripts/smoke-test.sh` is never edited.
+**Do not POST `/refresh` from a hook when the collector runs with
+`CAPTURE_ENABLED=false`**: a dispatched refresh reaches the upstream regardless
+of that flag, so it would hit a third party on every PR.
 
 ---
 
@@ -316,6 +472,7 @@ reformat existing entries.
 | | Where | What it can see |
 |---|---|---|
 | `tests/test_collector_registry.py` | `platform-tests`, no cluster | schema, uniqueness, `services/<name>/` exists, Helm `gateway.pathPrefix` == `path`, Argo + GitOps manifests exist, both reverse directions, `depends_on` resolution / self-dependency / cycles, and the entry vs. the service's own `CollectorDescriptor` **read by AST** |
+| `tests/test_collector_tooling.py` | `platform-tests`, no cluster | that the *tooling* derives from the registry: a synthetic entry in a tmpdir reaches every derived list, and **no collector name appears literally** in `deploy-local.py`, `stack-up.py`, `smoke-test.sh` or `integration-test.yml` |
 | `scripts/check-registry.py` | `scripts/smoke-test.sh`, inside the required `integration-test` | each collector's **live** `GET /catalog`, fetched through the gateway |
 
 **Why AST and not an import:** `platform-tests` installs only pytest, pyyaml
@@ -330,16 +487,20 @@ cannot drift. **A registered collector with no discoverable
 There is deliberately **no committed `/catalog` fixture**. A fixture is a copy
 of the answer, and a copy of the answer cannot detect that the answer changed.
 
-**Two known gaps, stated rather than implied:**
+**One known gap, stated rather than implied:** `scope_aware` is type-checked
+as a bool and nothing else. No code representation of it exists today, so its
+correctness is human-reviewed.
 
-- `scope_aware` is type-checked as a bool and nothing else. No code
-  representation of it exists today, so its correctness is human-reviewed.
-- `envelope_version` is an **int** in the registry (following the phase doc's
-  example) but the string `"1"` in `collector_core.envelope.ENVELOPE_VERSION`
-  (because it becomes the lake path segment `v1`), and `/catalog` returns the
-  string. Both sides of every comparison are `str()`-ed. This is a real
-  spec/code inconsistency awaiting a deliberate decision, not a bug to
-  "fix" by quietly changing one side.
+**`envelope_version` is a string** — `"1"`, quoted, in the registry. This was
+an open int-vs-string inconsistency and has been **settled**: everything else
+in the repo already used the string (`collector_core.envelope.ENVELOPE_VERSION`,
+`contracts/signal-envelope/envelope.v1.schema.json`'s `{"const": "1"}`, every
+committed fixture, `GET /catalog`'s response, and the lake path segment `v1`).
+The registry was the sole outlier, and only because one line of the phase doc
+wrote it unquoted. Both gates — `tests/test_collector_registry.py` and
+`scripts/check-registry.py` — now compare **exactly**; the old
+`str()`-on-both-sides comparison was a workaround for the undecided type, and
+it would also have passed `1` against `"1.0"`.
 
 `GET /collectors` — the phase doc has the gateway serving the registry live —
 is **not built**. See the follow-up notes in the Phase 8A PR: it needs a
@@ -352,44 +513,67 @@ committed file from the repo meanwhile, which is the spec's own fallback.
 
 ## Dockerfile Pattern (Canonical)
 
-**Collectors build from the repo root**, not the service directory, because they
-depend on the `libs/collector-core/` workspace member by path:
+**There is ONE Dockerfile for the whole collector fleet: `Dockerfile.collector`
+at the repo root.** A collector does not have, and must not acquire, a
+Dockerfile of its own. Read the file — it carries the full reasoning inline.
 
-    docker build -f services/<name>/Dockerfile -t <name>:local .
-
-The build stage copies `libs/collector-core/` before `uv sync`, since the lock
-cannot resolve without the member present. Services that do not consume the
-shared library keep the original service-directory context.
-
-All services use uv's official multi-stage pattern for packaged services:
-
-```dockerfile
-FROM python:3.12-slim AS builder
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
-WORKDIR /app
-# Step 1: deps only (layer cached until uv.lock/pyproject.toml change)
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --locked --no-dev --no-install-project
-# Step 2: install package as wheel (--no-editable bakes it into the venv)
-COPY pyproject.toml uv.lock ./
-COPY <pkg>/ ./<pkg>/
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable
-
-FROM python:3.12-slim
-# Use numeric UID — Kubernetes runAsNonRoot requires a numeric user to verify non-root
-RUN addgroup --system --gid 65532 app && adduser --system --uid 65532 --ingroup app appuser
-WORKDIR /app
-COPY --from=builder /app/.venv /app/.venv
-USER 65532
-ENV PATH="/app/.venv/bin:$PATH"
-# No PYTHONPATH needed — --no-editable installs the package as a proper wheel
-EXPOSE <port>
-CMD ["uvicorn", "<pkg>.main:app", "--host", "0.0.0.0", "--port", "<port>"]
+```bash
+docker build -f Dockerfile.collector \
+    --build-arg SERVICE=weather --build-arg PACKAGE=weather --build-arg PORT=8000 \
+    -t weather:local .
 ```
+
+Three build args, and they are the *only* thing that differs between two
+collector images. **Nobody types them.** Both callers derive all three:
+
+| Caller | Where |
+|---|---|
+| local Kind builds | `scripts/deploy-local.py` (via `scripts/collectors.py`) |
+| CI | `.github/actions/changed-services/filters.py` → the matrix → `build-push` |
+
+`PORT` is read from `helm/values/<name>/values.yaml`'s `service.port` — the
+artifact Kubernetes actually applies — so the port the container listens on
+cannot drift from the one the probes dial. `PACKAGE` is the name with dashes
+swapped for underscores.
+
+**Collectors build from the repo root**, not the service directory, because they
+depend on the `libs/collector-core/` workspace member by path.
+`player-projections` is **not** a workspace member, owns its own `uv.lock`, and
+still builds from its own directory as the context — it is the one service that
+legitimately keeps `services/<name>/Dockerfile`. Do not use it as a collector
+template, and do not fold it into `Dockerfile.collector`.
+
+`tests/test_dockerfile_workspace.py` is the guard. It fails if a
+`services/<collector>/Dockerfile` reappears, and it pins the four mechanisms
+inside the shared file that all fail **silently** — the image builds, starts and
+passes a health check either way:
+
+- **The `workspace-manifests` stage.** `uv sync --locked --package <x>` resolves
+  the ENTIRE workspace graph before it can sync any single member, so every
+  member's `pyproject.toml` must be in the build context — including members the
+  service does not depend on. The stage gathers them by glob and names no
+  member, so adding a workspace member requires no Dockerfile edit. Listing them
+  one `COPY` line at a time was quadratic, and the line you forget breaks an
+  **unrelated** service's image with `the lockfile needs to be updated` —
+  a break **no pytest run can see**, because pytest never touches a Dockerfile.
+  (`COPY services/*/pyproject.toml ./services/` is not a shortcut: Docker
+  flattens a multi-source `COPY` into the destination directory.)
+- **Ordering: manifests → dependency sync → service source.** BuildKit keys
+  `COPY --from` on the CONTENT it copies, so the expensive sync layer survives a
+  source edit and busts on a manifest/lock change. Any other order either breaks
+  resolution or re-downloads every dependency on every source edit.
+- **`--reinstall-package ${SERVICE}` on the final sync.** The version never
+  changes (0.1.0), so uv's build cache can serve a previously built wheel for
+  changed source and the image silently ships stale code. Observed twice on
+  `roster-scope`, invalidating two rounds of measurements.
+- **`CMD ["sh", "-c", "exec uvicorn ..."]`.** Shell form is forced — exec form
+  does no variable expansion and the module and port are build args. The `exec`
+  is what makes that safe: it replaces the shell, so **PID 1 is uvicorn** and
+  Kubernetes' SIGTERM reaches the app's graceful shutdown. Drop the `exec` and
+  the only symptom is that every pod deletion burns the full grace period.
+
+Plus `USER 65532` — Kubernetes `runAsNonRoot` can only verify a **numeric**
+user, and a name makes the kubelet refuse to start the pod.
 
 ---
 
@@ -403,13 +587,26 @@ if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
     setup_telemetry(app)
 ```
 
-Each service has a `telemetry.py` with traces (OTLP gRPC → OTel Collector → Tempo) and metrics (`PrometheusMetricReader` → `/metrics` → Prometheus).
+**Collectors do not write a `telemetry.py`.** `collector_core/telemetry.py` is
+the fleet's single copy — traces (OTLP gRPC → OTel Collector → Tempo) and
+metrics (`PrometheusMetricReader` → `/metrics` → Prometheus).
+`CollectorDescriptor.telemetry_module` defaults to `"collector_core.telemetry"`,
+still a dotted string resolved by `importlib` *inside* the
+`OTEL_EXPORTER_OTLP_ENDPOINT` guard, and `build_collector_app` passes the
+descriptor's own `name` so the resource is named from data rather than a
+per-service literal. `OTEL_SERVICE_NAME` still overrides it.
+
+Wave 0 consolidated this: every collector's `telemetry.py` was the same forty
+lines differing by exactly one string. Set `telemetry_module=None` to disable
+telemetry, or point it at your own module — which takes `(app, service_name)`
+and should call the shared `setup_telemetry` first rather than forking it.
+`player-projections` is not a collector and keeps its own copy.
 
 **`setup_telemetry` must rebuild the middleware stack.** `setup_telemetry` runs
 inside the lifespan handler, and `FastAPIInstrumentor.instrument_app` only
 patches `app.build_middleware_stack`. Starlette builds and caches that stack on
 its first `__call__` — which *is* the lifespan scope — so the patch arrives too
-late and `OpenTelemetryMiddleware` is never installed. Every `telemetry.py`
+late and `OpenTelemetryMiddleware` is never installed. The shared module
 therefore ends with:
 
 ```python
@@ -420,9 +617,11 @@ app.middleware_stack = app.build_middleware_stack()
 Omit that line and the failure is **silent**: `_is_instrumented_by_opentelemetry`
 still reads `True`, `/metrics` still works, and the service simply produces no
 server spans while its httpx client spans arrive in Tempo with no parent.
-`test_server_middleware_is_actually_installed` in each service's
-`tests/test_telemetry.py` guards it by walking the real middleware chain —
-asserting `instrument_app` was *called* does not catch this.
+`test_server_middleware_is_actually_installed` in
+`libs/collector-core/tests/test_telemetry.py` guards it by walking the real
+middleware chain — asserting `instrument_app` was *called* does not catch this.
+Holding that test once instead of twenty-six times is the point of the
+consolidation: it is one chance to drop the line, not twenty-six.
 
 **Collector service name:** The Helmfile release is named `otel-collector`, but the Helm chart appends `-opentelemetry-collector`, making the in-cluster DNS name `otel-collector-opentelemetry-collector.monitoring.svc.cluster.local`. This is set in `helm/charts/generic-service/values.yaml`. If traces/logs stop flowing while `/metrics` still works, this is the first thing to check — Prometheus scrapes pod annotations directly and is unaffected by a broken OTel endpoint.
 
@@ -560,7 +759,18 @@ python scripts/stack-up.py --forward-only     # Port-forwards only (skip build/d
 python scripts/deploy-local.py <name>         # Redeploy a single service
 ```
 
-Requires: `kind`, `kubectl`, `helm`, `helmfile`, `docker`.
+Requires: `kind`, `kubectl`, `helm`, `helmfile`, `docker`, **and PyYAML on the
+interpreter you run these with** — both scripts derive their service list from
+`contracts/collector-registry.yaml` via `scripts/collectors.py`. If your
+`python` has no PyYAML, or you are on the CI runner image (which ships a bare
+`python3`), use the form CI uses:
+
+```bash
+uv run --no-project --with pyyaml==6.0.3 python3 scripts/deploy-local.py <name>
+```
+
+`--no-project` keeps `uv` from building the whole workspace to run a script
+that imports none of it.
 
 **When ArgoCD is running:** `deploy-local.py` will fail with a Server-Side Apply conflict because ArgoCD already owns the Deployment fields (`image`, `imagePullPolicy`). Use `--forward-only` when the cluster is already up and you just need to re-bind port-forward tunnels after a restart or session change.
 
@@ -616,6 +826,34 @@ The **README Phases table** is the single source of truth for where the project 
 
 ## ArgoCD / GitOps Behavior
 
+**The Applications are generated, not written.** `infra/gitops/argo/` holds two
+files: `app-of-apps.yaml` and `applicationset.yaml`. The ApplicationSet's git
+directory generator globs `helm/values/*`, so every service with a Helm values
+directory gets an Application whose spec is identical to the hand-written ones
+that preceded it — same `project`, `source`, `destination`, `syncPolicy` and
+finalizer. Two things the controller adds that a hand-written manifest did not
+have: an `ownerReference` back to the ApplicationSet, and the label
+`argocd.argoproj.io/application-set-name`. The ownerReference is the one with
+teeth — **deleting `applicationset.yaml` deletes every Application it
+generated**, where deleting one old manifest deleted one app.
+
+**`local` is the only environment that has Applications, so
+`argocd-deploy.py promote --to staging|prod` refuses.** The ApplicationSet's
+template hard-codes `/infra/gitops/envs/local/<service>/values.yaml` and
+`namespace: default`, and `infra/gitops/envs/staging/` and `envs/prod/` hold a
+`.gitkeep` and nothing else. `promote` used to copy a per-service
+`infra/gitops/argo/<service>.yaml` into `<service>-<env>.yaml`; Wave 0 deleted
+those manifests, so it started dying on "source manifest not found" — which
+reads as a forgotten file rather than a deliberate deletion. It now refuses
+before writing anything and says why. **Do not fix it by re-adding the copy:**
+`tests/test_service_ci_coverage.py` fails on a third file in that directory,
+the app-of-apps would apply the written manifest into the same namespace the
+local Application already owns, and its HTTPRoute would claim the same
+`gateway.pathPrefix` — Gateway API breaks that tie on creation timestamp, so it
+would apply cleanly and misroute silently. Real promotion needs the
+ApplicationSet to become env-aware plus an env strategy (cluster vs namespace,
+per-env gateway paths, per-env Secrets) that is Phase 6's work.
+
 All ArgoCD Applications have `selfHeal: true` and `automated.prune: true`. This means:
 
 - **Any manual `kubectl patch` or `kubectl apply` to a managed resource is reverted within seconds.** Do not try to fix live ConfigMaps, Deployments, or Service objects by hand — the change will disappear before the pod restarts.
@@ -630,7 +868,37 @@ If you need to verify a fix that isn't merged yet, work from inside the cluster 
 
 - **Split lint/test CI jobs** — parallel jobs catch failures independently, standard since ~2023.
 - **`--no-editable` Docker** — canonical uv pattern for packages; package dir copied directly into the build stage, wheels go into venv, no PYTHONPATH needed in runtime.
-- **Per-service workflow files** — one file to copy per onboard, no reusable workflow indirection.
+- **One matrix workflow, not per-service workflow files** — **reverses an earlier
+  decision**, deliberately. The original entry read *"per-service workflow files —
+  one file to copy per onboard, no reusable workflow indirection"*, and it was
+  right at two services: one file to copy, nothing to understand. It inverts at
+  twenty-six. Each file was ~145 lines of which ~6 were the service name, so the
+  fleet implied ~3,700 lines that all had to agree, and a CI fix became
+  twenty-six edits whose failure mode was silent — miss one and that service
+  quietly keeps the old behaviour. The four that existed had **already** drifted:
+  `weather.yml` carried the collector-core jobs, `roster-scope.yml` had a
+  `runtime-imports` check nothing else had, and the other two had neither. So
+  `.github/workflows/services.yml` runs every deployable service as a matrix leg,
+  and `.github/actions/changed-services` computes that matrix from the diff so a
+  PR still runs only the services it touches. A reusable `workflow_call` was
+  rejected as the smaller win: it shrinks the per-service file to ~10 lines but
+  keeps twenty-six of them, and keeps onboarding a copy-a-file step. `foundry-cli`
+  and `libs/collector-core` stay on their own workflows — neither has Helm values,
+  an image or a GitOps entry, so three of the five matrix jobs do not apply.
+- **A scaffolder, not a reference collector to copy** — `scripts/new-collector.py`
+  generates a collector; `docs/collectors.md` explains it. "Copy `weather` and
+  change the names" was fine at one collector and is the mechanism by which the
+  fleet re-acquires every file Wave 0 deleted — twenty-four times, each one
+  already buried in a service tree somebody then edits on top of. The
+  scaffolder's value is not saving typing, it is that **what it does not
+  generate is enforceable**: `tests/test_new_collector.py` asserts the exact
+  file set both directions, so an extra per-collector copy of something shared
+  reds a required check instead of merging. It also bakes in the two things
+  that fail silently — the declared coverage floor and the bounded poll after a
+  202 `/refresh` — because those are precisely what a copy-paste author drops.
+  The root `[tool.uv.workspace]` moved to a `services/*` glob with an explicit
+  `exclude` for the same reason: an enumerated member list would be a
+  twenty-fourth append to a shared file that no machine reads.
 - **OTel guard on env var** — no collector needed for local dev or tests; Kubernetes injects it.
 - **The projections generator lives outside this repo** — the ML/ranking methodology is the product's value and stays out of version control. It publishes snapshots to S3 for `player-projections` to poll, with S3 auth handled at the infrastructure level (see ADR 0002). Foundry never deploys or calls it; a file in a bucket is the whole interface.
 - **Stub mode for not-yet-built upstreams** — `PROJECTIONS_SNAPSHOT_URL` empty = service runs, returns empty data, no crashes. Lets the service be deployed and observed before its dependency exists.

@@ -4,6 +4,7 @@ Route tests pre-populate the cache directly, per the repo's convention — the
 routes never call an upstream.
 """
 
+from roster_scope.matchups import MATCHUP_SIGNAL
 from roster_scope.scope import CHANGE_SIGNAL, MEMBERSHIP_SIGNAL
 
 
@@ -22,7 +23,11 @@ def test_catalog_describes_the_collector(client, seeded_state):
     assert body["collector"] == "roster-scope"
     assert body["envelope_version"] == "1"
     assert body["cadence_class"] == "weekly"
-    assert set(body["signal_types"]) == {MEMBERSHIP_SIGNAL, CHANGE_SIGNAL}
+    assert set(body["signal_types"]) == {
+        MEMBERSHIP_SIGNAL,
+        CHANGE_SIGNAL,
+        MATCHUP_SIGNAL,
+    }
     assert "player_id" in body["filters"]
     assert body["last_capture_at"] == "2026-09-15T12:00:00Z"
     assert body["coverage"][MEMBERSHIP_SIGNAL]["expected"] == 3
@@ -45,7 +50,10 @@ def test_catalog_agrees_with_the_registry_entry(client):
     entry = next(c for c in registry["collectors"] if c["name"] == "roster-scope")
     body = client.get("/catalog").json()
     assert entry["cadence_class"] == body["cadence_class"]
-    assert str(entry["envelope_version"]) == body["envelope_version"]
+    # Exact, type included: the registry stores the STRING "1", matching
+    # ENVELOPE_VERSION and /catalog. The str() that used to be here was a
+    # workaround for an undecided type; see contracts/collector-registry.yaml.
+    assert entry["envelope_version"] == body["envelope_version"]
     assert set(entry["signal_types"]) == set(body["signal_types"])
 
 
@@ -178,6 +186,47 @@ def test_scope_rules_lists_every_configured_rule(client):
     assert all(r["produced_zero_slots"] for r in body["rules"])
 
 
+def test_scope_rules_includes_matchup_rules(client, seeded_matchup_state):
+    """The whole reason `/scope/rules` exists is to catch a rule silently
+    matching nothing -- that applies to the matchup scope (Task 6) exactly
+    as much as the player scope, and it was invisible here until now."""
+    body = client.get("/scope/rules").json()
+    matchup_rules = {r["rule_id"]: r for r in body["matchup_rules"]}
+    assert set(matchup_rules) == {
+        "cb_matchup_le_4",
+        "s_matchup_le_3",
+        "lb_matchup_le_3",
+        "dl_matchup_le_4",
+        "ol_matchup_le_5",
+    }
+    # seeded_matchup_state populates two CB slots and nothing else.
+    assert matchup_rules["cb_matchup_le_4"]["slots_filled"] == 2
+    assert matchup_rules["cb_matchup_le_4"]["produced_zero_slots"] is False
+    assert matchup_rules["cb_matchup_le_4"]["slots_expected"] == 32 * 4
+    assert matchup_rules["s_matchup_le_3"]["slots_filled"] == 0
+    assert matchup_rules["s_matchup_le_3"]["produced_zero_slots"] is True
+
+
+def test_scope_rules_matchup_rules_is_empty_shaped_before_any_capture(client):
+    """No matchup envelope yet must still yield a well-formed response --
+    every rule present, all reading zero -- rather than a missing key or a
+    500."""
+    body = client.get("/scope/rules").json()
+    assert len(body["matchup_rules"]) == 5
+    assert all(r["produced_zero_slots"] for r in body["matchup_rules"])
+
+
+def test_scope_rules_player_and_matchup_lists_stay_independent(
+    client, seeded_state, seeded_matchup_state
+):
+    """The player scope's `rules` must not pick up matchup rule ids, and vice
+    versa -- two separate `CoverageAccumulator`s, two separate lists."""
+    body = client.get("/scope/rules").json()
+    player_rule_ids = {r["rule_id"] for r in body["rules"]}
+    matchup_rule_ids = {r["rule_id"] for r in body["matchup_rules"]}
+    assert player_rule_ids.isdisjoint(matchup_rule_ids)
+
+
 def test_scope_diff_returns_transitions_in_the_half_open_range(client, seeded_state):
     body = client.get("/scope/diff?from=1&to=3").json()
     assert body["count"] == 2
@@ -198,3 +247,29 @@ def test_scope_diff_rejects_an_inverted_range(client, seeded_state):
 def test_scope_diff_requires_both_bounds(client, seeded_state):
     assert client.get("/scope/diff?from=1").status_code == 422
     assert client.get("/scope/diff").status_code == 422
+
+
+def test_scope_matchups_returns_the_matchup_slots(client, seeded_matchup_state):
+    response = client.get("/scope/matchups")
+    assert response.status_code == 200
+    body = response.json()
+    assert "slots" in body
+    assert "count" in body
+    assert body["count"] == len(body["slots"])
+    assert body["season"] == 2026
+    assert body["week"] == 1
+    assert body["captured_at"] == "2026-09-15T12:00:00Z"
+    assert {s["player_id"] for s in body["slots"]} == {"fdy-corner-1", "fdy-corner-2"}
+
+
+def test_scope_matchups_is_empty_before_the_first_capture(client):
+    """Mirrors `test_scope_players_is_empty_before_the_first_capture`: a
+    well-shaped body, not a 404 or a `null`, even with nothing captured yet."""
+    body = client.get("/scope/matchups").json()
+    assert body == {
+        "season": 2026,
+        "week": 1,
+        "slots": [],
+        "count": 0,
+        "captured_at": None,
+    }

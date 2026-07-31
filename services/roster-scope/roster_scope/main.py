@@ -8,6 +8,7 @@ from collector_core.app import CollectorDescriptor, build_collector_app
 from fastapi import Query
 
 from .capture import CADENCE_CLASS, COLLECTOR_NAME, SIGNAL_TYPES, capture_scope
+from .matchups import scope_matchups_view
 from .metrics import metrics
 from .scope import (
     SUPPORTED_FILTERS,
@@ -29,11 +30,11 @@ app = build_collector_app(
         # No `next_event_at`: weekly cadence with nothing perishable to
         # escalate toward. The loop runs on its base interval.
         #
-        # A dotted string, not a callable. `build_collector_app` imports it
-        # with importlib *inside* the OTEL_EXPORTER_OTLP_ENDPOINT guard;
-        # importing `.telemetry` here and passing the function would defeat
-        # that guard while leaving every test green.
-        telemetry_module="roster_scope.telemetry",
+        # No `telemetry_module` either: `collector_core.telemetry` is the
+        # default. It is still resolved as a dotted string by importlib
+        # *inside* the OTEL_EXPORTER_OTLP_ENDPOINT guard -- consolidating the
+        # module did not weaken that; it removed twenty-six chances to get it
+        # wrong.
     )
 )
 
@@ -60,3 +61,10 @@ async def scope_diff(
     return await scope_diff_view(
         app.state.collector_spec, version_from=version_from, version_to=to
     )
+
+
+@app.get("/scope/matchups")
+async def scope_matchups():
+    """The resolved matchup-scope slots -- the opposing (and our own line's)
+    players who determine how our SCOPED players perform."""
+    return await scope_matchups_view(app.state.collector_spec)

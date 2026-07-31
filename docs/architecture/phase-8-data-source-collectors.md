@@ -182,7 +182,7 @@ collectors:
     path: /collectors/usage-share
     stage: 8B
     cadence_class: weekly
-    envelope_version: 1
+    envelope_version: "1"
     signal_types: [player_usage_weekly]
     scope_aware: true
     depends_on: [player-identity, roster-scope]
@@ -208,8 +208,12 @@ Generates, in one command:
 
 - `services/<name>/` — FastAPI app implementing all five routes, a stub adapter, `Dockerfile`, `pyproject.toml`, `uv.lock`
 - `helm/values/<name>/values.yaml` — including the bearer-token `extraEnv` `secretKeyRef` block
-- `infra/gitops/envs/local/<name>/values.yaml` and `infra/gitops/argo/<name>.yaml`
-- `.github/workflows/<name>.yml`
+- `infra/gitops/envs/local/<name>/values.yaml` — the image tag only. There is
+  **no** `infra/gitops/argo/<name>.yaml`: `infra/gitops/argo/applicationset.yaml`
+  generates the Argo CD Application from a git directory generator over
+  `helm/values/*`, so the values file above is the whole GitOps registration.
+- **No `.github/workflows/<name>.yml`** — `.github/workflows/services.yml`
+  covers every deployable service as a matrix leg, computed from the registry.
 - A `contracts/collector-registry.yaml` entry
 - Registration in `scripts/deploy-local.py` and `scripts/stack-up.py`
 - A test skeleton asserting envelope conformance and the five routes

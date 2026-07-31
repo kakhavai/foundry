@@ -1,5 +1,5 @@
 name: Build and push image
-description: Builds a Docker image from a service directory and pushes it to GHCR
+description: Builds a service image and pushes it to GHCR
 
 inputs:
   service:
@@ -21,7 +21,18 @@ inputs:
   dockerfile:
     required: false
     default: ''
-    description: Dockerfile path. Defaults to <context>/Dockerfile.
+    description: >-
+      Dockerfile path. Defaults to <context>/Dockerfile. Collectors pass
+      'Dockerfile.collector' — one file builds the whole fleet.
+  build-args:
+    required: false
+    default: ''
+    description: >-
+      Newline-separated NAME=VALUE build args. Collectors pass
+      SERVICE/PACKAGE/PORT, which is what makes one Dockerfile serve the fleet.
+      Deliberately empty for a non-collector: its Dockerfile declares no ARGs,
+      and passing them anyway makes BuildKit warn on every build. Computed by
+      .github/actions/changed-services/filters.py, never written by hand.
 
 runs:
   using: composite
@@ -36,6 +47,7 @@ runs:
       with:
         context: ${{ inputs.context || format('services/{0}', inputs.service) }}
         file: ${{ inputs.dockerfile || format('services/{0}/Dockerfile', inputs.service) }}
+        build-args: ${{ inputs.build-args }}
         push: true
         tags: ${{ inputs.image-name }}:${{ inputs.tag }}
         cache-from: type=gha

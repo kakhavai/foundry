@@ -21,10 +21,17 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 GITOPS_ROOT = ROOT / "infra" / "gitops"
 ARGO_DIR = ROOT / "infra" / "argo"
-ARGO_MANIFESTS_DIR = ROOT / "infra" / "gitops" / "argo"
+APPLICATIONSET = ROOT / "infra" / "gitops" / "argo" / "applicationset.yaml"
+
+# The only environment the ApplicationSet generates Applications for. Not a
+# preference — its template hard-codes `/infra/gitops/envs/local/` as the second
+# valueFile and `namespace: default` on the in-cluster API server, so `local` is
+# the whole set of envs that has a target. See `require_promotion_target`.
+GENERATED_ENVS = ("local",)
 
 
 # ── pure helpers ──────────────────────────────────────────────────────────────
+
 
 def discover_services(env: str, gitops_root: Path = GITOPS_ROOT) -> list[str]:
     """List service names found under infra/gitops/envs/<env>/."""
@@ -50,7 +57,7 @@ def write_tag(values_file: Path, tag: str) -> None:
     """
     if values_file.exists():
         text = values_file.read_text()
-        patched = re.sub(r'(tag:\s*")[^"]*(")', rf'\g<1>{tag}\2', text)
+        patched = re.sub(r'(tag:\s*")[^"]*(")', rf"\g<1>{tag}\2", text)
         if patched != text:
             values_file.write_text(patched)
             return
@@ -79,10 +86,13 @@ def argo_values_file(env: str, argo_dir: Path = ARGO_DIR) -> Path:
 
 # ── subprocess helpers ────────────────────────────────────────────────────────
 
+
 def run(cmd: list, cwd: Path | None = None) -> None:
     """Run a subprocess, print the command, exit on non-zero."""
     print(f"\n$ {' '.join(str(c) for c in cmd)}")
-    result = subprocess.run(cmd, cwd=cwd)
+    # check=False: the non-zero exit is handled below, and CalledProcessError's
+    # traceback would bury the command output the caller actually needs.
+    result = subprocess.run(cmd, cwd=cwd, check=False)
     if result.returncode != 0:
         sys.exit(result.returncode)
 
@@ -102,11 +112,14 @@ def kubectl_run(*args: str, context: str | None = None) -> None:
 def kubectl_capture(*args: str, context: str | None = None) -> tuple[int, str]:
     """Run kubectl, return (returncode, stdout). Never exits."""
     cmd = _kubectl_cmd(args, context)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # check=False: the returncode IS the return value — see the docstring.
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     return result.returncode, result.stdout.strip()
 
 
-def helmfile_run(*args: str, context: str | None = None, cwd: Path | None = None) -> None:
+def helmfile_run(
+    *args: str, context: str | None = None, cwd: Path | None = None
+) -> None:
     """Run helmfile, passing --kube-context if provided."""
     cmd = ["helmfile"]
     if context:
@@ -117,9 +130,13 @@ def helmfile_run(*args: str, context: str | None = None, cwd: Path | None = None
 def argo_password(context: str | None = None) -> str:
     """Decode the ArgoCD initial admin password from the cluster secret."""
     _, out = kubectl_capture(
-        "get", "secret", "argocd-initial-admin-secret",
-        "-n", "argocd",
-        "-o", "jsonpath={.data.password}",
+        "get",
+        "secret",
+        "argocd-initial-admin-secret",
+        "-n",
+        "argocd",
+        "-o",
+        "jsonpath={.data.password}",
         context=context,
     )
     if not out:
@@ -128,6 +145,7 @@ def argo_password(context: str | None = None) -> str:
 
 
 # ── polling ───────────────────────────────────────────────────────────────────
+
 
 def poll_applications(
     services: list[str],
@@ -143,9 +161,13 @@ def poll_applications(
         all_healthy = True
         for name in names:
             _, out = kubectl_capture(
-                "get", "application", name,
-                "-n", "argocd",
-                "-o", "jsonpath={.status.sync.status},{.status.health.status}",
+                "get",
+                "application",
+                name,
+                "-n",
+                "argocd",
+                "-o",
+                "jsonpath={.status.sync.status},{.status.health.status}",
                 context=context,
             )
             sync, _, health = out.partition(",")
@@ -160,6 +182,7 @@ def poll_applications(
 
 # ── git + manifest helpers ────────────────────────────────────────────────────
 
+
 def git_commit_and_push(files: list[Path], message: str) -> None:
     """Stage the given files, commit with message, and push."""
     for f in files:
@@ -168,40 +191,73 @@ def git_commit_and_push(files: list[Path], message: str) -> None:
     run(["git", "push"])
 
 
-def ensure_application_manifest(
-    service: str,
-    env: str,
-    argo_manifests_dir: Path = ARGO_MANIFESTS_DIR,
-) -> Path | None:
-    """Create an env-specific Application manifest if it doesn't exist.
+def require_promotion_target(service: str, env: str) -> None:
+    """Exit unless `env` is an environment Argo CD actually generates apps for.
 
-    Returns the new manifest path, or None if nothing was created.
+    **This used to write a manifest, and it must not any more.** It read
+    `infra/gitops/argo/<service>.yaml` and copied it into
+    `infra/gitops/argo/<service>-<env>.yaml` with the name and the env path
+    rewritten. Phase 8 Wave 0 replaced every one of those per-service manifests
+    with `infra/gitops/argo/applicationset.yaml`, so the source it read no
+    longer exists — and its own error said "source manifest not found", which
+    reads as somebody having forgotten a file rather than as the deliberate
+    deletion it was.
+
+    Restoring the copy is not the fix. Three things say so, and none of them is
+    a matter of taste:
+
+    * `tests/test_service_ci_coverage.py::test_argo_directory_holds_only_the_
+      app_of_apps_and_the_set` asserts that directory holds exactly two files.
+      A written `<service>-<env>.yaml` reds a green platform test.
+    * The app-of-apps syncs that whole directory, so the written manifest WOULD
+      be applied — into `namespace: default` on the same single cluster the
+      local Application already owns.
+    * Its HTTPRoute would carry `gateway.pathPrefix` out of
+      `helm/values/<service>/values.yaml`, which is env-independent. Two envs
+      would claim the identical path on the one `foundry` Gateway, and Gateway
+      API breaks that tie on creation timestamp. That is a manifest which
+      applies cleanly and then misroutes silently — strictly worse than a loud
+      refusal.
+
+    So this refuses, and says why. Making promotion real is an ApplicationSet
+    change plus an env strategy that does not exist yet: cluster-vs-namespace,
+    per-env gateway paths, per-env Secrets. `infra/gitops/envs/staging/` and
+    `envs/prod/` hold a `.gitkeep` and nothing else, so there is no target to
+    promote into today either way.
     """
-    if env == "local":
-        return None
+    if env in GENERATED_ENVS:
+        return
 
-    manifest_path = argo_manifests_dir / f"{service}-{env}.yaml"
-    if manifest_path.exists():
-        return None
-
-    source = argo_manifests_dir / f"{service}.yaml"
-    if not source.exists():
-        print(f"Error: source manifest not found: {source}")
-        sys.exit(1)
-
-    text = source.read_text()
-    text = re.sub(
-        r'^(  name:\s*)' + re.escape(service) + r'$',
-        rf'\g<1>{service}-{env}',
-        text,
-        flags=re.MULTILINE,
+    print(
+        f"Error: cannot promote {service!r} to {env!r} — no {env} environment "
+        f"exists to promote into.\n"
+        f"\n"
+        f"  {APPLICATIONSET.relative_to(ROOT).as_posix()} generates every Argo CD\n"
+        f"  Application from helm/values/*, and its template hard-codes the local\n"
+        f"  env: /infra/gitops/envs/local/<service>/values.yaml, namespace\n"
+        f"  'default'. There is no {service}-{env} Application for a promoted tag\n"
+        f"  to reach.\n"
+        f"\n"
+        f"  The per-service manifests this command used to copy\n"
+        f"  (infra/gitops/argo/{service}.yaml) were deleted deliberately in Phase 8\n"
+        f"  Wave 0. They are not missing files, and re-adding one is a regression:\n"
+        f"  tests/test_service_ci_coverage.py fails on any third file in that\n"
+        f"  directory, and the app-of-apps would apply it into the same namespace\n"
+        f"  and onto the same gateway path the local Application already holds.\n"
+        f"\n"
+        f"  Nothing was written and nothing was committed.\n"
+        f"\n"
+        f"  Promotion needs the ApplicationSet to become env-aware first, which\n"
+        f"  needs an env strategy nobody has designed: whether a non-local env is\n"
+        f"  a separate cluster or a namespace, how each env gets its own gateway\n"
+        f"  path, and where its Secrets come from. That is Phase 6's work — see\n"
+        f"  docs/architecture/phase-6-aws-deployment.md."
     )
-    text = text.replace("/infra/gitops/envs/local/", f"/infra/gitops/envs/{env}/")
-    manifest_path.write_text(text)
-    return manifest_path
+    sys.exit(1)
 
 
 # ── sub-commands ──────────────────────────────────────────────────────────────
+
 
 def cmd_install(args) -> None:
     ctx = args.context
@@ -214,21 +270,42 @@ def cmd_install(args) -> None:
 
     print("\nWaiting for argocd-server to be ready...")
     kubectl_run(
-        "wait", "--for=condition=available",
+        "wait",
+        "--for=condition=available",
         "deployment/argocd-server",
-        "-n", "argocd",
+        "-n",
+        "argocd",
         "--timeout=180s",
         context=ctx,
     )
 
     print("\nApplying app-of-apps...")
     kubectl_run(
-        "apply", "-f", str(ROOT / "infra/gitops/argo/app-of-apps.yaml"),
+        "apply",
+        "-f",
+        str(ROOT / "infra/gitops/argo/app-of-apps.yaml"),
         context=ctx,
     )
 
     print("\nWaiting for all Applications to be Synced + Healthy...")
     services = discover_services(env)
+    wait_only = getattr(args, "wait_only", None)
+    if wait_only:
+        # Scope the wait to what the caller actually needs ready.
+        #
+        # The ApplicationSet globs helm/values/*, so Argo manages an
+        # Application for EVERY service -- but a collector's GitOps overlay
+        # pins tag 0.1.0 until build-push publishes its first image on merge
+        # to main. On a PR branch those images do not exist, so those
+        # Applications can never reach Healthy and an unscoped wait always
+        # times out. A caller that exercises only weather should not block
+        # on collectors whose images have never been published.
+        missing = sorted(set(wait_only) - set(services))
+        if missing:
+            print(f"  Requested services not discovered: {', '.join(missing)}")
+            sys.exit(1)
+        services = [s for s in services if s in set(wait_only)]
+        print(f"  Waiting only on: {', '.join(services)}")
     if services:
         ok = poll_applications(services, env, ctx, timeout=300)
         if not ok:
@@ -240,7 +317,9 @@ def cmd_install(args) -> None:
     pwd = argo_password(ctx)
     print(f"\n{'=' * 50}")
     print(f"Argo CD installed. Admin password: {pwd}")
-    print("Run 'python scripts/argocd-deploy.py ui' to access the UI at http://localhost:8080")
+    print(
+        "Run 'python scripts/argocd-deploy.py ui' to access the UI at http://localhost:8080"
+    )
     print("=" * 50)
 
 
@@ -250,7 +329,9 @@ def cmd_verify(args) -> None:
 
     print(f"\nVerifying Argo CD ({env})...")
 
-    rc, out = kubectl_capture("get", "pods", "-n", "argocd", "--no-headers", context=ctx)
+    rc, out = kubectl_capture(
+        "get", "pods", "-n", "argocd", "--no-headers", context=ctx
+    )
     if rc != 0:
         print("Error: could not list argocd pods — is the cluster reachable?")
         sys.exit(1)
@@ -275,16 +356,23 @@ def cmd_verify(args) -> None:
     for svc in services:
         name = app_name(svc, env)
         kubectl_capture(
-            "annotate", "application", name,
-            "-n", "argocd",
+            "annotate",
+            "application",
+            name,
+            "-n",
+            "argocd",
             "argocd.argoproj.io/refresh=normal",
             "--overwrite",
             context=ctx,
         )
         _, status_out = kubectl_capture(
-            "get", "application", name,
-            "-n", "argocd",
-            "-o", "jsonpath={.status.sync.status},{.status.health.status},{.status.operationState.finishedAt}",
+            "get",
+            "application",
+            name,
+            "-n",
+            "argocd",
+            "-o",
+            "jsonpath={.status.sync.status},{.status.health.status},{.status.operationState.finishedAt}",
             context=ctx,
         )
         parts = (status_out + ",,").split(",")
@@ -315,21 +403,24 @@ def cmd_promote(args) -> None:
     tag = read_tag(from_file)
     print(f"\nPromoting {service}: {from_env} -> {to_env} @ {tag}")
 
-    manifest = ensure_application_manifest(service, to_env)
+    # Checked BEFORE write_tag, so a refused promotion leaves the tree clean.
+    # A promotion commits only the image tag now — the Application it lands on
+    # is generated, never written here. See `require_promotion_target`.
+    require_promotion_target(service, to_env)
     write_tag(to_file, tag)
 
-    files_to_commit: list[Path] = [to_file]
-    if manifest:
-        files_to_commit.append(manifest)
     git_commit_and_push(
-        files_to_commit,
+        [to_file],
         f"chore(gitops): promote {service} from {from_env} to {to_env} @ {tag}",
     )
 
     print(f"\nWaiting for {app_name(service, to_env)} to sync in {to_env}...")
     ok = poll_applications([service], to_env, ctx, timeout=args.timeout)
     if not ok:
-        print(f"Timeout: {app_name(service, to_env)} did not reach Synced+Healthy within {args.timeout}s")
+        print(
+            f"Timeout: {app_name(service, to_env)} did not reach "
+            f"Synced+Healthy within {args.timeout}s"
+        )
         sys.exit(1)
     print(f"\nDone. {service} @ {tag} is live in {to_env}.")
 
@@ -343,14 +434,25 @@ def cmd_watch(args) -> None:
 
     print("\n--- kubectl rollout status ---")
     rollout_cmd = _kubectl_cmd(
-        ("rollout", "status", f"deployment/{service}", "-n", "default", f"--timeout={args.timeout}s"),
+        (
+            "rollout",
+            "status",
+            f"deployment/{service}",
+            "-n",
+            "default",
+            f"--timeout={args.timeout}s",
+        ),
         ctx,
     )
-    rollout = subprocess.run(rollout_cmd)
+    # check=False deliberately: a non-zero exit here is informational only —
+    # Argo CD's Application health is the authoritative gate below, and a
+    # transient rollout timeout may still reconcile to Healthy.
+    rollout = subprocess.run(rollout_cmd, check=False)
     if rollout.returncode != 0:
-        # Informational only — Argo CD's Application health is the authoritative
-        # gate below. A transient rollout timeout may still reconcile to Healthy.
-        print(f"  (kubectl rollout status exited {rollout.returncode}; checking Argo CD state)")
+        print(
+            f"  (kubectl rollout status exited {rollout.returncode}; "
+            "checking Argo CD state)"
+        )
 
     print("\n--- Application status ---")
     name = app_name(service, env)
@@ -369,13 +471,15 @@ def cmd_ui(args) -> None:
         ("port-forward", "svc/argocd-server", "-n", "argocd", f"{port}:80"),
         ctx,
     )
-    proc = subprocess.Popen(pf_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(
+        pf_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
     time.sleep(1)
 
     pwd = argo_password(ctx)
     print(f"\n{'=' * 50}")
     print(f"Argo CD UI:  http://localhost:{port}")
-    print(f"Username:    admin")
+    print("Username:    admin")
     print(f"Password:    {pwd}")
     print("=" * 50)
     print("Press Ctrl+C to stop the port-forward.")
@@ -391,10 +495,14 @@ def cmd_ui(args) -> None:
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+
 def cmd_help(args, parser: argparse.ArgumentParser) -> None:
     if args.topic:
         for action in parser._subparsers._actions:
-            if hasattr(action, "_name_parser_map") and args.topic in action._name_parser_map:
+            if (
+                hasattr(action, "_name_parser_map")
+                and args.topic in action._name_parser_map
+            ):
                 action._name_parser_map[args.topic].print_help()
                 return
         print(f"Unknown command: {args.topic}")
@@ -404,49 +512,118 @@ def cmd_help(args, parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="argocd-deploy",
-        description="Manage the Argo CD lifecycle: install, verify, promote, watch, and access the UI.",
+        description=(
+            "Manage the Argo CD lifecycle: install, verify, promote, watch, "
+            "and access the UI."
+        ),
     )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
     sub.required = True
 
     # install
     p = sub.add_parser("install", help="Install Argo CD and bootstrap app-of-apps")
-    p.add_argument("--env", default="local", choices=["local", "staging", "prod"],
-                   help="Target environment (default: local)")
-    p.add_argument("--context", default=None, help="kubectl context (default: active context)")
+    p.add_argument(
+        "--wait-only",
+        nargs="+",
+        metavar="SERVICE",
+        help=(
+            "Wait for only these Applications. The ApplicationSet generates "
+            "one per helm/values/* dir, and a collector's overlay pins 0.1.0 "
+            "until its image is first published on merge to main -- so on a "
+            "PR branch an unscoped wait cannot pass."
+        ),
+    )
+    p.add_argument(
+        "--env",
+        default="local",
+        choices=["local", "staging", "prod"],
+        help="Target environment (default: local)",
+    )
+    p.add_argument(
+        "--context", default=None, help="kubectl context (default: active context)"
+    )
     p.set_defaults(func=cmd_install)
 
     # verify
-    p = sub.add_parser("verify", help="Read-only health check: pods, sync status, repo reachability")
-    p.add_argument("--env", default="local", choices=["local", "staging", "prod"],
-                   help="Target environment (default: local)")
-    p.add_argument("--context", default=None, help="kubectl context (default: active context)")
+    p = sub.add_parser(
+        "verify", help="Read-only health check: pods, sync status, repo reachability"
+    )
+    p.add_argument(
+        "--env",
+        default="local",
+        choices=["local", "staging", "prod"],
+        help="Target environment (default: local)",
+    )
+    p.add_argument(
+        "--context", default=None, help="kubectl context (default: active context)"
+    )
     p.set_defaults(func=cmd_verify)
 
     # promote
-    p = sub.add_parser("promote", help="Promote a service image tag from one env to another")
+    p = sub.add_parser(
+        "promote",
+        help="Promote a service image tag from one env to another",
+        description=(
+            "Copy a service's image tag from one env's gitops values file to "
+            "another's, commit, push, and wait for the target Application to "
+            "sync. Only 'local' has generated Applications today — "
+            "infra/gitops/argo/applicationset.yaml hard-codes that env — so "
+            "--to staging|prod refuses with an explanation rather than "
+            "committing a tag nothing will read."
+        ),
+    )
     p.add_argument("service", help="Service name (e.g. weather)")
-    p.add_argument("--from", dest="from_env", required=True,
-                   choices=["local", "staging", "prod"], help="Source environment")
-    p.add_argument("--to", dest="to_env", required=True,
-                   choices=["local", "staging", "prod"], help="Target environment")
-    p.add_argument("--context", default=None,
-                   help="kubectl context for watching target env sync (default: active context)")
-    p.add_argument("--timeout", type=int, default=300, help="Seconds to wait for sync (default: 300)")
+    p.add_argument(
+        "--from",
+        dest="from_env",
+        required=True,
+        choices=["local", "staging", "prod"],
+        help="Source environment",
+    )
+    p.add_argument(
+        "--to",
+        dest="to_env",
+        required=True,
+        choices=["local", "staging", "prod"],
+        help="Target environment",
+    )
+    p.add_argument(
+        "--context",
+        default=None,
+        help="kubectl context for watching target env sync (default: active context)",
+    )
+    p.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="Seconds to wait for sync (default: 300)",
+    )
     p.set_defaults(func=cmd_promote)
 
     # watch
-    p = sub.add_parser("watch", help="Stream rollout status and confirm Application is Synced+Healthy")
+    p = sub.add_parser(
+        "watch", help="Stream rollout status and confirm Application is Synced+Healthy"
+    )
     p.add_argument("service", help="Service name (e.g. weather)")
-    p.add_argument("--env", default="local", choices=["local", "staging", "prod"],
-                   help="Target environment (default: local)")
-    p.add_argument("--context", default=None, help="kubectl context (default: active context)")
-    p.add_argument("--timeout", type=int, default=180, help="Seconds to wait (default: 180)")
+    p.add_argument(
+        "--env",
+        default="local",
+        choices=["local", "staging", "prod"],
+        help="Target environment (default: local)",
+    )
+    p.add_argument(
+        "--context", default=None, help="kubectl context (default: active context)"
+    )
+    p.add_argument(
+        "--timeout", type=int, default=180, help="Seconds to wait (default: 180)"
+    )
     p.set_defaults(func=cmd_watch)
 
     # ui
     p = sub.add_parser("ui", help="Port-forward the Argo CD UI and print credentials")
-    p.add_argument("--context", default=None, help="kubectl context (default: active context)")
+    p.add_argument(
+        "--context", default=None, help="kubectl context (default: active context)"
+    )
     p.add_argument("--port", type=int, default=8080, help="Local port (default: 8080)")
     p.set_defaults(func=cmd_ui)
 

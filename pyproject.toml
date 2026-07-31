@@ -1,7 +1,52 @@
+# Globbed, not enumerated. Every collector is a workspace member, and listing
+# them by hand made the root pyproject.toml a shared file that all twenty-four
+# queued collectors would have to append to — twenty-four merge conflicts on a
+# file no machine reads for anything else. `services/*` covers them all, so
+# `scripts/new-collector.py` touches no file outside the new service and the
+# append-only registry.
+#
+# `exclude` names the two services that are deliberately NOT members: both own
+# their own uv.lock and build from their own directory as the Docker context.
+# `player-projections` consumes the generator's S3 output and imports nothing
+# from libs/; `foundry-cli` has no Helm values, no image and no GitOps entry.
+# Pulling either into the workspace would force it to resolve against the
+# fleet's lock for no benefit.
 [tool.uv.workspace]
 members = [
     "libs/*",
-    "services/weather",
-    "services/player-identity",
-    "services/roster-scope",
+    "services/*",
 ]
+exclude = [
+    "services/foundry-cli",
+    "services/player-projections",
+]
+
+# Applies to the Python that lives OUTSIDE a member package — tests/ and
+# scripts/. Each service and lib carries its own [tool.ruff] and is unaffected,
+# because ruff uses the nearest config walking up from the file.
+#
+# Without target-version here, ruff infers a floor old enough that `tomllib`
+# (stdlib since 3.11) is classified as a third-party import, and `ruff check`
+# demands it be sorted into the wrong block. Every service already pins py312;
+# this says the same thing for the repo-level code.
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+# `E`, `F`, `I` is what every service and `libs/collector-core` already select,
+# so repo-level Python is held to the same bar as packaged code rather than a
+# looser one.
+#
+# `SIM` and `PLW` are the two additions, and they are here because of what
+# these particular directories are. `scripts/` is a pile of `subprocess.run`
+# calls driving kubectl, helm and docker — `PLW1510` (subprocess-run-without-check)
+# forces each of those to say out loud whether a non-zero exit is fatal, which
+# is exactly the decision that gets made by omission otherwise. `SIM` catches
+# the nested-`with` pyramids that accumulate in tests full of `mock.patch`.
+#
+# Deliberately NOT `PL` in full: `PLR2004` (magic-value-comparison) fires 31
+# times on assertions like `assert result.returncode == 0`, where the magic
+# value is the point of the test, and `PLR09xx` complains about the length of
+# functions whose length is not a defect.
+[tool.ruff.lint]
+select = ["E", "F", "I", "SIM", "PLW"]

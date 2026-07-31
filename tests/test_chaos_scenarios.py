@@ -8,6 +8,7 @@ about: a scenario that reports green because it cannot go red.
 
 import importlib.util
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ spec.loader.exec_module(rc)
 
 
 # ── parse_expect ──────────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize(
     "text,op,value",
@@ -57,7 +59,10 @@ def test_parse_expect_rejects_junk(text):
 
 # ── is_trivially_true ─────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("op,value", [(">=", 0.0), (">=", -1.0), (">", -1.0), ("!=", -1.0)])
+
+@pytest.mark.parametrize(
+    "op,value", [(">=", 0.0), (">=", -1.0), (">", -1.0), ("!=", -1.0)]
+)
 def test_trivially_true_criteria_are_flagged(op, value):
     """Every metric these scenarios query is non-negative, so a comparison
     satisfied by every non-negative number can never go red."""
@@ -65,13 +70,15 @@ def test_trivially_true_criteria_are_flagged(op, value):
 
 
 @pytest.mark.parametrize(
-    "op,value", [("==", 1.0), (">", 0.0), (">=", 2.0), ("<=", 1.05), ("<", 0.5), ("!=", 0.0)]
+    "op,value",
+    [("==", 1.0), (">", 0.0), (">=", 2.0), ("<=", 1.05), ("<", 0.5), ("!=", 0.0)],
 )
 def test_falsifiable_criteria_are_not_flagged(op, value):
     assert rc.is_trivially_true(op, value) is False
 
 
 # ── parse_duration ────────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize(
     "text,seconds",
@@ -88,9 +95,15 @@ def test_parse_duration_reads_ms_before_s():
 
 # ── extract_scalar ────────────────────────────────────────────────────────────
 
+
 def _vector(value):
-    return {"status": "success", "data": {"resultType": "vector",
-            "result": [{"metric": {}, "value": [1785335007.657, str(value)]}]}}
+    return {
+        "status": "success",
+        "data": {
+            "resultType": "vector",
+            "result": [{"metric": {}, "value": [1785335007.657, str(value)]}],
+        },
+    }
 
 
 def _empty():
@@ -113,22 +126,28 @@ def test_empty_result_is_zero_when_explicitly_allowed():
 
 
 def test_multi_series_result_is_rejected():
-    payload = {"status": "success", "data": {"result": [
-        {"metric": {"pod": "a"}, "value": [1, "1"]},
-        {"metric": {"pod": "b"}, "value": [1, "1"]},
-    ]}}
+    payload = {
+        "status": "success",
+        "data": {
+            "result": [
+                {"metric": {"pod": "a"}, "value": [1, "1"]},
+                {"metric": {"pod": "b"}, "value": [1, "1"]},
+            ]
+        },
+    }
     with pytest.raises(ValueError, match="reduce to one"):
         rc.extract_scalar(payload, allow_empty=False)
 
 
 def test_failed_query_raises():
     with pytest.raises(ValueError, match="Prometheus query failed"):
-        rc.extract_scalar({"status": "error", "error": "parse error"}, allow_empty=False)
+        rc.extract_scalar(
+            {"status": "error", "error": "parse error"}, allow_empty=False
+        )
 
-
-import textwrap
 
 # ── load_scenario ─────────────────────────────────────────────────────────────
+
 
 def _write(tmp_path, text):
     path = tmp_path / "scenario.yaml"
@@ -137,7 +156,9 @@ def _write(tmp_path, text):
 
 
 def test_load_scenario_splits_head_from_chaos_docs(tmp_path):
-    path = _write(tmp_path, """
+    path = _write(
+        tmp_path,
+        """
         apiVersion: foundry.chaos/v1
         kind: Scenario
         metadata:
@@ -149,7 +170,8 @@ def test_load_scenario_splits_head_from_chaos_docs(tmp_path):
         kind: PodChaos
         metadata:
           name: demo-chaos
-    """)
+    """,
+    )
     head, chaos = rc.load_scenario(path)
     assert head["metadata"]["name"] == "demo"
     assert len(chaos) == 1
@@ -157,7 +179,9 @@ def test_load_scenario_splits_head_from_chaos_docs(tmp_path):
 
 
 def test_load_scenario_rejects_two_heads(tmp_path):
-    path = _write(tmp_path, """
+    path = _write(
+        tmp_path,
+        """
         apiVersion: foundry.chaos/v1
         kind: Scenario
         metadata:
@@ -167,23 +191,28 @@ def test_load_scenario_rejects_two_heads(tmp_path):
         kind: Scenario
         metadata:
           name: two
-    """)
+    """,
+    )
     with pytest.raises(ValueError, match="exactly one"):
         rc.load_scenario(path)
 
 
 def test_load_scenario_rejects_missing_head(tmp_path):
-    path = _write(tmp_path, """
+    path = _write(
+        tmp_path,
+        """
         apiVersion: chaos-mesh.org/v1alpha1
         kind: PodChaos
         metadata:
           name: orphan
-    """)
+    """,
+    )
     with pytest.raises(ValueError, match="exactly one"):
         rc.load_scenario(path)
 
 
 # ── validate_scenario ─────────────────────────────────────────────────────────
+
 
 def _valid_head():
     return {
@@ -196,7 +225,11 @@ def _valid_head():
                 {"description": "up", "query": 'up{job="weather"}', "expect": "== 1"}
             ],
             "criteria": [
-                {"description": "recovered", "query": 'up{job="weather"}', "expect": "== 1"}
+                {
+                    "description": "recovered",
+                    "query": 'up{job="weather"}',
+                    "expect": "== 1",
+                }
             ],
         },
     }
@@ -235,7 +268,9 @@ def test_scenario_that_injects_nothing_is_a_problem():
 def test_fault_commands_count_as_injection():
     """bad-deploy injects via kubectl, not via a Chaos Mesh resource."""
     head = _valid_head()
-    head["spec"]["fault"] = [["kubectl", "set", "image", "deployment/weather", "weather=bad"]]
+    head["spec"]["fault"] = [
+        ["kubectl", "set", "image", "deployment/weather", "weather=bad"]
+    ]
     assert rc.validate_scenario(head, []) == []
 
 

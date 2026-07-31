@@ -39,13 +39,19 @@
 #   stage            the phase-8 sub-stage that shipped it — documentary
 #   cadence_class    one of collector_core.cadence.CadenceClass's values;
 #                    must match what the service's CollectorDescriptor declares
-#   envelope_version integer. NOTE the type: collector_core's ENVELOPE_VERSION
-#                    is the STRING "1" because it becomes the lake path
-#                    segment `v1`, and `GET /catalog` returns that string. The
-#                    phase doc's registry example writes it as an int, so this
-#                    file follows the doc and the gate compares
-#                    str(registry) == str(catalog). Flagged as a real
-#                    spec/code inconsistency to be settled deliberately.
+#   envelope_version STRING — settled deliberately, not a formatting quirk.
+#                    Everything else in the repo already agreed:
+#                    collector_core.envelope.ENVELOPE_VERSION is the string
+#                    "1" because it becomes the lake path segment `v1`,
+#                    contracts/signal-envelope/envelope.v1.schema.json
+#                    declares {"const": "1"}, all six committed fixtures write
+#                    "1", and `GET /catalog` returns that string. The registry
+#                    was the sole outlier, and only because one line of the
+#                    phase doc wrote it unquoted — while that same doc's
+#                    ENVELOPE example writes it quoted. The old
+#                    str(registry) == str(catalog) comparison was rejected as
+#                    a workaround rather than a decision: it would also have
+#                    passed 1 against "1.0". Both gates now compare exactly.
 #   signal_types     must match the CollectorDescriptor's declared tuple
 #   scope_aware      whether the collector narrows to the roster scope.
 #                    TYPE-CHECKED ONLY. No code representation of this exists
@@ -59,7 +65,7 @@ collectors:
     path: /collectors/weather
     stage: 8A
     cadence_class: volatile
-    envelope_version: 1
+    envelope_version: "1"
     signal_types: [venue_forecast_kickoff, venue_conditions_current]
     scope_aware: false
     # Empty deliberately. The phase doc's "Depends on" line for weather names
@@ -72,7 +78,7 @@ collectors:
     path: /collectors/player-identity
     stage: 8A
     cadence_class: seasonal
-    envelope_version: 1
+    envelope_version: "1"
     signal_types: [player_identity_crosswalk, name_resolution_miss]
     # It must resolve names the scope deliberately excludes — deep bench
     # players and free agents that betting books and news feeds mention.
@@ -85,14 +91,149 @@ collectors:
     path: /collectors/roster-scope
     stage: 8A
     cadence_class: weekly
-    envelope_version: 1
-    signal_types: [scope_membership_weekly, scope_change_event]
+    envelope_version: "1"
+    signal_types: [scope_membership_weekly, scope_change_event, scope_matchup_weekly]
     # It defines the scope rather than consuming it.
     scope_aware: false
-    # Conceptual today, not yet a runtime call: `PLAYER_IDENTITY_URL` ships
-    # empty and the in-process stub resolver is used, so nothing here reaches
-    # player-identity over HTTP until that value is set. Declared anyway
+    # A real runtime call, not a conceptual dependency: `helm/values/
+    # roster-scope/values.yaml` sets `PLAYER_IDENTITY_URL` to
+    # `http://player-identity:8002`, so `build_resolver` selects
+    # `HttpPlayerIdentityResolver` and every capture pass resolves names over
+    # HTTP against the real service (~992 calls per pass, confirmed against
+    # a live container run) rather than the in-process stub. Declared here
     # because the seam exists and the phase doc names the dependency — and
     # because this is the merge-order gate that kept this PR behind
     # player-identity's, which is the gate working as designed.
+    depends_on: [player-identity]
+
+  - name: injury-report
+    path: /collectors/injury-report
+    stage: 8B
+    cadence_class: volatile
+    envelope_version: "1"
+    signal_types: [player_injury_status, team_injury_report]
+    # FALSE ON PURPOSE, and it is not the default falling through. Every other
+    # signal collector narrows to roster-scope's membership list before it
+    # fetches; this one must not. An opposing cornerback ruled out moves a
+    # receiver's projection as much as the receiver's own hamstring does, and
+    # defenders never appear on an offence-oriented watchlist at all — so
+    # narrowing here would silently discard the half of the signal that is
+    # hardest to get anywhere else. The phase doc states it outright in this
+    # collector's `Scope-aware` line. TYPE-CHECKED ONLY: nothing verifies the
+    # value, which is why the reason is written down rather than inferred.
+    scope_aware: false
+    # Every emitted row carries a canonical player_id, and player-identity is
+    # the collector that decides what one is. The seam is
+    # `injury_report/adapters/identity.py`; PLAYER_IDENTITY_URL ships empty and
+    # ids are minted deterministically until it does not.
+    depends_on: [player-identity]
+  - name: usage-share
+    path: /collectors/usage-share
+    stage: 8B
+    cadence_class: weekly
+    envelope_version: "1"
+    signal_types: [player_usage_weekly]
+    # TYPE-CHECKED ONLY — nothing verifies this is correct.
+    #
+    # `false`, and deliberately NOT the `true` the phase doc's plan line
+    # predicted. This describes what the code does, not what it intends: the
+    # collector captures every offensive-skill player its feed carries — a
+    # SUPERSET of the watchlist — because roster-scope's membership rows carry
+    # no name and no external id, so there is nothing to join a GSIS-keyed feed
+    # onto. Narrowing is impossible today, and claiming it here would be a lie
+    # only a human reviewer could catch.
+    #
+    # The superset is also the safer half of the trade: the spec's own second
+    # failure mode for this collector is scope drift — "a player promoted into
+    # the watchlist in week 9 has no rows for weeks 1-8, so any trailing
+    # average silently computes over a shorter denominator". Capturing everyone
+    # removes that failure entirely. Flip to true when the join exists.
+    scope_aware: false
+    depends_on: [player-identity, roster-scope]
+  - name: roster-transactions
+    path: /collectors/roster-transactions
+    stage: 8B
+    cadence_class: volatile
+    envelope_version: "1"
+    signal_types: [roster_transaction]
+    # TYPE-CHECKED ONLY — nothing verifies this is correct. False deliberately,
+    # and for a reason specific to this collector: the players who matter most
+    # here are the ones NOT yet on the watchlist, since the transaction is the
+    # thing that puts them there. Narrowing to roster-scope's membership before
+    # fetching would filter out exactly the signal.
+    scope_aware: false
+    # Conceptual today, not yet a runtime call: the canonical `player_id` on
+    # every row comes from player-identity, but nothing here reaches it over
+    # HTTP — the adapter passes the upstream's id through and the crosswalk is
+    # applied downstream. Declared anyway because the phase doc names the
+    # dependency, and because this is the merge-order gate that keeps this PR
+    # behind player-identity's.
+    depends_on: [player-identity]
+  - name: player-stats
+    path: /collectors/player-stats
+    stage: 8B
+    cadence_class: weekly
+    envelope_version: "1"
+    signal_types: [player_box_weekly]
+    # TYPE-CHECKED ONLY — nothing verifies this is correct. True because the
+    # collector's coverage.expected is defined against roster-scope's
+    # watchlist and its EXPECTED_FLOOR is derived from roster-scope's config
+    # (416 slots minus the 32 team defenses, which have no box score = 384).
+    # The runtime narrowing ships OFF: `ROSTER_SCOPE_URL` is empty in the
+    # values file because roster-scope and this collector currently mint
+    # player_ids from two different stub resolvers, so the id spaces do not
+    # intersect. See services/player-stats/player_stats/adapters/scope.py.
+    scope_aware: true
+    # roster-scope for the watchlist, player-identity for the GSIS ->
+    # canonical id crosswalk. Both are seams today (see scope_aware above);
+    # declared anyway because the phase doc names them and this is the
+    # merge-order gate that keeps this PR behind both of theirs.
+    depends_on: [player-identity, roster-scope]
+  - name: schedule-context
+    path: /collectors/schedule-context
+    stage: 8B
+    cadence_class: weekly
+    envelope_version: "1"
+    signal_types: [game_situational_context, team_rest_context]
+    # TYPE-CHECKED ONLY — nothing verifies this is correct. False here because
+    # the signals are keyed by game and team; there is no player in them for
+    # roster-scope's membership list to narrow.
+    scope_aware: false
+    # Empty deliberately. The phase doc's "Depends on" line for this collector
+    # says "nothing directly; joins to `venue` for coordinates and timezones",
+    # and `venue` arrives in 8E. Until it does, that join is served by an
+    # in-process table (schedule_context/venues.py) behind a `Venue` seam, the
+    # same shape as weather's bundled schedule adapter. `depends_on` names
+    # registered collectors, and `venue` is not one yet.
+    depends_on: []
+  - name: depth-chart
+    path: /collectors/depth-chart
+    stage: 8B
+    cadence_class: volatile
+    envelope_version: "1"
+    signal_types: [team_depth_chart, depth_chart_stability]
+    # TYPE-CHECKED ONLY — nothing verifies this is correct. False deliberately,
+    # and the spec gives the reason: the chart is a team-level structure, and
+    # ranking only watchlist players would hide the backup who is one move away
+    # from entering it. Every charted player at the configured positions is
+    # published, however deep.
+    scope_aware: false
+    # NOT roster-scope, and the direction is the point: roster-scope CONSUMES a
+    # depth chart to decide who is in scope, while this collector PUBLISHES the
+    # chart itself. Naming it here would invert the arrow and would set up a
+    # cycle the moment roster-scope declared this collector — which is the
+    # follow-up worth doing, since roster-scope currently reads the same feed
+    # through its own adapter.
+    #
+    # player-identity is declared for the reason roster-scope declares it: the
+    # `player_id` field on `team_depth_chart` has no other possible source. It
+    # is conceptual today rather than a runtime call — the field ships null and
+    # the published `gsis_id` crosswalk key is carried instead, because a
+    # player-identity client is something the whole fleet needs and belongs in
+    # collector-core rather than as a third per-service copy.
+    #
+    # The spec also names `roster-transactions` (for mid-week invalidation).
+    # It is not in this file, so it cannot be listed: depends_on names
+    # REGISTERED collectors, and the gate rejects an unregistered one. Add it
+    # here when that collector merges.
     depends_on: [player-identity]

@@ -8,12 +8,14 @@ envelopes alone; see `_write_failure_and_raise` below.
 """
 
 from datetime import UTC, datetime
-from typing import NoReturn
 
 import httpx
 from collector_core.cadence import CadenceClass
+from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
+from collector_core.failure import fail_capture
 from collector_core.lake import LakeWriter
+from collector_core.publish import publish_capture
 
 from .adapters.sleeper import (
     UpstreamSchemaError,
@@ -65,20 +67,16 @@ UPSTREAM_ADAPTER = "sleeper-players"
 #     truncation     -> 2900 / 100  -> ratio 0.03
 #     healthy fetch  -> 2900 / 2900 -> ratio 1.00
 #
-# `expected` is therefore `max(qualifying upstream keys, EXPECTED_ROSTER_FLOOR)`
-# — the floor never *lowers* the count, so a genuine roster expansion past
-# 2,900 still reports honestly.
+# The mechanism — `CoverageAccumulator(floor=...)`, the error cap, and the
+# failure-envelope path — was prototyped here during 8A and marked as
+# belonging in the shared library. Wave 0 moved all three into
+# `collector_core`, so this constant is now the only part that is genuinely
+# player-identity's: what the number *is*.
 #
 # Records that fail structural validation stay counted in `expected`. We
 # cannot know whether they qualified, and assuming they did not is
 # derivation-from-success again, just with an extra step.
 EXPECTED_ROSTER_FLOOR = 2900
-
-# At weather's ~16 games an uncapped `errors` list is fine. At 2,900 records
-# a total schema break produces 2,900 near-identical entries in every
-# envelope, in memory and in every lake object. Capped with an explicit
-# truncation marker so the count is never silently lost.
-MAX_ERRORS = 50
 
 
 def _wall_clock() -> datetime:
@@ -88,83 +86,6 @@ def _wall_clock() -> datetime:
     the whole pass *describes* and is deliberately frozen for its duration.
     """
     return datetime.now(tz=UTC)
-
-
-def _capped(errors: list[dict]) -> list[dict]:
-    if len(errors) <= MAX_ERRORS:
-        return errors
-    omitted = len(errors) - MAX_ERRORS
-    return [
-        *errors[:MAX_ERRORS],
-        {"reason": "errors_truncated", "detail": f"{omitted} further error(s) omitted"},
-    ]
-
-
-class FlooredCoverage:
-    """`CoverageAccumulator` with a floor on `expected`.
-
-    A local prototype of what belongs in `collector-core`:
-    `CoverageAccumulator` derives `expected` from `len(expected_keys)` and so
-    structurally cannot express "expected is at least N regardless of what
-    came back". Deliberately not added to the shared library in this PR —
-    three collectors are landing in parallel and the library should change
-    once, on purpose.
-
-    Note what `missing` can and cannot say: it names the keys this pass knows
-    about, so when the floor exceeds the observed key count, `missing` is
-    short while `expected` is not. That gap is real information, so it is
-    also recorded as an explicit error rather than left for a reader to
-    infer from arithmetic.
-    """
-
-    def __init__(self, floor: int = 0) -> None:
-        self._floor = floor
-        self._expected: set[str] = set()
-        self._present: set[str] = set()
-        self._errors: list[dict] = []
-
-    def expect(self, key: str) -> None:
-        self._expected.add(key)
-
-    def record(self, key: str) -> None:
-        self._expected.add(key)
-        self._present.add(key)
-
-    def fail(self, key: str, reason: str) -> None:
-        self._expected.add(key)
-        self._errors.append({"reason": reason, "detail": key})
-
-    @property
-    def observed(self) -> int:
-        return len(self._expected)
-
-    @property
-    def errors(self) -> list[dict]:
-        """Uncapped. `_capped` is applied once, at envelope construction —
-        capping here as well would truncate an already-truncated list and
-        report the wrong omitted count."""
-        if self._floor > len(self._expected):
-            # First, not last, so it survives `_capped`: a shortfall against
-            # the season floor is the single most important thing in this
-            # list and must not be the entry that gets dropped.
-            return [
-                {
-                    "reason": "below_expected_roster_floor",
-                    "detail": (
-                        f"upstream described {len(self._expected)} record(s); "
-                        f"the season floor is {self._floor}"
-                    ),
-                },
-                *self._errors,
-            ]
-        return list(self._errors)
-
-    def result(self) -> Coverage:
-        return Coverage(
-            expected=max(len(self._expected), self._floor),
-            present=len(self._present),
-            missing=sorted(self._expected - self._present),
-        )
 
 
 def _qualifies(record: dict) -> tuple[bool, str]:
@@ -306,62 +227,6 @@ def _envelope(
     )
 
 
-def _write_failure_and_raise(
-    exc: BaseException,
-    *,
-    season: int,
-    week: int,
-    now: datetime,
-    lake: LakeWriter,
-    reason: str,
-    roster_floor: int,
-) -> NoReturn:
-    """Write a failure envelope for every signal type, then re-raise.
-
-    Two halves, both required.
-
-    *Write*, because the Phase 8 contract says a failed capture still writes
-    an envelope: `present: 0` with populated `errors` is a positive record
-    that the collector tried and could not, which is not the same thing as
-    an absent object and must not look like one in an append-only lake.
-
-    *Re-raise*, because `run_capture_loop` catches and leaves `state`
-    untouched. Returning the failure envelopes normally instead would hand
-    them to `CaptureState.apply_capture`, which would install them over the
-    last good capture — turning an upstream outage into a loss of
-    *availability* on `/signals` and `/resolve`, when the whole point of
-    capturing to a cache is that an outage costs only freshness.
-
-    (weather's `capture_week` re-raises without writing, so it satisfies the
-    second half and not the first. Left alone deliberately — it is somebody
-    else's PR, noted as a follow-up.)
-    """
-    detail = f"{type(exc).__name__}: {exc}"
-    empty = Coverage(expected=roster_floor, present=0, missing=[])
-    errors = [{"reason": reason, "detail": detail[:500]}]
-    for signal_type in SIGNAL_TYPES:
-        envelope = _envelope(
-            signal_type,
-            season=season,
-            week=week,
-            now=now,
-            source_ref=None,
-            # The miss queue has no roster floor — its population *is*
-            # whatever is in the queue — so a failure reports 0/0 there.
-            coverage=empty
-            if signal_type == "player_identity_crosswalk"
-            else Coverage(expected=0, present=0, missing=[]),
-            errors=errors,
-            signals=[],
-        )
-        try:
-            lake.write(envelope)
-        except Exception:  # noqa: BLE001 — the original failure is what matters
-            pass
-        metrics.coverage(signal_type, envelope.coverage.ratio)
-    raise exc
-
-
 async def capture_identities(
     season: int,
     week: int,
@@ -386,23 +251,29 @@ async def capture_identities(
         payload, source_ref = await fetch_players(client)
         validate_document(payload, CROSSWALK_KEYS)
     except Exception as exc:  # noqa: BLE001 — total-outage path, classified here
-        metrics.capture_failure(exc)
         reason = (
             "schema"
             if isinstance(exc, UpstreamSchemaError)
             else metrics.reason_for(exc)
         )
-        _write_failure_and_raise(
+        await fail_capture(
             exc,
-            season=season,
-            week=week,
+            collector=COLLECTOR_NAME,
+            signal_types=SIGNAL_TYPES,
+            adapter=UPSTREAM_ADAPTER,
             now=now,
+            scope={"season": season, "week": week},
             lake=lake,
+            metrics=metrics,
             reason=reason,
-            roster_floor=roster_floor,
+            # Only the crosswalk has a roster floor. The miss queue's
+            # population *is* whatever is in the queue, so it has no a-priori
+            # size — but it still floors to 1 inside `fail_capture`, because
+            # `expected: 0` would make a total outage report ratio 1.0.
+            expected={"player_identity_crosswalk": roster_floor},
         )
 
-    crosswalk = FlooredCoverage(floor=roster_floor)
+    crosswalk = CoverageAccumulator(floor=roster_floor)
     rows: list[dict] = []
 
     items = list(payload.items())
@@ -429,6 +300,11 @@ async def capture_identities(
             # honest.
             continue
 
+        # Declared expected on the fact that made it *qualify*, before the
+        # mapping is attempted -- never on the mapping succeeding.
+        # `CoverageAccumulator.record` refuses an undeclared key precisely so
+        # `expected` cannot grow because something worked.
+        crosswalk.expect(upstream_key)
         try:
             rows.append(
                 _to_record(upstream_key, record, season=season, now=now).to_signal()
@@ -439,24 +315,27 @@ async def capture_identities(
             continue
         crosswalk.record(upstream_key)
 
-    conflicts = index.replace(rows)
-    crosswalk_errors = list(crosswalk.errors)
-    for conflict in conflicts:
+    for conflict in index.replace(rows):
         metrics.merge_conflict(conflict["source"])
-        crosswalk_errors.append(
-            {
-                "reason": "merge_conflict",
-                "detail": (
-                    f"{conflict['source']}:{conflict['external_id']} claimed by "
-                    f"{', '.join(conflict['player_ids'])}"
-                ),
-            }
+        # Into the accumulator rather than a side list, so the error cap is
+        # applied in exactly one place.
+        crosswalk.add_error(
+            "merge_conflict",
+            f"{conflict['source']}:{conflict['external_id']} claimed by "
+            f"{', '.join(conflict['player_ids'])}",
         )
 
     miss_rows = misses.rows()
-    miss_coverage = FlooredCoverage()
+    miss_coverage = CoverageAccumulator()
     for row in miss_rows:
-        miss_coverage.record(f"{row['source']}:{row['raw_name']}")
+        # `expect` then `record`, in two calls, because this is the one place
+        # where deriving the expectation from what is present is correct: the
+        # miss queue's population is local state, not an upstream fetch that
+        # could have come back truncated. Spelled out rather than hidden in a
+        # convenience method so it stays visibly the exception.
+        key = f"{row['source']}:{row['raw_name']}"
+        miss_coverage.expect(key)
+        miss_coverage.record(key)
 
     envelopes = {
         "player_identity_crosswalk": _envelope(
@@ -466,7 +345,7 @@ async def capture_identities(
             now=now,
             source_ref=source_ref,
             coverage=crosswalk.result(),
-            errors=_capped(crosswalk_errors),
+            errors=crosswalk.errors,
             signals=rows,
         ),
         "name_resolution_miss": _envelope(
@@ -476,17 +355,9 @@ async def capture_identities(
             now=now,
             source_ref=source_ref,
             coverage=miss_coverage.result(),
-            errors=_capped(miss_coverage.errors),
+            errors=miss_coverage.errors,
             signals=miss_rows,
         ),
     }
 
-    for signal_type, envelope in envelopes.items():
-        try:
-            lake.write(envelope)
-        except Exception as exc:  # noqa: BLE001 — total-outage path (lake down)
-            metrics.capture_failure(exc)
-            raise
-        metrics.coverage(signal_type, envelope.coverage.ratio)
-
-    return envelopes
+    return await publish_capture(envelopes, lake=lake, metrics=metrics)

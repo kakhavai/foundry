@@ -31,7 +31,44 @@ from datetime import UTC, datetime
 
 import httpx
 
-from ..rules import canonical_position, canonical_team
+from ..rules import ALL_RULES, MATCHUP_RULES, canonical_position, canonical_team
+
+# The positions any rule actually demands -- the player scope's and the
+# matchup scope's together -- derived from the rule sets rather than from
+# "canonical_position recognises it". Those two questions were the same
+# question only by accident, while the player scope was the only rule set
+# `canonical_position` served. Widening `POSITION_ALIASES` for the matchup
+# scope broke that coincidence, and the coincidence was load-bearing for
+# memory: this adapter streams the ~37 MB feed described at the top of this
+# module and must retain only what a rule demands, or the OOM this collector
+# was killed by once already comes right back. Gating on rule demand instead
+# of on recognition keeps this filter honest regardless of how wide
+# `POSITION_ALIASES` grows.
+#
+# The union is safe, not just convenient: Task 6 builds the matchup list from
+# this same feed, so the matchup positions (CB/S/LB/DL/OL) are genuinely
+# needed downstream, not dead weight like the rest of the two-deep this
+# filter still drops. Retention grows from ~416 slots' worth to ~1,024 --
+# nowhere near the ~300k rows that caused the original OOM, so admitting them
+# preserves the property that matters (retain only what a rule demands)
+# rather than the narrower one (retain only what the player scope demands).
+#
+# The player scope and the matchup scope together already cover every
+# canonical group `canonical_position` can produce, so today there is no
+# *real* upstream label left that is recognised but unwanted -- "recognised"
+# and "wanted" already compute the same function again, which has already
+# erased the test coverage that once proved this gate (vs. `is None`)
+# matters. `test_ingest_gates_on_configured_demand_not_on_recognition` in
+# `tests/test_depth_chart_adapter.py` exists because of that, not as
+# insurance against a hypothetical future rule set: it manufactures the gap
+# synthetically since the config can no longer supply one.
+#
+# `DST` (from `TEAM_DEFENSE_RULE`) is inert in this set: `canonical_position`
+# never returns it -- team defenses have no position label to canonicalize --
+# so its presence here changes nothing. Harmless, just not load-bearing.
+WANTED_POSITIONS: frozenset[str] = frozenset(
+    rule.position for rule in (*ALL_RULES, *MATCHUP_RULES)
+)
 
 # A `{season}` template, mirroring `player-projections`' PROJECTIONS_SNAPSHOT_URL:
 # the feed is published one asset per season, so a URL without the placeholder
@@ -116,17 +153,24 @@ class _ChartAccumulator:
     **Bounded by the config, not by the feed.** Two filters do that, and both
     are load-bearing rather than tidiness:
 
-    1. Rows whose position is outside the scope's rules are dropped at ingest.
-       The feed carries the full two-deep for every unit — offensive line,
-       defense, special teams — and this collector's rules only ever consult
-       QB/RB/WR/TE/K, so ~70% of it is dead weight. Carrying it to preserve
-       "the adapter does not decide what matters" cost more than the purity
-       was worth.
+    1. Rows whose position no rule demands (`WANTED_POSITIONS`) are dropped at
+       ingest. The feed carries the full two-deep for every unit — offensive
+       line, defense, special teams — and only some of that is ever consulted
+       by a rule, so the rest is dead weight. Carrying it to preserve "the
+       adapter does not decide what matters" cost more than the purity was
+       worth. Gated on rule demand rather than on whether `canonical_position`
+       merely recognises the label — recognising a label and wanting its rows
+       are different questions once more than one rule set shares
+       `canonical_position`.
 
     2. The feed is a **time series of snapshots**, not one snapshot: the same
        player appears once per `dt`, going back over the season. Only the
-       newest row for each `(team, position, rank)` is kept, so what comes out
-       is the *current* chart rather than its whole history.
+       newest row for each `(team, RAW position label, rank)` is kept, so
+       what comes out is the *current* chart rather than its whole history.
+       Raw label, not `canonical_position` -- see the `__init__` comment on
+       `_newest` for why keying on the canonical form silently collapses
+       distinct alias groups (`LT`/`LG`/`C`/`RG`/`RT` all -> `OL`) into one
+       slot.
 
     Without both, streaming alone is not enough: the retained rows OOM-killed
     a 256Mi pod even after the body stopped being buffered. With them, the
@@ -135,8 +179,25 @@ class _ChartAccumulator:
 
     def __init__(self, fetched_at: datetime) -> None:
         self._fetched_at = fetched_at
-        # (team, canonical position, rank) -> (row, dt). One entry per slot,
+        # (team, RAW position label, rank) -> (row, dt). One entry per slot,
         # holding whichever snapshot is newest.
+        #
+        # Keyed on the raw label, not `canonical_position`. Task 4 widened
+        # `POSITION_ALIASES` so several raw labels collapse into one
+        # canonical group (`LT/LG/C/RG/RT` -> `OL`, `FS/SS` -> `S`,
+        # `WLB/MLB/SLB` -> `LB`). A feed that labels each lineman
+        # positionally -- `pos_rank` counted within its own label, so every
+        # one of the five is rank 1 -- would hash all five to the same
+        # `(team, "OL", 1)` key under the canonical form, and four of them
+        # would silently lose to "newest wins" even though they are five
+        # distinct, simultaneously-current players, not five snapshots of
+        # one slot. Keying on the label the feed actually printed keeps
+        # every raw label its own slot, so aliasing two labels into one
+        # canonical group (a modelling decision made downstream, in
+        # `ordered_candidates`/`resolve_matchup_slots`) can never again
+        # collide two real rows at ingest. `result()` still reports
+        # `position_raw` on every row, so nothing downstream needs to know
+        # the key changed.
         self._newest: dict[tuple[str, str, int], tuple[DepthChartRow, datetime]] = {}
         self._freshest: dict[str, datetime] = {}
         self._index: dict[str, int] | None = None
@@ -167,9 +228,10 @@ class _ChartAccumulator:
 
         position_raw = get("pos_abb").strip()
         position = canonical_position(position_raw)
-        if position is None:
-            # Outside the scope's rules — offensive line, defense, special
-            # teams. Filter 1 in the class docstring.
+        if position not in WANTED_POSITIONS:
+            # Dropped whether the label was unrecognised (`position is None`)
+            # or recognised but not wanted by any rule here. Filter 1 in the
+            # class docstring.
             return
 
         depth_order = _int_or_none(get("pos_rank"))
@@ -187,7 +249,10 @@ class _ChartAccumulator:
         # Filter 2: newest snapshot wins for this slot. `>=` rather than `>`
         # so that when a feed repeats a `dt` the later line is authoritative,
         # matching how a reader scanning top-to-bottom would resolve it.
-        key = (team, position, depth_order)
+        # `position_raw`, not `position` (the canonicalized form) -- see the
+        # `_newest` field comment in `__init__` for why keying on the
+        # canonical group silently collapses distinct alias groups.
+        key = (team, position_raw, depth_order)
         existing = self._newest.get(key)
         if existing is not None and captured < existing[1]:
             return
@@ -208,7 +273,7 @@ class _ChartAccumulator:
 
     def result(self) -> dict[str, DepthChart]:
         rows_by_team: dict[str, list[DepthChartRow]] = {}
-        for (team, _position, _rank), (row, captured) in self._newest.items():
+        for (team, _position_raw, _rank), (row, captured) in self._newest.items():
             rows_by_team.setdefault(team, []).append(row)
             # Freshness is taken from the rows actually kept, so it describes
             # the chart being returned rather than the oldest snapshot the

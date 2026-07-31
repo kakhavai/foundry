@@ -2,6 +2,12 @@
 
 This guide walks through adding a new Python HTTP service to Foundry. The result: CI runs on every push, images are built and pushed to GHCR on merge to `main`, Helm deploys the service to the Kind cluster, and Grafana shows logs, traces, and metrics — with no observability config in the service.
 
+> **Adding a collector? Do not follow this guide by hand.** Run
+> `scripts/new-collector.py`, which generates every file below plus the capture
+> surface, and read [`collectors.md`](collectors.md). This guide is for a
+> service that is *not* a collector — there is one today,
+> `player-projections`.
+
 ---
 
 ## Prerequisites
@@ -83,11 +89,29 @@ helm lint helm/charts/generic-service -f helm/values/<service-name>/values.yaml
 
 ---
 
-## Step 3: Add CI workflow
+## Step 3: CI — nothing to do
 
-Copy `.github/workflows/player-projections.yml` to `.github/workflows/<service-name>.yml` and replace all occurrences of `player-projections` with your service name.
+There is no per-service workflow file to copy. `.github/workflows/services.yml`
+covers every deployable service as a matrix leg, and the matrix is computed from
+`contracts/collector-registry.yaml` plus each service's Helm values by
+`.github/actions/changed-services`. Creating `helm/values/<service-name>/`
+in Step 2 (and, for a collector, the registry entry) is the registration.
 
-No CI logic lives in this file — it calls the shared composite actions.
+That includes the path filtering: `changed-services` generates a
+`dorny/paths-filter` rule per service, so your service's jobs still run only
+when your service's files — or something it shares, like
+`helm/charts/generic-service/` or `libs/` — actually changed.
+
+Confirm your service is picked up before pushing:
+
+```bash
+uv run --no-project --with pyyaml==6.0.3 python3 \
+  .github/actions/changed-services/filters.py --emit entries
+```
+
+Your service should appear as a key. If it does not, the most likely cause is a
+missing or malformed `helm/values/<service-name>/values.yaml` — that is where
+the tooling reads a service's port and Secret names from.
 
 ---
 

@@ -1,0 +1,184 @@
+{
+  "captured_at": "2026-09-15T12:00:00Z",
+  "collector": "player-stats",
+  "coverage": {
+    "expected": 384,
+    "missing": [],
+    "present": 3
+  },
+  "envelope_version": "1",
+  "errors": [
+    {
+      "detail": "upstream described 3 key(s); the declared floor is 384",
+      "reason": "below_expected_floor"
+    }
+  ],
+  "scope": {
+    "season": 2026,
+    "week": 1
+  },
+  "signal_type": "player_box_weekly",
+  "signals": [
+    {
+      "fantasy_points": {
+        "half_ppr": 19.36,
+        "ppr": 19.36,
+        "standard": 19.36
+      },
+      "game_id": "2026_01_BUF_KC",
+      "misc": {
+        "fumbles_lost": 0,
+        "return_touchdowns": 0,
+        "two_point_conversions": 0
+      },
+      "offense_snaps": null,
+      "opponent": "BUF",
+      "passing": {
+        "air_yards": 310,
+        "attempts": 32,
+        "completions": 21,
+        "interceptions": 1,
+        "sacks_taken": 2,
+        "touchdowns": 2,
+        "yards": 274
+      },
+      "played": true,
+      "player_id": "fdy-d2872e5ca28e",
+      "position": "QB",
+      "rates": {
+        "catch_rate": null,
+        "yac_per_reception": null,
+        "yards_per_attempt": 8.5625,
+        "yards_per_target": null
+      },
+      "receiving": {
+        "air_yards": 0,
+        "first_downs": 0,
+        "receptions": 0,
+        "targets": 0,
+        "touchdowns": 0,
+        "yards": 0,
+        "yards_after_catch": 0
+      },
+      "revision": 0,
+      "rushing": {
+        "attempts": 3,
+        "first_downs": 0,
+        "touchdowns": 0,
+        "yards": 14
+      },
+      "scoring_rules_version": "2026.1",
+      "stat_state": null,
+      "team": "KC"
+    },
+    {
+      "fantasy_points": {
+        "half_ppr": 20.4,
+        "ppr": 24.4,
+        "standard": 16.4
+      },
+      "game_id": "2026_01_BUF_KC",
+      "misc": {
+        "fumbles_lost": 0,
+        "return_touchdowns": 0,
+        "two_point_conversions": 0
+      },
+      "offense_snaps": null,
+      "opponent": "BUF",
+      "passing": {
+        "air_yards": 0,
+        "attempts": 0,
+        "completions": 0,
+        "interceptions": 0,
+        "sacks_taken": 0,
+        "touchdowns": 0,
+        "yards": 0
+      },
+      "played": true,
+      "player_id": "fdy-2e914dd6b3f8",
+      "position": "WR",
+      "rates": {
+        "catch_rate": 0.7273,
+        "yac_per_reception": 4.75,
+        "yards_per_attempt": null,
+        "yards_per_target": 9.4545
+      },
+      "receiving": {
+        "air_yards": 121,
+        "first_downs": 5,
+        "receptions": 8,
+        "targets": 11,
+        "touchdowns": 1,
+        "yards": 104,
+        "yards_after_catch": 38
+      },
+      "revision": 0,
+      "rushing": {
+        "attempts": 0,
+        "first_downs": 0,
+        "touchdowns": 0,
+        "yards": 0
+      },
+      "scoring_rules_version": "2026.1",
+      "stat_state": null,
+      "team": "KC"
+    },
+    {
+      "fantasy_points": {
+        "half_ppr": 0.0,
+        "ppr": 0.0,
+        "standard": 0.0
+      },
+      "game_id": "2026_01_BUF_KC",
+      "misc": {
+        "fumbles_lost": 0,
+        "return_touchdowns": 0,
+        "two_point_conversions": 0
+      },
+      "offense_snaps": null,
+      "opponent": "BUF",
+      "passing": {
+        "air_yards": 0,
+        "attempts": 0,
+        "completions": 0,
+        "interceptions": 0,
+        "sacks_taken": 0,
+        "touchdowns": 0,
+        "yards": 0
+      },
+      "played": true,
+      "player_id": "fdy-49030012a645",
+      "position": "K",
+      "rates": {
+        "catch_rate": null,
+        "yac_per_reception": null,
+        "yards_per_attempt": null,
+        "yards_per_target": null
+      },
+      "receiving": {
+        "air_yards": 0,
+        "first_downs": 0,
+        "receptions": 0,
+        "targets": 0,
+        "touchdowns": 0,
+        "yards": 0,
+        "yards_after_catch": 0
+      },
+      "revision": 0,
+      "rushing": {
+        "attempts": 0,
+        "first_downs": 0,
+        "touchdowns": 0,
+        "yards": 0
+      },
+      "scoring_rules_version": "2026.1",
+      "stat_state": null,
+      "team": "KC"
+    }
+  ],
+  "upstream": {
+    "adapter": "nflverse-player-stats",
+    "fetched_at": "2026-09-15T12:00:00Z",
+    "source_ref": "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2026.csv"
+  }
+}

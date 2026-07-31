@@ -71,6 +71,18 @@
         },
         "occurred_at": { "type": "string", "format": "date-time" }
       }
+    },
+    "scope_matchup_weekly": {
+      "type": "object",
+      "required": ["player_id", "slot_key", "rule_id", "team", "position", "depth_rank"],
+      "properties": {
+        "player_id": { "type": "string", "minLength": 1 },
+        "slot_key": { "type": "string", "minLength": 1 },
+        "rule_id": { "type": "string", "minLength": 1 },
+        "team": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "position": { "enum": ["CB", "S", "LB", "DL", "OL"] },
+        "depth_rank": { "type": "integer", "minimum": 1 }
+      }
     }
   }
 }

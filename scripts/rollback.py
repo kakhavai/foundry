@@ -44,7 +44,7 @@ def write_tag(values_file: Path, tag: str) -> None:
     """Write a new image tag to the values file, preserving other keys."""
     if values_file.exists():
         text = values_file.read_text()
-        patched = re.sub(r'(tag:\s*")[^"]*(")', rf'\g<1>{tag}\2', text)
+        patched = re.sub(r'(tag:\s*")[^"]*(")', rf"\g<1>{tag}\2", text)
         if patched != text:
             values_file.write_text(patched)
             return
@@ -54,22 +54,33 @@ def write_tag(values_file: Path, tag: str) -> None:
 
 def git_commit_and_push(values_file: Path, service: str, tag: str) -> None:
     """Commit the updated values file and push."""
+
     def run(cmd: list) -> None:
-        result = subprocess.run(cmd)
+        # check=False: the failure is reported with the command that caused it
+        # and the child's own exit code is propagated, which a raised
+        # CalledProcessError would replace with a traceback and exit 1.
+        result = subprocess.run(cmd, check=False)
         if result.returncode != 0:
             print(f"Error running: {' '.join(cmd)}")
             sys.exit(result.returncode)
 
     run(["git", "add", str(values_file)])
-    run([
-        "git", "commit",
-        "-m", f"revert({service}): roll back to {tag}",
-    ])
+    run(
+        [
+            "git",
+            "commit",
+            "-m",
+            f"revert({service}): roll back to {tag}",
+        ]
+    )
     run(["git", "push"])
 
 
 def print_verification(service: str, tag: str) -> None:
     """Print post-rollback verification steps."""
+    # Held in a name only so the source line stays inside the line limit; the
+    # printed text is unchanged, and it is meant to be copy-pasteable.
+    image_jsonpath = "{.spec.template.spec.containers[0].image}"
     print(f"""
 Rollback committed. Next steps:
 
@@ -77,7 +88,7 @@ Rollback committed. Next steps:
    Application '{service}' should show OutOfSync -> Syncing -> Synced+Healthy
 
 2. Verify the running image tag:
-   kubectl get deployment {service} -o jsonpath='{{.spec.template.spec.containers[0].image}}'
+   kubectl get deployment {service} -o jsonpath='{image_jsonpath}'
    Expected: ...:{tag}
 
 3. Confirm the service is healthy:

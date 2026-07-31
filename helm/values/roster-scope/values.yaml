@@ -40,11 +40,19 @@ gateway:
   # exempt from bearer auth in-process (the kubelet's probes and Prometheus's
   # scrape cannot carry a token) and that is not a reason to expose them at
   # the edge.
+  #
+  # /scope is a PathPrefix match, so it already publishes every /scope/*
+  # sub-route in-cluster (players, rules, diff, matchups) without a separate
+  # entry per route. /scope/matchups is still listed explicitly, matching
+  # every other collector's convention of naming a route beyond the standard
+  # five outright rather than relying on a reader noticing the prefix covers
+  # it too.
   publicPaths:
     - /catalog
     - /signals
     - /refresh
     - /scope
+    - /scope/matchups
 
 extraEnv:
   # optional: true lets the pod start before the Secret exists. roster-scope
@@ -56,12 +64,16 @@ extraEnv:
         name: roster-scope-collector-token
         key: token
         optional: true
-  # Empty means the built-in stub resolver: deterministic `fdy-` ids minted
-  # from (normalized name, team, position). Point this at the real collector
-  # once `player-identity` is deployed AND its /resolve contract is agreed —
-  # the shape assumed in adapters/identity.py is PROVISIONAL.
+  # `player-identity` is deployed and its `GET /resolve` contract (see
+  # adapters/identity.py's `HttpPlayerIdentityResolver`) is reconciled against
+  # the real service — see services/player-identity/player_identity/api.py's
+  # `resolve_query`. Empty falls back to the built-in stub resolver
+  # (deterministic `fdy-` ids minted from normalized name/team/position);
+  # `build_resolver` still selects that fallback whenever this is unset, which
+  # is exactly what tests and local runs (no PLAYER_IDENTITY_URL set in
+  # scripts/deploy-local.py's env) rely on.
   - name: PLAYER_IDENTITY_URL
-    value: ""
+    value: "http://player-identity:8002"
   - name: LAKE_BUCKET
     value: "foundry-signals"
   - name: LAKE_ENDPOINT_URL

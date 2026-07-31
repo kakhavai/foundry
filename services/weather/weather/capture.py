@@ -1,7 +1,10 @@
 """Capture orchestration: schedule -> environment -> forecast -> envelope -> lake.
 
 `/signals` serves from the cache this fills, never from an upstream. An upstream
-outage therefore degrades freshness rather than availability.
+outage therefore degrades freshness rather than availability — which is only
+true because a failed capture leaves the cached envelopes alone. See
+`collector_core.failure.fail_capture`, which writes the failure envelopes and
+then re-raises so `run_capture_loop` catches and `CaptureState` is untouched.
 """
 
 from datetime import UTC, datetime
@@ -10,7 +13,9 @@ import httpx
 from collector_core.cadence import CadenceClass
 from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
+from collector_core.failure import fail_capture
 from collector_core.lake import LakeWriter
+from collector_core.publish import publish_capture
 from collector_core.routes import CaptureState
 
 from .adapters.forecast import fetch_current_conditions, fetch_forecast_at
@@ -22,16 +27,38 @@ from .playability import derive_playability
 __all__ = [
     "CADENCE_CLASS",
     "COLLECTOR_NAME",
+    "REGULAR_SEASON_GAMES_FLOOR",
+    "REGULAR_SEASON_WEEKS",
     "SIGNAL_TYPES",
     "CaptureState",
     "assert_forecast_hour",
     "capture_week",
+    "games_floor",
 ]
 
 COLLECTOR_NAME = "weather"
 CADENCE_CLASS = CadenceClass.VOLATILE
 SIGNAL_TYPES = ("venue_forecast_kickoff", "venue_conditions_current")
 UPSTREAM_ADAPTER = "open-meteo"
+
+# 32 teams, at most six on bye in any one week, so a regular-season week is
+# never fewer than (32 - 6) / 2 games. The floor exists because `expected`
+# must never derive from what the fetch returned: a schedule feed truncated to
+# two rows would otherwise yield expected=2, present=2, ratio 1.0 — a
+# perfectly healthy report of a week in which fourteen games silently
+# vanished. See `collector_core.coverage`.
+REGULAR_SEASON_GAMES_FLOOR = 13
+
+# Weeks beyond this are postseason, where a genuine week may hold a single
+# game (the championship) and a 13-game floor would report a false shortfall
+# every year. Those weeks floor to 1 instead, which still keeps a total
+# outage from reading as ratio 1.0 — the property that actually matters.
+REGULAR_SEASON_WEEKS = 18
+
+
+def games_floor(week: int) -> int:
+    """The fewest games a scoped week can legitimately hold."""
+    return REGULAR_SEASON_GAMES_FLOOR if 1 <= week <= REGULAR_SEASON_WEEKS else 1
 
 
 def _wall_clock() -> datetime:
@@ -85,13 +112,27 @@ async def capture_week(
     truncation as `deadline_exceeded` in `coverage.missing`/`errors`, the same
     accounting a genuine upstream failure gets.
     """
+    floor = games_floor(week)
     try:
         games = await fetch_schedule(season, week, client)
     except Exception as exc:  # noqa: BLE001 — total-outage path, classified below
-        metrics.capture_failure(exc)
-        raise
+        # Writes `present: 0` with populated `errors` for both signal types,
+        # then re-raises. This used to re-raise *without* writing, which left
+        # the gap in the lake to be inferred from the absence of an object --
+        # the one thing the Phase 8 contract says must never be inferred.
+        await fail_capture(
+            exc,
+            collector=COLLECTOR_NAME,
+            signal_types=SIGNAL_TYPES,
+            adapter=UPSTREAM_ADAPTER,
+            now=now,
+            scope={"season": season, "week": week},
+            lake=lake,
+            metrics=metrics,
+            expected=dict.fromkeys(SIGNAL_TYPES, floor),
+        )
 
-    forecast_acc = CoverageAccumulator(g.game_id for g in games)
+    forecast_acc = CoverageAccumulator((g.game_id for g in games), floor=floor)
     forecast_signals: list[dict] = []
 
     resolved: dict[str, dict] = {}  # stadium_id -> venue, for current conditions
@@ -160,7 +201,10 @@ async def capture_week(
         forecast_signals.append(signal)
         forecast_acc.record(game.game_id)
 
-    current_acc = CoverageAccumulator(resolved)
+    # Same floor as the forecast accumulator: one venue per game (neutral
+    # sites aside), so a week that resolved two venues out of sixteen is a
+    # shortfall, not a complete capture of a small week.
+    current_acc = CoverageAccumulator(resolved, floor=floor)
     current_signals: list[dict] = []
     resolved_items = list(resolved.items())
     for index, (stadium_id, venue) in enumerate(resolved_items):
@@ -209,12 +253,8 @@ async def capture_week(
         ),
     }
 
-    for signal_type, envelope in envelopes.items():
-        try:
-            lake.write(envelope)
-        except Exception as exc:  # noqa: BLE001 — total-outage path (lake unreachable)
-            metrics.capture_failure(exc)
-            raise
-        metrics.coverage(signal_type, envelope.coverage.ratio)
-
-    return envelopes
+    # The shared tail: writes off the event loop, records every coverage gauge,
+    # records `capture_failure` if a write fails, and returns the envelopes
+    # regardless. This used to re-raise, which cost `/signals` a capture that
+    # had already succeeded whenever the lake was unreachable.
+    return await publish_capture(envelopes, lake=lake, metrics=metrics)

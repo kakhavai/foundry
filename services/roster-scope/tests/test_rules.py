@@ -1,10 +1,14 @@
 """The config is the denominator, so it gets tested like one."""
 
+import pytest
+
 from roster_scope.rules import (
     ALL_RULES,
+    MATCHUP_RULES,
     TEAMS,
     canonical_position,
     canonical_team,
+    expected_matchup_slots,
     expected_slots,
     rule_by_id,
     slot_key,
@@ -60,8 +64,17 @@ def test_position_aliases_collapse_to_canonical_groups():
 
 
 def test_unknown_position_is_none_not_passed_through():
-    """A linebacker must not be able to occupy a WR slot."""
-    assert canonical_position("LB") is None
+    """A player-scope rule (QB/RB/WR/TE/K/DST) must never match a label
+    outside its own group.
+
+    `LB` used to prove this by being unmapped entirely; the matchup scope
+    (Task 4) now maps it to the `LB` canonical group instead. That still
+    keeps a linebacker off a `WR<=4` slot -- `LB` is not a player-scope
+    rule's `position` -- so the property this test protects is unchanged.
+    `test_an_unrecognised_label_is_dropped_not_guessed` below covers the
+    still-unmapped case that `LB` used to stand in for.
+    """
+    assert canonical_position("NOT_A_POSITION") is None
     assert canonical_position("") is None
 
 
@@ -77,3 +90,65 @@ def test_rule_lookup():
     assert rule_by_id("wr_depth_le_4").max_depth == 4
     assert rule_by_id("all_team_defenses").entity_type == "team_defense"
     assert rule_by_id("nonexistent") is None
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("CB", "CB"),
+        ("DB", "CB"),
+        ("NB", "CB"),
+        ("cb", "CB"),
+        ("S", "S"),
+        ("FS", "S"),
+        ("SS", "S"),
+        ("SAF", "S"),
+        ("LB", "LB"),
+        ("ILB", "LB"),
+        ("OLB", "LB"),
+        ("MLB", "LB"),
+        ("EDGE", "LB"),
+        ("DL", "DL"),
+        ("DE", "DL"),
+        ("DT", "DL"),
+        ("NT", "DL"),
+        ("OL", "OL"),
+        ("LT", "OL"),
+        ("LG", "OL"),
+        ("C", "OL"),
+        ("RG", "OL"),
+        ("RT", "OL"),
+        ("QB", "QB"),
+        ("WR", "WR"),  # offensive mapping is unchanged
+    ],
+)
+def test_defensive_and_line_labels_collapse_to_canonical_groups(raw, expected):
+    assert canonical_position(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["P", "LS", "KR", "ATH", "", "   ", "NOT_A_POSITION"])
+def test_an_unrecognised_label_is_dropped_not_guessed(raw):
+    """Returning None keeps a punter off a CB slot. The slot then reads as
+    missing, which is the honest outcome."""
+    assert canonical_position(raw) is None
+
+
+def test_matchup_rules_are_role_matched_with_the_agreed_quotas():
+    quotas = {rule.position: rule.max_depth for rule in MATCHUP_RULES}
+    assert quotas == {"CB": 4, "S": 3, "LB": 3, "DL": 4, "OL": 5}, quotas
+    assert len(MATCHUP_RULES) == 5
+
+
+def test_expected_matchup_slots_is_config_derived_not_fetch_derived():
+    """Computed from config alone, BEFORE any upstream is contacted -- which
+    is what stops a truncated depth chart shrinking the denominator and
+    reporting ratio 1.0 on a hole."""
+    assert expected_matchup_slots() == len(TEAMS) * (4 + 3 + 3 + 4 + 5)
+    assert expected_matchup_slots() == 608
+
+
+def test_matchup_rule_ids_are_unique_and_distinct_from_the_player_scope():
+    matchup_ids = [rule.rule_id for rule in MATCHUP_RULES]
+    assert len(matchup_ids) == len(set(matchup_ids))
+    assert not set(matchup_ids) & {rule.rule_id for rule in ALL_RULES}
+    assert len(matchup_ids) == 5

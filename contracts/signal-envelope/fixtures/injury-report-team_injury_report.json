@@ -1,0 +1,60 @@
+{
+  "captured_at": "2026-09-15T12:00:00Z",
+  "collector": "injury-report",
+  "coverage": {
+    "expected": 96,
+    "missing": [
+      "LV:friday",
+      "LV:thursday",
+      "LV:wednesday"
+    ],
+    "present": 93
+  },
+  "envelope_version": "1",
+  "errors": [
+    {
+      "detail": "LV:wednesday",
+      "reason": "report_not_published"
+    },
+    {
+      "detail": "LV:thursday",
+      "reason": "report_not_published"
+    },
+    {
+      "detail": "LV:friday",
+      "reason": "report_not_published"
+    }
+  ],
+  "scope": {
+    "season": 2026,
+    "week": 1
+  },
+  "signal_type": "team_injury_report",
+  "signals": [
+    {
+      "filing_status": "published",
+      "game_id": "2026_01_ARI_ATL",
+      "is_estimated": false,
+      "is_final_report": false,
+      "player_count": 3,
+      "practice_day": "wednesday",
+      "report_published_at": "2026-09-16T21:00:00Z",
+      "team": "ARI"
+    },
+    {
+      "filing_status": "empty",
+      "game_id": "2026_01_NYJ_PHI",
+      "is_estimated": false,
+      "is_final_report": false,
+      "player_count": 0,
+      "practice_day": "wednesday",
+      "report_published_at": "2026-09-16T21:00:00Z",
+      "team": "NYJ"
+    }
+  ],
+  "upstream": {
+    "adapter": "league-injury-report",
+    "fetched_at": "2026-09-15T12:00:00Z",
+    "source_ref": null
+  }
+}

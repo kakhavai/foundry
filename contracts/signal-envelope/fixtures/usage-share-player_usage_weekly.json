@@ -1,0 +1,340 @@
+{
+  "captured_at": "2026-09-15T12:00:00Z",
+  "collector": "usage-share",
+  "coverage": {
+    "expected": 384,
+    "missing": [],
+    "present": 10
+  },
+  "envelope_version": "1",
+  "errors": [
+    {
+      "detail": "upstream described 10 key(s); the declared floor is 384",
+      "reason": "below_expected_floor"
+    }
+  ],
+  "scope": {
+    "season": 2026,
+    "week": 1
+  },
+  "signal_type": "player_usage_weekly",
+  "signals": [
+    {
+      "air_yards_share": 0.0,
+      "alignment": {
+        "backfield_rate": null,
+        "inline_rate": null,
+        "slot_rate": null,
+        "wide_rate": null
+      },
+      "carry_share": 0.136364,
+      "denominators": {
+        "team_air_yards": 215.0,
+        "team_carries": 22,
+        "team_dropbacks": 32,
+        "team_offense_snaps": null,
+        "team_targets": 25
+      },
+      "game_id": "2026_01_BUF_KC",
+      "goal_line": {
+        "carries": null,
+        "targets": null
+      },
+      "player_id": "00-KC-QB1",
+      "player_id_source": "upstream_gsis",
+      "redzone": {
+        "carries": null,
+        "snap_share": null,
+        "targets": null
+      },
+      "route_participation": null,
+      "snap_share": null,
+      "target_share": 0.0,
+      "team": "KC",
+      "two_minute": {
+        "route_participation": null,
+        "snaps": null
+      },
+      "usage_source": "derived",
+      "wopr": 0.0
+    },
+    {
+      "air_yards_share": 0.55814,
+      "alignment": {
+        "backfield_rate": null,
+        "inline_rate": null,
+        "slot_rate": null,
+        "wide_rate": null
+      },
+      "carry_share": 0.045455,
+      "denominators": {
+        "team_air_yards": 215.0,
+        "team_carries": 22,
+        "team_dropbacks": 32,
+        "team_offense_snaps": null,
+        "team_targets": 25
+      },
+      "game_id": "2026_01_BUF_KC",
+      "goal_line": {
+        "carries": null,
+        "targets": null
+      },
+      "player_id": "00-KC-WR1",
+      "player_id_source": "upstream_gsis",
+      "redzone": {
+        "carries": null,
+        "snap_share": null,
+        "targets": null
+      },
+      "route_participation": null,
+      "snap_share": null,
+      "target_share": 0.4,
+      "team": "KC",
+      "two_minute": {
+        "route_participation": null,
+        "snaps": null
+      },
+      "usage_source": "derived",
+      "wopr": 0.990698
+    },
+    {
+      "air_yards_share": 0.27907,
+      "alignment": {
+        "backfield_rate": null,
+        "inline_rate": null,
+        "slot_rate": null,
+        "wide_rate": null
+      },
+      "carry_share": 0.0,
+      "denominators": {
+        "team_air_yards": 215.0,
+        "team_carries": 22,
+        "team_dropbacks": 32,
+        "team_offense_snaps": null,
+        "team_targets": 25
+      },
+      "game_id": "2026_01_BUF_KC",
+      "goal_line": {
+        "carries": null,
+        "targets": null
+      },
+      "player_id": "00-KC-WR2",
+      "player_id_source": "upstream_gsis",
+      "redzone": {
+        "carries": null,
+        "snap_share": null,
+        "targets": null
+      },
+      "route_participation": null,
+      "snap_share": null,
+      "target_share": 0.24,
+      "team": "KC",
+      "two_minute": {
+        "route_participation": null,
+        "snaps": null
+      },
+      "usage_source": "derived",
+      "wopr": 0.555349
+    },
+    {
+      "air_yards_share": 0.186047,
+      "alignment": {
+        "backfield_rate": null,
+        "inline_rate": null,
+        "slot_rate": null,
+        "wide_rate": null
+      },
+      "carry_share": 0.0,
+      "denominators": {
+        "team_air_yards": 215.0,
+        "team_carries": 22,
+        "team_dropbacks": 32,
+        "team_offense_snaps": null,
+        "team_targets": 25
+      },
+      "game_id": "2026_01_BUF_KC",
+      "goal_line": {
+        "carries": null,
+        "targets": null
+      },
+      "player_id": "00-KC-TE1",
+      "player_id_source": "upstream_gsis",
+      "redzone": {
+        "carries": null,
+        "snap_share": null,
+        "targets": null
+      },
+      "route_participation": null,
+      "snap_share": null,
+      "target_share": 0.28,
+      "team": "KC",
+      "two_minute": {
+        "route_participation": null,
+        "snaps": null
+      },
+      "usage_source": "derived",
+      "wopr": 0.550233
+    },
+    {
+      "air_yards_share": -0.023256,
+      "alignment": {
+        "backfield_rate": null,
+        "inline_rate": null,
+        "slot_rate": null,
+        "wide_rate": null
+      },
+      "carry_share": 0.818182,
+      "denominators": {
+        "team_air_yards": 215.0,
+        "team_carries": 22,
+        "team_dropbacks": 32,
+        "team_offense_snaps": null,
+        "team_targets": 25
+      },
+      "game_id": "2026_01_BUF_KC",
+      "goal_line": {
+        "carries": null,
+        "targets": null
+      },
+      "player_id": "00-KC-RB1",
+      "player_id_source": "upstream_gsis",
+      "redzone": {
+        "carries": null,
+        "snap_share": null,
+        "targets": null
+      },
+      "route_participation": null,
+      "snap_share": null,
+      "target_share": 0.08,
+      "team": "KC",
+      "two_minute": {
+        "route_participation": null,
+        "snaps": null
+      },
+      "usage_source": "derived",
+      "wopr": 0.103721
+    },
+    {
+      "air_yards_share": 0.0,
+      "alignment": {
+        "backfield_rate": null,
+        "inline_rate": null,
+        "slot_rate": null,
+        "wide_rate": null
+      },
+      "carry_share": 0.0,
+      "denominators": {
+        "team_air_yards": 100.0,
+        "team_carries": 20,
+        "team_dropbacks": 28,
+        "team_offense_snaps": null,
+        "team_targets": 16
+      },
+      "game_id": "2026_01_BUF_KC",
+      "goal_line": {
+        "carries": null,
+        "targets": null
+      },
+      "player_id": "00-BUF-QB1",
+      "player_id_source": "upstream_gsis",
+      "redzone": {
+        "carries": null,
+        "snap_share": null,
+        "targets": null
+      },
+      "route_participation": null,
+      "snap_share": null,
+      "target_share": 0.0,
+      "team": "BUF",
+      "two_minute": {
+        "route_participation": null,
+        "snaps": null
+      },
+      "usage_source": "derived",
+      "wopr": 0.0
+    },
+    {
+      "air_yards_share": 0.9,
+      "alignment": {
+        "backfield_rate": null,
+        "inline_rate": null,
+        "slot_rate": null,
+        "wide_rate": null
+      },
+      "carry_share": 0.0,
+      "denominators": {
+        "team_air_yards": 100.0,
+        "team_carries": 20,
+        "team_dropbacks": 28,
+        "team_offense_snaps": null,
+        "team_targets": 16
+      },
+      "game_id": "2026_01_BUF_KC",
+      "goal_line": {
+        "carries": null,
+        "targets": null
+      },
+      "player_id": "00-BUF-WR1",
+      "player_id_source": "upstream_gsis",
+      "redzone": {
+        "carries": null,
+        "snap_share": null,
+        "targets": null
+      },
+      "route_participation": null,
+      "snap_share": null,
+      "target_share": 0.5,
+      "team": "BUF",
+      "two_minute": {
+        "route_participation": null,
+        "snaps": null
+      },
+      "usage_source": "derived",
+      "wopr": 1.38
+    },
+    {
+      "air_yards_share": 0.1,
+      "alignment": {
+        "backfield_rate": null,
+        "inline_rate": null,
+        "slot_rate": null,
+        "wide_rate": null
+      },
+      "carry_share": 1.0,
+      "denominators": {
+        "team_air_yards": 100.0,
+        "team_carries": 20,
+        "team_dropbacks": 28,
+        "team_offense_snaps": null,
+        "team_targets": 16
+      },
+      "game_id": "2026_01_BUF_KC",
+      "goal_line": {
+        "carries": null,
+        "targets": null
+      },
+      "player_id": "00-BUF-RB1",
+      "player_id_source": "upstream_gsis",
+      "redzone": {
+        "carries": null,
+        "snap_share": null,
+        "targets": null
+      },
+      "route_participation": null,
+      "snap_share": null,
+      "target_share": 0.5,
+      "team": "BUF",
+      "two_minute": {
+        "route_participation": null,
+        "snaps": null
+      },
+      "usage_source": "derived",
+      "wopr": 0.82
+    }
+  ],
+  "upstream": {
+    "adapter": "nflverse-participation",
+    "fetched_at": "2026-09-15T12:00:00Z",
+    "source_ref": "https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2026.csv"
+  }
+}

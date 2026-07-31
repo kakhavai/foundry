@@ -11,15 +11,12 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 import respx
+from collector_core.coverage import BELOW_EXPECTED_FLOOR, MAX_ERRORS
 from conftest import SpyLake, player, sleeper_document
 
 from player_identity import capture as capture_module
 from player_identity.adapters.sleeper import PLAYERS_URL, UpstreamSchemaError
-from player_identity.capture import (
-    EXPECTED_ROSTER_FLOOR,
-    MAX_ERRORS,
-    capture_identities,
-)
+from player_identity.capture import EXPECTED_ROSTER_FLOOR, capture_identities
 from player_identity.resolution import MissQueue, ResolutionIndex
 
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
@@ -92,7 +89,7 @@ async def test_expected_never_derives_from_what_the_fetch_returned():
     assert coverage.present == 2
     assert coverage.ratio < 0.01
     reasons = {e["reason"] for e in envelopes["player_identity_crosswalk"].errors}
-    assert "below_expected_roster_floor" in reasons
+    assert BELOW_EXPECTED_FLOOR in reasons
 
 
 @respx.mock
@@ -103,7 +100,7 @@ async def test_the_floor_never_lowers_a_genuinely_larger_roster():
     coverage = envelopes["player_identity_crosswalk"].coverage
     assert coverage.expected == 2
     reasons = {e["reason"] for e in envelopes["player_identity_crosswalk"].errors}
-    assert "below_expected_roster_floor" not in reasons
+    assert BELOW_EXPECTED_FLOOR not in reasons
 
 
 @respx.mock
@@ -184,10 +181,19 @@ async def test_a_failure_survives_an_unwritable_lake_and_still_re_raises():
 
 
 @respx.mock
-async def test_a_lake_failure_on_a_successful_capture_raises():
+async def test_a_lake_failure_on_a_successful_capture_still_serves_the_capture():
+    """It used to raise, which discarded a capture that had already succeeded
+    and left `/resolve` and `/signals` serving the previous one -- or nothing
+    at all on a first run. The upstream was fine; only the archival copy
+    failed. `collector_core.publish.publish_capture` counts the write failure
+    and returns the envelopes anyway."""
     mock_upstream(_document())
-    with pytest.raises(OSError):
-        await run_capture(lake=SpyLake(fail=True), floor=0)
+
+    envelopes, _, _ = await run_capture(lake=SpyLake(fail=True), floor=0)
+
+    assert set(envelopes) == {"player_identity_crosswalk", "name_resolution_miss"}
+    assert len(envelopes) == 2
+    assert envelopes["player_identity_crosswalk"].signals != []
 
 
 @respx.mock
@@ -272,7 +278,10 @@ async def test_the_errors_array_is_capped_with_a_truncation_marker():
     errors = envelopes["player_identity_crosswalk"].errors
     assert len(errors) == MAX_ERRORS + 1
     assert errors[-1]["reason"] == "errors_truncated"
-    assert "20 further error(s) omitted" in errors[-1]["detail"]
+    # The marker carries structured counts, not just prose, so a consumer can
+    # tell how much was dropped without parsing a sentence.
+    assert errors[-1]["omitted"] == 20
+    assert errors[-1]["total"] == MAX_ERRORS + 20
 
 
 @respx.mock

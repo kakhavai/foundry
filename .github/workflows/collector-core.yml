@@ -1,0 +1,100 @@
+name: collector-core
+
+# The shared collector library's own CI.
+#
+# These three jobs used to live inside .github/workflows/weather.yml, as
+# `collector-core-lint` and `collector-core-test`. That was an accident of
+# history rather than a decision: weather was the first collector, so the
+# library's tests were bolted onto its workflow, and weather's build-push
+# gated on them. The consequences were both wrong in the same direction —
+# the library's suite ran under a service's name, and a second collector
+# wanting the same guarantee had to copy the jobs rather than inherit them.
+#
+# `libs/collector-core` is not a deployable service: no Helm values, no image,
+# no GitOps entry. So it is not a leg in services.yml's matrix — it gets the
+# two jobs that do apply to it, here, triggered by its own path.
+#
+# Note this does NOT replace the `libs/**` rule in each collector's path
+# filter. A change here still runs every collector's own lint and test through
+# services.yml, because the library breaking a consumer is the failure that
+# matters. This workflow only adds the library's own suite on top.
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+on:
+  pull_request:
+    paths:
+      - 'libs/collector-core/**'
+      - '.github/actions/**'
+      - '.github/workflows/collector-core.yml'
+      - 'contracts/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'libs/collector-core/**'
+      - '.github/actions/**'
+      - '.github/workflows/collector-core.yml'
+      - 'contracts/**'
+
+concurrency:
+  group: collector-core-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-lint
+        with:
+          working-directory: libs/collector-core
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-test
+        with:
+          working-directory: libs/collector-core
+
+  runtime-imports:
+    # Every collector's container installs the library with `--no-dev`. A
+    # module-level import of a dev-only dependency here crash-loops every
+    # collector at once, and collector-core has done exactly this before.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Every library module must import with runtime deps only
+        shell: bash
+        working-directory: libs/collector-core
+        run: |
+          uv sync --frozen --no-dev
+          uv run --no-sync python - <<'PY'
+          import importlib, pkgutil, sys
+          import collector_core
+          failed = []
+          for m in pkgutil.iter_modules(collector_core.__path__):
+              name = f"collector_core.{m.name}"
+              try:
+                  importlib.import_module(name)
+              except Exception as exc:
+                  failed.append(f"{name}: {exc!r}")
+          if failed:
+              print("Modules that fail to import without dev dependencies:")
+              for f in failed:
+                  print("  ", f)
+              sys.exit(1)
+          print("all modules import with runtime dependencies only")
+          PY

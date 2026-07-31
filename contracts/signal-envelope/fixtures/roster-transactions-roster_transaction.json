@@ -1,0 +1,77 @@
+{
+  "envelope_version": "1",
+  "collector": "roster-transactions",
+  "signal_type": "roster_transaction",
+  "captured_at": "2026-09-05T00:00:00Z",
+  "upstream": {
+    "adapter": "roster-transactions-upstream",
+    "fetched_at": "2026-09-05T00:00:00Z",
+    "source_ref": null
+  },
+  "scope": {
+    "season": 2026,
+    "week": 1
+  },
+  "coverage": {
+    "expected": 384,
+    "present": 384,
+    "missing": []
+  },
+  "errors": [],
+  "signals": [
+    {
+      "transaction_id": "rtx-1d84054e743dd559",
+      "transaction_type": "ps_elevation",
+      "player_id": "fdy-placeholder-0001",
+      "position": "WR",
+      "from_team": null,
+      "to_team": "KC",
+      "announced_at": "2026-09-01T06:00:00Z",
+      "effective_at": "2026-09-02T06:00:00Z",
+      "eligible_from_week": null,
+      "return_window": null,
+      "elevation_count_season": 1,
+      "confidence": "official",
+      "is_void": false,
+      "void_reason": null,
+      "supersedes": null,
+      "source_ref": "placeholder/0001"
+    },
+    {
+      "transaction_id": "rtx-bcc35344bbc942c0",
+      "transaction_type": "ir_placement",
+      "player_id": "fdy-placeholder-0002",
+      "position": "RB",
+      "from_team": "SF",
+      "to_team": null,
+      "announced_at": "2026-09-01T20:00:00Z",
+      "effective_at": "2026-09-01T20:00:00Z",
+      "eligible_from_week": null,
+      "return_window": null,
+      "elevation_count_season": null,
+      "confidence": "reported",
+      "is_void": false,
+      "void_reason": null,
+      "supersedes": null,
+      "source_ref": "placeholder/0002"
+    },
+    {
+      "transaction_id": "rtx-fc17ad1d49adcb7f",
+      "transaction_type": "signing",
+      "player_id": "fdy-placeholder-0003",
+      "position": "TE",
+      "from_team": null,
+      "to_team": "BUF",
+      "announced_at": "2026-09-02T20:00:00Z",
+      "effective_at": "2026-09-03T20:00:00Z",
+      "eligible_from_week": 2,
+      "return_window": null,
+      "elevation_count_season": null,
+      "confidence": "official",
+      "is_void": false,
+      "void_reason": null,
+      "supersedes": null,
+      "source_ref": "placeholder/0003"
+    }
+  ]
+}

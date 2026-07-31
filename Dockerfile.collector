@@ -1,0 +1,205 @@
+# =============================================================================
+# THE Dockerfile for every collector. There is exactly one, and it is this file.
+#
+#   docker build -f Dockerfile.collector \
+#       --build-arg SERVICE=weather \
+#       --build-arg PACKAGE=weather \
+#       --build-arg PORT=8000 \
+#       -t weather:local .
+#
+# WHY ONE FILE
+#
+# Each collector used to carry its own ~70-line Dockerfile that differed from
+# the next one in three tokens: the uv package name, the Python module, and the
+# port. At the twenty-six collectors Phase 8 plans that is ~1,800 lines which
+# must all agree, and the failure mode of a disagreement is not a red build —
+# it is one collector quietly shipping a stale wheel, or missing the
+# `workspace-manifests` stage, or running as root, while the other twenty-five
+# are fine. Nine files had already drifted apart in exactly that way (weather's
+# carried the reference write-up, the rest carried abbreviations of it).
+#
+# The three tokens are build args. Everything else is stated once.
+#
+# WHAT IS *NOT* BUILT FROM HERE
+#
+# `services/player-projections/` is not a collector: it is not a uv workspace
+# member, it owns its own uv.lock, it imports nothing from libs/, and it builds
+# from its own directory as the Docker context. It keeps its own Dockerfile and
+# must stay out of this one. `services/foundry-cli/` ships no image at all.
+#
+# WHO PASSES THE ARGS
+#
+# Nobody types them. Both callers derive all three from files that already
+# exist, so adding a collector still means touching no build tooling:
+#
+#   scripts/deploy-local.py                    local Kind builds
+#   .github/actions/changed-services/filters.py + build-push/action.yml   CI
+#
+# `PORT` comes from `helm/values/<name>/values.yaml`'s `service.port` — the
+# artifact Kubernetes actually applies — so the port the container listens on
+# and the port the probes dial cannot drift apart.
+#
+# tests/test_dockerfile_workspace.py is the guard on all of this.
+# =============================================================================
+
+# =============================================================================
+# Stage 1 — workspace-manifests.
+#
+# WHY IT EXISTS
+#
+# `uv sync --locked --package <x>` resolves the ENTIRE workspace graph before
+# it can sync any single member, so every member's pyproject.toml has to be in
+# the build context — including members this service does not depend on. Miss
+# one and the build fails with "the lockfile needs to be updated".
+#
+# Before this stage the Dockerfiles listed them one COPY line at a time, which
+# is quadratic: the line you forget breaks an UNRELATED service's image, and
+# that break is invisible to pytest because pytest never touches a Dockerfile.
+# It happened for real — adding `roster-scope` to the workspace broke
+# `services/weather/Dockerfile`, and the agent that did it had built only its
+# own image and concluded Docker was fine.
+#
+# WHAT IT DOES
+#
+# Reduces the whole context to exactly what dependency resolution needs:
+#
+#   pyproject.toml, uv.lock     the workspace root and its single lockfile
+#   libs/**                     in FULL — libs are BUILT as dependencies
+#                               (`Building collector-core @ file:///app/...`),
+#                               not merely resolved, so a manifest is not enough
+#   services/*/pyproject.toml   manifest only, no source, for every service
+#
+# No member is named anywhere. Adding one requires no edit here.
+#
+# WHY A WHOLE STAGE AND NOT ONE COPY LINE
+#
+# `COPY services/*/pyproject.toml ./services/` does not work: Docker FLATTENS a
+# multi-source COPY into the destination directory, so 26 manifests collapse
+# onto one path and the last one wins. Verify that yourself before
+# "simplifying" the stage away.
+#
+# `COPY --parents services/*/pyproject.toml ./` does preserve the tree and is
+# one line — but it is a BuildKit *labs* feature requiring
+# `# syntax=docker/dockerfile:1.7-labs`, which pins every image in the repo to
+# an unstable frontend fetched over the network at build time. This stage uses
+# only FROM/COPY/RUN and cannot rot.
+#
+# A `.dockerignore` broad enough to make `COPY services/ ./services/` cheap was
+# also rejected: .dockerignore is global to a build, so excluding service
+# source to protect the dependency layer would also break the
+# `COPY services/${SERVICE}/${PACKAGE}/` below. One file cannot say both things.
+#
+# WHY IT DOES NOT COST THE LAYER CACHE
+#
+# This stage's own `COPY . .` busts on any source edit and the RUN below
+# re-executes — for about half a second. That is deliberate. BuildKit keys
+# `COPY --from=<stage>` on the CONTENT of the files it copies, not on the
+# source stage's layer digest, so the builder stage sees an unchanged
+# /manifests and the expensive `uv sync` layer is reused. Editing a collector's
+# source does not re-resolve dependencies; editing any pyproject.toml or
+# uv.lock does. Both directions are measured in the PR that introduced this.
+# =============================================================================
+FROM python:3.12-slim AS workspace-manifests
+
+WORKDIR /src
+
+COPY . .
+
+RUN set -eu; \
+    mkdir -p /manifests; \
+    cp pyproject.toml uv.lock /manifests/; \
+    cp -a libs /manifests/libs; \
+    find services -mindepth 2 -maxdepth 2 -name pyproject.toml \
+        -exec cp --parents {} /manifests/ \;
+
+# =============================================================================
+# Stage 2 — builder
+# =============================================================================
+FROM python:3.12-slim AS builder
+
+ARG SERVICE
+ARG PACKAGE
+
+# A missing --build-arg must fail here, loudly, and not four layers later as
+# `uv sync --package ` (which uv reads as a syntax error nobody attributes to
+# the caller) or — far worse — as a runtime image whose CMD is `uvicorn
+# .main:app`. That last one builds clean and only fails when a pod starts.
+RUN set -eu; \
+    test -n "${SERVICE}" || { echo "FAIL: --build-arg SERVICE is required" >&2; exit 1; }; \
+    test -n "${PACKAGE}" || { echo "FAIL: --build-arg PACKAGE is required" >&2; exit 1; }
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=0
+
+WORKDIR /app
+
+# Everything uv needs to resolve the workspace and build this service's
+# dependencies — and deliberately none of this service's own source, so the
+# sync below stays cached across source edits.
+COPY --from=workspace-manifests /manifests/ ./
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --no-install-project --package ${SERVICE}
+
+COPY services/${SERVICE}/${PACKAGE}/ ./services/${SERVICE}/${PACKAGE}/
+
+# `--reinstall-package` is not optional, and the reason is nasty: the package
+# version never changes (0.1.0), so uv's build cache under the mount above can
+# serve a PREVIOUSLY BUILT WHEEL even though the source just changed. The image
+# then silently ships stale code — it builds, it starts, it passes a health
+# check, and it is executing a different revision than the tree it was built
+# from. That happened twice while debugging roster-scope and invalidated two
+# whole rounds of container measurements.
+#
+# Dropping the cache mount would also fix it, at the cost of re-downloading
+# every dependency on every build. Reinstalling just this one package keeps the
+# dependency cache and removes the hazard.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --no-editable --package ${SERVICE} \
+        --reinstall-package ${SERVICE}
+
+# =============================================================================
+# Stage 3 — runtime
+# =============================================================================
+FROM python:3.12-slim
+
+ARG PACKAGE
+ARG PORT
+
+RUN test -n "${PACKAGE}" || { echo "FAIL: --build-arg PACKAGE is required" >&2; exit 1; }; \
+    test -n "${PORT}" || { echo "FAIL: --build-arg PORT is required" >&2; exit 1; }
+
+# A numeric UID: Kubernetes `runAsNonRoot` can only verify a numeric user. A
+# name here makes the kubelet refuse to start the pod ("container has
+# runAsNonRoot and image has non-numeric user").
+RUN addgroup --system --gid 65532 app \
+    && adduser --system --uid 65532 --ingroup app appuser
+
+WORKDIR /app
+
+COPY --from=builder /app/.venv /app/.venv
+
+USER 65532
+
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Baked, not passed at run time, so `docker run <image>` listens where the Helm
+# chart's containerPort and probes expect without anyone supplying an env var.
+ENV APP_MODULE="${PACKAGE}.main:app" \
+    APP_PORT="${PORT}"
+
+EXPOSE ${PORT}
+
+# Shell form, because exec form does no variable expansion and the module and
+# port are build args. `exec` is what makes that safe: it REPLACES the shell,
+# so PID 1 is uvicorn itself and Kubernetes' SIGTERM reaches the app's graceful
+# shutdown instead of dying with the shell that ignored it.
+#
+# Drop the `exec` and nothing appears to break: the container starts, serves,
+# and passes its probes. It only misbehaves on termination, where the capture
+# loop is killed mid-flight and the pod takes the full grace period to go away.
+# tests/test_dockerfile_workspace.py asserts the `exec` is still there.
+CMD ["sh", "-c", "exec uvicorn $APP_MODULE --host 0.0.0.0 --port $APP_PORT"]

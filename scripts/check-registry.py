@@ -44,13 +44,14 @@ def compare_entry_to_catalog(entry: dict, catalog: dict) -> list[str]:
     Empty list means they agree. Pure — no I/O — so the platform suite can
     exercise it without a cluster.
 
-    `envelope_version` is compared with `str()` on both sides on purpose.
-    The registry stores an integer (the phase doc's example writes `1`), while
-    `collector_core.envelope.ENVELOPE_VERSION` is the string `"1"` because it
-    becomes the lake path segment `v1`, and `/catalog` returns that string.
-    That inconsistency is real and is flagged rather than papered over; until
-    it is settled deliberately, the comparison must not care which side is
-    which.
+    `envelope_version` is compared **exactly**, type included. It used to be
+    `str()`-ed on both sides because the registry stored an integer while
+    `collector_core.envelope.ENVELOPE_VERSION` is the string `"1"` (it becomes
+    the lake path segment `v1`) and `/catalog` returns that string. That
+    inconsistency has since been settled in favour of the string — see
+    contracts/collector-registry.yaml's header — so the coercion is gone. It
+    was a workaround rather than a decision: it would also have accepted `1`
+    against `"1.0"`.
     """
     name = entry["name"]
     problems: list[str] = []
@@ -67,7 +68,7 @@ def compare_entry_to_catalog(entry: dict, catalog: dict) -> list[str]:
             f"the registry path may be routed to the wrong service"
         )
 
-    if str(catalog["envelope_version"]) != str(entry["envelope_version"]):
+    if catalog["envelope_version"] != entry["envelope_version"]:
         problems.append(
             f"{name}: envelope_version drift — registry says "
             f"{entry['envelope_version']!r}, live /catalog says "

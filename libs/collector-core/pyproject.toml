@@ -2,10 +2,38 @@
 name = "collector-core"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["boto3", "fastapi", "httpx", "opentelemetry-api", "prometheus-client"]
+# The OTel SDK/exporter/instrumentation packages are RUNTIME dependencies, not
+# dev ones: `collector_core/telemetry.py` imports them at module level. The
+# image installs `--no-dev`, so a dev-only import here would pass every test
+# and crash-loop the container the moment OTEL_EXPORTER_OTLP_ENDPOINT is set.
+dependencies = [
+    "boto3",
+    "fastapi",
+    "httpx",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-grpc",
+    "opentelemetry-exporter-prometheus",
+    "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-instrumentation-httpx",
+    "prometheus-client",
+]
 
 [dependency-groups]
-dev = ["ruff", "pytest", "pytest-asyncio", "pytest-cov", "jsonschema[format]", "moto[s3]"]
+# `respx` is declared here, not inherited. Running `uv run pytest` from this
+# directory inside the workspace resolves against a shared venv where a
+# *service* has already pulled respx in, so a missing declaration passes
+# locally and fails only in CI, which installs this package on its own. Same
+# shape as the moto rule, different package. Verify with `uv run --isolated`.
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "jsonschema[format]",
+    "moto[s3]",
+    "respx",
+]
 
 [tool.uv]
 package = true

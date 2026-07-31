@@ -82,10 +82,23 @@ selects `StubPlayerIdentityResolver`: a deterministic
 guesses** — blank team or position, or a name normalizing under two
 characters, raises `UnresolvablePlayer` and the slot is recorded missing.
 
-Setting `PLAYER_IDENTITY_URL` selects `HttpPlayerIdentityResolver`. Its
-request/response shape is **PROVISIONAL** and has not been agreed with the
-`player-identity` author — read the class docstring before setting the
-variable in any values file.
+Setting `PLAYER_IDENTITY_URL` selects `HttpPlayerIdentityResolver`, now
+reconciled against `player-identity`'s real `GET /resolve`.
+
+**It obeys that endpoint's `resolved` flag and ranks nothing itself.**
+`player-identity` populates `candidates` precisely when it has decided *not*
+to resolve — a tie, a sparse record clearing the threshold on one agreeing
+attribute — and files the query in its own miss queue. Re-ranking that array
+locally, which this resolver used to do against a 0.5 floor, adopts an identity
+the collector that owns identity refused, and a wrong `player_id` propagates
+into an append-only lake that is never rewritten.
+
+There is no local confidence floor by design: `player-identity` owns
+`THRESHOLD`, `MARGIN` and `MIN_AGREEING_ATTRIBUTES`, and a second floor here
+could only ever loosen a refusal. A refusal becomes
+`UnresolvablePlayer("identity_unresolved_<upstream reason>")`, so the slot is
+recorded in `coverage.missing` with the reason identity declined — visible,
+never skipped.
 
 ## Local
 

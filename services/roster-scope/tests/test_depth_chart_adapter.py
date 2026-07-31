@@ -57,18 +57,131 @@ def test_unranked_or_nameless_rows_are_dropped():
     assert [r.name_raw for r in charts["KC"].rows] == ["Real Player"]
 
 
-def test_rows_outside_the_scopes_positions_are_dropped_at_ingest():
-    """A memory decision, not a modelling one.
+def test_rows_outside_every_rules_demand_are_dropped_at_ingest():
+    """A memory decision, not a modelling one -- and gated on rule demand,
+    not on recognition.
 
-    The feed carries the full two-deep for every unit; the rules only ever
-    consult QB/RB/WR/TE/K. Retaining the rest OOM-killed a 256Mi pod even
-    after the body stopped being buffered, so the filter moved into the
-    adapter.
+    `LDE` and `ATH` are labels `canonical_position` does not recognise at all
+    (`None`) -- special-teams and gadget-player codes the feed carries that
+    neither rule set has ever wanted. That is currently the *only* way a row
+    is dropped here: the player scope (QB/RB/WR/TE/K/DST) and the matchup
+    scope (CB/S/LB/DL/OL) together happen to cover every canonical group
+    `POSITION_ALIASES` can produce, so "recognised" and "wanted" currently
+    coincide again -- the same coincidence that broke once already (see
+    `WANTED_POSITIONS`'s comment) when only the player scope existed. Gating
+    on `position not in WANTED_POSITIONS` rather than on `position is None`
+    is what keeps this test's assertion correct independent of that
+    coincidence: if a third rule set ever wants a not-yet-covered canonical
+    group, or if a scope's rules shrink, this filter still reflects rule
+    demand rather than silently drifting back to "whatever is recognised".
+    `test_matchup_positions_are_retained_at_ingest` below is the flip side:
+    it pins that a *recognised and wanted* row (`LT` -> `OL`) is retained.
     """
     charts = parse(
         [
             depth_row("KC", "QB", 1, "A Passer"),
             depth_row("KC", "LDE", 1, "An End"),
+            depth_row("KC", "ATH", 1, "A Gadget Player"),
+        ]
+    )
+    assert {r.position_raw for r in charts["KC"].rows} == {"QB"}
+
+
+def test_matchup_positions_are_retained_at_ingest():
+    """Task 6 builds the matchup list (CB/S/LB/DL/OL) from this same feed, so
+    those rows must survive Filter 1 even though the player scope's own
+    rules never consult them. `LT` canonicalizes to `OL` -- our own line,
+    per `MATCHUP_RULES` -- so it is retained, not dropped, once
+    `WANTED_POSITIONS` includes the matchup scope. Without this test,
+    someone restoring the pre-matchup-scope filter (gating on the player
+    scope's positions alone) would silently break Task 6's data source, and
+    nothing here would catch it.
+    """
+    charts = parse(
+        [
+            depth_row("KC", "QB", 1, "A Passer"),
+            depth_row("KC", "LT", 1, "A Tackle"),
+        ]
+    )
+    assert {r.position_raw for r in charts["KC"].rows} == {"QB", "LT"}
+
+
+def test_a_full_line_of_distinct_alias_labels_all_survive_ingest():
+    """The regression test for the dedup-key collapse.
+
+    `POSITION_ALIASES` folds `LT/LG/C/RG/RT` -> `OL`, `FS/SS` -> `S`, and
+    `WLB/MLB/SLB` -> `LB`. A feed that labels each lineman/backer/safety
+    positionally -- `pos_rank` counted within its own raw label, so every
+    one of a five-man line is rank 1 -- used to hash all five to the same
+    `(team, "OL", 1)` key once the dedup key used the *canonical* position,
+    and only one of the five survived "newest wins". These are five (or
+    two, or three) distinct, simultaneously-current players, not five
+    snapshots of one slot, and dropping four of them is silent: the row is
+    neither present nor recorded as an ingest error anywhere upstream of
+    `resolve_membership`'s own coverage accounting.
+
+    All ten rows here carry rank 1 within their own raw label and must all
+    ten survive ingest.
+    """
+    charts = parse(
+        [
+            depth_row("KC", "LT", 1, "Left Tackle"),
+            depth_row("KC", "LG", 1, "Left Guard"),
+            depth_row("KC", "C", 1, "Center"),
+            depth_row("KC", "RG", 1, "Right Guard"),
+            depth_row("KC", "RT", 1, "Right Tackle"),
+            depth_row("KC", "FS", 1, "Free Safety"),
+            depth_row("KC", "SS", 1, "Strong Safety"),
+            depth_row("KC", "WLB", 1, "Weak Backer"),
+            depth_row("KC", "MLB", 1, "Mike Backer"),
+            depth_row("KC", "SLB", 1, "Sam Backer"),
+        ]
+    )
+    names = {r.name_raw for r in charts["KC"].rows}
+    assert names == {
+        "Left Tackle",
+        "Left Guard",
+        "Center",
+        "Right Guard",
+        "Right Tackle",
+        "Free Safety",
+        "Strong Safety",
+        "Weak Backer",
+        "Mike Backer",
+        "Sam Backer",
+    }, f"expected all 10 alias-group rows retained, got {sorted(names)}"
+
+
+def test_ingest_gates_on_configured_demand_not_on_recognition(monkeypatch):
+    """Synthetic, and here on purpose: no *real* position can currently prove
+    this gate matters.
+
+    The player scope (QB/RB/WR/TE/K/DST) and the matchup scope
+    (CB/S/LB/DL/OL) together already cover every canonical group
+    `canonical_position` can produce, so today `position not in
+    WANTED_POSITIONS` and `position is None` compute the exact same function
+    -- there is no recognised-but-unwanted label left to tell them apart.
+    That coverage gap is not a future risk to watch for; it has *already*
+    happened, silently, as a side effect of Task 5 adding `OL` to
+    `WANTED_POSITIONS`. Without a synthetic case, an accidental revert to
+    `is None` -- which is exactly the change that reopened the OOM-shaped
+    hole once already -- would ship with the full suite green.
+
+    So the test manufactures the gap: monkeypatch `WANTED_POSITIONS` down to
+    a set that deliberately excludes `OL`, then feed a row that
+    `canonical_position` recognises fine (`LT` -> `OL`) but this narrowed
+    set does not want. Under the real gate that row is dropped. Under
+    `is None` it would be retained regardless of `WANTED_POSITIONS`, because
+    that mutation never looks at the set at all -- which is precisely what
+    this test is here to catch.
+    """
+    monkeypatch.setattr(
+        "roster_scope.adapters.depth_chart.WANTED_POSITIONS",
+        frozenset({"QB", "RB", "WR", "TE", "K", "DST", "CB", "S", "LB", "DL"}),
+    )
+    charts = parse(
+        [
+            depth_row("KC", "QB", 1, "A Passer"),
             depth_row("KC", "LT", 1, "A Tackle"),
         ]
     )
