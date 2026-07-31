@@ -4,29 +4,29 @@ bundled schedule adapter is transitional.
 The phase-8 spec for this collector says travel and body-clock fields
 "require venue coordinates and IANA zones rather than city strings", sourced
 "from the `venue` collector rather than a third party". `venue` is an 8E
-collector and does not exist yet, so this module stands in for it. The
-`Venue` interface is the seam: when `venue` lands, `resolve_venue` becomes an
-HTTP call and nothing above it changes.
+collector and does not exist yet, so this module stands in for it. `Venue` is
+the seam: when `venue` lands, `resolve_venue` becomes a call to it and nothing
+above this module changes.
 
-It is deliberately *not* in `collector-core`. A venue table is `venue`'s job,
-not the shared library's, and moving it into the library now would mean
+It is deliberately **not** in `collector-core`. A venue table is `venue`'s job,
+not the shared library's, and moving it into the library now would only mean
 deleting it from there when the real collector arrives.
 
 Two normalisations here are load-bearing:
 
-1. **A neutral-site game's venue is not the home team's stadium.** The
-   upstream's `stadium_id` and `roof` describe the DESIGNATED HOME TEAM's
-   stadium for those rows; only the `stadium` name is correct. Reading the
-   home team's coordinates for a game played in Munich yields plausible
-   numbers that pass every schema check and are wrong by four thousand
-   miles. Neutral rows therefore resolve by stadium NAME, and an
-   unrecognised name resolves to nothing rather than to a guess.
+1. **A neutral-site game's venue is not the home club's stadium.** The
+   upstream's `stadium_id` describes the DESIGNATED HOME CLUB's stadium for
+   those rows; only the `stadium` name is correct. Reading the home club's
+   coordinates for a game played in Munich yields plausible numbers that pass
+   every schema check and are wrong by four thousand miles. Neutral rows
+   therefore resolve by stadium NAME, and an unrecognised name resolves to
+   nothing rather than to a guess.
 
-2. **Zones are IANA, never fixed offsets.** The season crosses the November
-   DST transition, and `America/Phoenix` does not observe DST at all while
+2. **Zones are IANA, never fixed offsets.** The season crosses the November DST
+   transition, and `America/Phoenix` does not observe DST at all while
    `America/Denver` does — so Arizona's offset relative to the rest of the
    Mountain zone changes mid-season. A fixed offset is wrong for exactly the
-   games where the timezone fields matter most.
+   games where these fields matter most.
 """
 
 import re
@@ -41,106 +41,114 @@ LEAGUE_COUNTRY = "US"
 
 @dataclass(frozen=True)
 class Venue:
-    """One place a game is played. The interface `venue` (8E) will supply."""
+    """One place a game is played. The interface `venue` (8E) will supply.
+
+    No display name: nothing this collector emits carries one, and `venue_id`
+    is the identity a consumer joins on. Two clubs sharing a building share a
+    `venue_id`, which is what makes the trip between them zero miles.
+    """
 
     venue_id: str
-    name: str
     latitude: float
     longitude: float
     timezone: str
-    country: str
+    country: str = LEAGUE_COUNTRY
 
-    def utc_offset_hours(self, instant: datetime) -> float:
-        """The venue's UTC offset, in hours, at a specific instant.
-
-        Takes the instant rather than being a constant because DST is the
-        whole reason this is a zone and not a number.
-        """
+    def _local(self, instant: datetime) -> datetime:
         if instant.tzinfo is None:
             raise ValueError(
-                f"timezone-aware datetime required to resolve an offset, "
-                f"got naive: {instant!r}"
+                f"timezone-aware datetime required, got naive: {instant!r}"
             )
-        offset = instant.astimezone(ZoneInfo(self.timezone)).utcoffset()
-        # `utcoffset()` is None only for a naive datetime, which is rejected
-        # above; the guard keeps the type checker and the reader honest.
+        return instant.astimezone(ZoneInfo(self.timezone))
+
+    def utc_offset_hours(self, instant: datetime) -> float:
+        """The venue's UTC offset in hours, at a specific instant.
+
+        Takes the instant rather than being a constant because DST is the whole
+        reason this is a zone and not a number.
+        """
+        offset = self._local(instant).utcoffset()
+        # `utcoffset()` is None only for a naive datetime, which `_local`
+        # already rejected; the guard keeps the reader honest.
         assert offset is not None
         return offset.total_seconds() / 3600.0
 
     def local_time(self, instant: datetime) -> str:
         """Wall-clock `HH:MM:SS` at the venue for a UTC instant."""
-        if instant.tzinfo is None:
-            raise ValueError(
-                f"timezone-aware datetime required for a local time, "
-                f"got naive: {instant!r}"
-            )
-        return instant.astimezone(ZoneInfo(self.timezone)).strftime("%H:%M:%S")
+        return self._local(instant).strftime("%H:%M:%S")
 
 
-def _venue(
-    venue_id: str,
-    name: str,
-    latitude: float,
-    longitude: float,
-    timezone: str,
-    country: str = LEAGUE_COUNTRY,
-) -> Venue:
-    return Venue(venue_id, name, latitude, longitude, timezone, country)
-
-
-# Each club's home venue, keyed by the upstream's team abbreviation. Two pairs
-# share a building (the two Los Angeles clubs, the two New York clubs), which
-# is why the table is keyed by team and the *venue* carries its own id: two
-# teams with the same `venue_id` travel zero miles to play each other.
-TEAM_VENUES: dict[str, Venue] = {
-    "ARI": _venue("state-farm", "State Farm Stadium", 33.5276, -112.2626, "America/Phoenix"),  # noqa: E501
-    "ATL": _venue("mercedes-benz", "Mercedes-Benz Stadium", 33.7554, -84.4008, "America/New_York"),  # noqa: E501
-    "BAL": _venue("mt-bank", "M&T Bank Stadium", 39.2780, -76.6227, "America/New_York"),  # noqa: E501
-    "BUF": _venue("highmark", "Highmark Stadium", 42.7738, -78.7870, "America/New_York"),  # noqa: E501
-    "CAR": _venue("bank-of-america", "Bank of America Stadium", 35.2258, -80.8528, "America/New_York"),  # noqa: E501
-    "CHI": _venue("soldier-field", "Soldier Field", 41.8623, -87.6167, "America/Chicago"),  # noqa: E501
-    "CIN": _venue("paycor", "Paycor Stadium", 39.0955, -84.5161, "America/New_York"),  # noqa: E501
-    "CLE": _venue("huntington-bank-field", "Huntington Bank Field", 41.5061, -81.6995, "America/New_York"),  # noqa: E501
-    "DAL": _venue("att", "AT&T Stadium", 32.7473, -97.0945, "America/Chicago"),
-    "DEN": _venue("empower-field", "Empower Field at Mile High", 39.7439, -105.0201, "America/Denver"),  # noqa: E501
-    "DET": _venue("ford-field", "Ford Field", 42.3400, -83.0456, "America/Detroit"),  # noqa: E501
-    "GB": _venue("lambeau", "Lambeau Field", 44.5013, -88.0622, "America/Chicago"),
-    "HOU": _venue("nrg", "NRG Stadium", 29.6847, -95.4107, "America/Chicago"),
+# Each club's home venue: club -> (venue_id, latitude, longitude, IANA zone).
+# Two pairs share a building — the two Los Angeles clubs and the two New York
+# clubs — which is why the venue id is data rather than the club's own name.
+_HOME_VENUES: dict[str, tuple[str, float, float, str]] = {
+    "ARI": ("state-farm", 33.5276, -112.2626, "America/Phoenix"),
+    "ATL": ("mercedes-benz", 33.7554, -84.4008, "America/New_York"),
+    "BAL": ("mt-bank", 39.2780, -76.6227, "America/New_York"),
+    "BUF": ("highmark", 42.7738, -78.7870, "America/New_York"),
+    "CAR": ("bank-of-america", 35.2258, -80.8528, "America/New_York"),
+    "CHI": ("soldier-field", 41.8623, -87.6167, "America/Chicago"),
+    "CIN": ("paycor", 39.0955, -84.5161, "America/New_York"),
+    "CLE": ("huntington-bank-field", 41.5061, -81.6995, "America/New_York"),
+    "DAL": ("att", 32.7473, -97.0945, "America/Chicago"),
+    "DEN": ("empower-field", 39.7439, -105.0201, "America/Denver"),
+    "DET": ("ford-field", 42.3400, -83.0456, "America/Detroit"),
+    "GB": ("lambeau", 44.5013, -88.0622, "America/Chicago"),
+    "HOU": ("nrg", 29.6847, -95.4107, "America/Chicago"),
     # America/Indiana/Indianapolis, not America/New_York: Indiana did not
-    # observe DST until 2006, and the zone carries that history.
-    "IND": _venue("lucas-oil", "Lucas Oil Stadium", 39.7601, -86.1639, "America/Indiana/Indianapolis"),  # noqa: E501
-    "JAX": _venue("everbank", "EverBank Stadium", 30.3239, -81.6373, "America/New_York"),  # noqa: E501
-    "KC": _venue("arrowhead", "Arrowhead Stadium", 39.0489, -94.4839, "America/Chicago"),  # noqa: E501
-    "LA": _venue("sofi", "SoFi Stadium", 33.9535, -118.3392, "America/Los_Angeles"),
-    "LAC": _venue("sofi", "SoFi Stadium", 33.9535, -118.3392, "America/Los_Angeles"),
-    "LV": _venue("allegiant", "Allegiant Stadium", 36.0909, -115.1833, "America/Los_Angeles"),  # noqa: E501
-    "MIA": _venue("hard-rock", "Hard Rock Stadium", 25.9580, -80.2389, "America/New_York"),  # noqa: E501
-    "MIN": _venue("us-bank", "U.S. Bank Stadium", 44.9736, -93.2575, "America/Chicago"),  # noqa: E501
-    "NE": _venue("gillette", "Gillette Stadium", 42.0909, -71.2643, "America/New_York"),  # noqa: E501
-    "NO": _venue("caesars-superdome", "Caesars Superdome", 29.9511, -90.0812, "America/Chicago"),  # noqa: E501
-    "NYG": _venue("metlife", "MetLife Stadium", 40.8135, -74.0745, "America/New_York"),  # noqa: E501
-    "NYJ": _venue("metlife", "MetLife Stadium", 40.8135, -74.0745, "America/New_York"),  # noqa: E501
-    "PHI": _venue("lincoln-financial", "Lincoln Financial Field", 39.9008, -75.1675, "America/New_York"),  # noqa: E501
-    "PIT": _venue("acrisure", "Acrisure Stadium", 40.4468, -80.0158, "America/New_York"),  # noqa: E501
-    "SEA": _venue("lumen", "Lumen Field", 47.5952, -122.3316, "America/Los_Angeles"),  # noqa: E501
-    "SF": _venue("levis", "Levi's Stadium", 37.4033, -121.9694, "America/Los_Angeles"),  # noqa: E501
-    "TB": _venue("raymond-james", "Raymond James Stadium", 27.9759, -82.5033, "America/New_York"),  # noqa: E501
-    "TEN": _venue("nissan", "Nissan Stadium", 36.1665, -86.7713, "America/Chicago"),
-    "WAS": _venue("northwest", "Northwest Stadium", 38.9077, -76.8645, "America/New_York"),  # noqa: E501
+    # observe DST until 2006 and the zone carries that history.
+    "IND": ("lucas-oil", 39.7601, -86.1639, "America/Indiana/Indianapolis"),
+    "JAX": ("everbank", 30.3239, -81.6373, "America/New_York"),
+    "KC": ("arrowhead", 39.0489, -94.4839, "America/Chicago"),
+    "LA": ("sofi", 33.9535, -118.3392, "America/Los_Angeles"),
+    "LAC": ("sofi", 33.9535, -118.3392, "America/Los_Angeles"),
+    # Las Vegas keeps Pacific time, not Mountain.
+    "LV": ("allegiant", 36.0909, -115.1833, "America/Los_Angeles"),
+    "MIA": ("hard-rock", 25.9580, -80.2389, "America/New_York"),
+    "MIN": ("us-bank", 44.9736, -93.2575, "America/Chicago"),
+    "NE": ("gillette", 42.0909, -71.2643, "America/New_York"),
+    "NO": ("caesars-superdome", 29.9511, -90.0812, "America/Chicago"),
+    "NYG": ("metlife", 40.8135, -74.0745, "America/New_York"),
+    "NYJ": ("metlife", 40.8135, -74.0745, "America/New_York"),
+    "PHI": ("lincoln-financial", 39.9008, -75.1675, "America/New_York"),
+    "PIT": ("acrisure", 40.4468, -80.0158, "America/New_York"),
+    "SEA": ("lumen", 47.5952, -122.3316, "America/Los_Angeles"),
+    "SF": ("levis", 37.4033, -121.9694, "America/Los_Angeles"),
+    "TB": ("raymond-james", 27.9759, -82.5033, "America/New_York"),
+    "TEN": ("nissan", 36.1665, -86.7713, "America/Chicago"),
+    "WAS": ("northwest", 38.9077, -76.8645, "America/New_York"),
 }
 
-# Venues used for neutral-site games, keyed by the NORMALISED upstream stadium
-# name. Keyed by name because the upstream's `stadium_id` for a neutral row
-# points at the designated home team's building, not where the game is played.
-NEUTRAL_VENUES: dict[str, Venue] = {
-    "wembleystadium": _venue("wembley", "Wembley Stadium", 51.5560, -0.2795, "Europe/London", "GB"),  # noqa: E501
-    "tottenhamhotspurstadium": _venue("tottenham", "Tottenham Hotspur Stadium", 51.6043, -0.0665, "Europe/London", "GB"),  # noqa: E501
-    "allianzarena": _venue("allianz", "Allianz Arena", 48.2188, 11.6247, "Europe/Berlin", "DE"),  # noqa: E501
-    "deutschebankpark": _venue("deutsche-bank-park", "Deutsche Bank Park", 50.0685, 8.6455, "Europe/Berlin", "DE"),  # noqa: E501
-    "estadioazteca": _venue("azteca", "Estadio Azteca", 19.3029, -99.1505, "America/Mexico_City", "MX"),  # noqa: E501
-    "neoquimicaarena": _venue("neo-quimica", "Neo Quimica Arena", -23.5453, -46.4742, "America/Sao_Paulo", "BR"),  # noqa: E501
-    "crokepark": _venue("croke-park", "Croke Park", 53.3607, -6.2512, "Europe/Dublin", "IE"),  # noqa: E501
-    "santiagobernabeu": _venue("bernabeu", "Santiago Bernabeu", 40.4531, -3.6883, "Europe/Madrid", "ES"),  # noqa: E501
+# Venues used for neutral-site games, keyed by the upstream's stadium name.
+# Keyed by name because the `stadium_id` on a neutral row points at the
+# designated home club's building rather than where the game is played.
+_NEUTRAL_VENUES: dict[str, tuple[str, float, float, str, str]] = {
+    "Wembley Stadium": ("wembley", 51.5560, -0.2795, "Europe/London", "GB"),
+    "Tottenham Hotspur Stadium": (
+        "tottenham",
+        51.6043,
+        -0.0665,
+        "Europe/London",
+        "GB",
+    ),
+    "Allianz Arena": ("allianz", 48.2188, 11.6247, "Europe/Berlin", "DE"),
+    "Deutsche Bank Park": (
+        "deutsche-bank-park",
+        50.0685,
+        8.6455,
+        "Europe/Berlin",
+        "DE",
+    ),
+    "Estadio Azteca": ("azteca", 19.3029, -99.1505, "America/Mexico_City", "MX"),
+    "Neo Química Arena": (
+        "neo-quimica",
+        -23.5453,
+        -46.4742,
+        "America/Sao_Paulo",
+        "BR",
+    ),
+    "Croke Park": ("croke-park", 53.3607, -6.2512, "Europe/Dublin", "IE"),
+    "Santiago Bernabéu": ("bernabeu", 40.4531, -3.6883, "Europe/Madrid", "ES"),
 }
 
 _NON_ALPHANUMERIC = re.compile(r"[^a-z0-9]+")
@@ -160,13 +168,25 @@ def normalize_stadium(name: str) -> str:
     return _NON_ALPHANUMERIC.sub("", name.strip().lower().translate(_FOLD))
 
 
-def resolve_venue(*, home_team: str, stadium_name: str, is_neutral_site: bool) -> Venue | None:
+TEAM_VENUES: dict[str, Venue] = {
+    team: Venue(venue_id, latitude, longitude, timezone)
+    for team, (venue_id, latitude, longitude, timezone) in _HOME_VENUES.items()
+}
+
+NEUTRAL_VENUES: dict[str, Venue] = {
+    normalize_stadium(name): Venue(*fields) for name, fields in _NEUTRAL_VENUES.items()
+}
+
+
+def resolve_venue(
+    *, home_team: str, stadium_name: str, is_neutral_site: bool
+) -> Venue | None:
     """Where a game is actually played, or `None` if that cannot be determined.
 
     `None` rather than a fallback on purpose. A guessed venue produces travel,
-    timezone and body-clock numbers that are plausible, schema-valid and
-    wrong — which is precisely the failure the coverage block exists to make
-    visible. The caller records the row as missing with a reason instead.
+    timezone and body-clock numbers that are plausible, schema-valid and wrong
+    — which is precisely the failure the coverage block exists to make visible.
+    The caller records the row as missing with a reason instead.
     """
     if is_neutral_site:
         return NEUTRAL_VENUES.get(normalize_stadium(stadium_name))
@@ -174,5 +194,5 @@ def resolve_venue(*, home_team: str, stadium_name: str, is_neutral_site: bool) -
 
 
 def home_venue(team: str) -> Venue | None:
-    """The team's own venue — the zone its body clock is set to."""
+    """The club's own venue — the zone its body clock is set to."""
     return TEAM_VENUES.get(team)

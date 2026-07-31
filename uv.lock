@@ -1604,6 +1604,7 @@ dependencies = [
     { name = "opentelemetry-instrumentation-httpx" },
     { name = "opentelemetry-sdk" },
     { name = "prometheus-client" },
+    { name = "tzdata" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1630,6 +1631,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-httpx" },
     { name = "opentelemetry-sdk" },
     { name = "prometheus-client" },
+    { name = "tzdata" },
     { name = "uvicorn", extras = ["standard"] },
 ]
 

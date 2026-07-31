@@ -100,7 +100,7 @@ def game_row(
         "away_team": away,
         "home_team": home,
         "location": location,
-        "stadium": stadium or TEAM_VENUES[home].name,
+        "stadium": stadium or f"{home} Stadium",
     }
 
 

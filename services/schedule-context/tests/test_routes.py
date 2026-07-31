@@ -91,9 +91,7 @@ def test_an_unknown_signal_type_is_422(client):
     assert client.get("/signals?signal_type=nope").status_code == 422
 
 
-def test_refresh_is_accepted_and_the_capture_eventually_lands(
-    client, served_upstream
-):
+def test_refresh_is_accepted_and_the_capture_eventually_lands(client, served_upstream):
     """202 means accepted. Observe it by polling — see `wait_for_signals`."""
     accepted = client.post("/refresh", json={})
     assert accepted.status_code == 202

@@ -84,9 +84,7 @@ async def test_a_bye_week_and_an_outage_do_not_look_alike():
         assert envelope.coverage.present == 26
         assert envelope.coverage.ratio == 1.0
 
-    outage = await run_capture(
-        SpyLake(), csv=to_csv(season_rows(weeks=5)), week=week
-    )
+    outage = await run_capture(SpyLake(), csv=to_csv(season_rows(weeks=5)), week=week)
     for envelope in outage.values():
         assert envelope.coverage.expected == 26
         assert envelope.coverage.present == 0

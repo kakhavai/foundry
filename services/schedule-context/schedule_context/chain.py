@@ -203,7 +203,9 @@ def rest_context(season: SeasonChains, record: TeamGame) -> RestContext:
     # would put a phantom bye on every team that loses a playoff game.
     in_regular_season = record.is_regular_season and week <= season.last_regular_week
     is_post_bye = (
-        in_regular_season and week > 1 and not season.is_scheduled_in(record.team, week - 1)
+        in_regular_season
+        and week > 1
+        and not season.is_scheduled_in(record.team, week - 1)
     )
     is_pre_bye = (
         in_regular_season
@@ -242,9 +244,7 @@ def _stayed_out(previous: TeamGame, record: TeamGame) -> bool:
     breaks on either.
     """
     return (
-        previous.on_the_road
-        and record.on_the_road
-        and record.week - previous.week == 1
+        previous.on_the_road and record.on_the_road and record.week - previous.week == 1
     )
 
 
@@ -345,9 +345,7 @@ def travel_context(season: SeasonChains, record: TeamGame) -> TravelContext:
     )
 
 
-def days_since_timezone_change(
-    season: SeasonChains, record: TeamGame
-) -> float | None:
+def days_since_timezone_change(season: SeasonChains, record: TeamGame) -> float | None:
     """How long the team has been in this venue's UTC offset.
 
     `None` when the venue's offset equals the team's home offset: the team is

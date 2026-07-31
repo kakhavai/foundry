@@ -16,6 +16,7 @@ import pytest
 
 from schedule_context.adapters.upstream import ScheduledGame, parse_kickoff
 from schedule_context.chain import (
+    DEFAULT_LAST_REGULAR_WEEK,
     SHORT_WEEK_DAYS,
     SeasonChains,
     consecutive_road_games,
@@ -55,7 +56,7 @@ def game(
         home_team=home,
         away_team=away,
         is_neutral_site=neutral,
-        stadium_name=stadium or TEAM_VENUES[home].name,
+        stadium_name=stadium or f"{home} Stadium",
     )
 
 
@@ -395,13 +396,10 @@ def test_an_unrecognised_neutral_venue_resolves_to_nothing():
 
 
 def test_stadium_names_fold_across_punctuation_and_accents():
-    assert (
-        resolve_venue(
-            home_team="ARI", stadium_name="Neo Química Arena", is_neutral_site=True
-        )
-        is resolve_venue(
-            home_team="ARI", stadium_name="neo quimica arena", is_neutral_site=True
-        )
+    assert resolve_venue(
+        home_team="ARI", stadium_name="Neo Química Arena", is_neutral_site=True
+    ) is resolve_venue(
+        home_team="ARI", stadium_name="neo quimica arena", is_neutral_site=True
     )
 
 
@@ -474,6 +472,41 @@ def test_every_game_produces_exactly_two_team_records():
     assert len(records) == 4
     assert {r.home_away for r in records} == {"home", "away"}
     assert len({r.key for r in records}) == 4
+
+
+def test_a_season_with_no_regular_season_rows_falls_back_to_the_declared_length():
+    """`last_regular_week` is read off the table because the league has run
+    16-, 17- and 18-week seasons. A table with no REG rows at all still needs
+    a number, and zero would mark every week `is_pre_bye`."""
+    season = chains(
+        game(week=19, away="BUF", home="NYJ", gameday="2027-01-10", game_type="POST"),
+    )
+    assert season.last_regular_week == DEFAULT_LAST_REGULAR_WEEK == 18
+
+
+def test_an_unresolvable_venue_earlier_in_a_road_trip_stops_the_zone_walk():
+    """Without the guard the walk would read an offset off `None`. With it,
+    acclimatisation is measured only as far back as the chain is actually
+    known."""
+    season = chains(
+        game(
+            week=1,
+            away="BUF",
+            home="LA",
+            gameday="2026-09-13",
+            neutral=True,
+            stadium="Somewhere Unnamed",
+        ),
+        game(week=2, away="BUF", home="SEA", gameday="2026-09-20"),
+    )
+    record = record_for(season, "BUF", 2)
+    assert season.previous(record).venue is None
+    assert days_since_timezone_change(season, record) == 0.0
+
+
+def test_a_local_time_lookup_refuses_a_naive_datetime():
+    with pytest.raises(ValueError, match="timezone-aware"):
+        TEAM_VENUES["SEA"].local_time(datetime(2026, 9, 13, 17, 0))
 
 
 def test_a_neutral_site_game_puts_both_clubs_on_the_road():

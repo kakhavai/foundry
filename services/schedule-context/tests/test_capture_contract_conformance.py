@@ -9,6 +9,7 @@ actually emits — on the degraded paths as well as the happy one.
 """
 
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -16,10 +17,12 @@ import jsonschema
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 
+from schedule_context import capture as capture_module
 from schedule_context.capture import (
     REST,
     SIGNAL_TYPES,
     SITUATIONAL,
+    _rfc3339,
     expected_floor,
     expected_floors,
 )
@@ -185,6 +188,52 @@ async def test_the_schema_covers_exactly_the_declared_signal_types():
     """A schema that silently omits a signal type would let that type's rows go
     unvalidated by both this file and the repo-root suite."""
     assert set(FIELD_SCHEMAS) == set(SIGNAL_TYPES)
+
+
+async def test_an_exhausted_deadline_truncates_and_says_so():
+    """A pass over budget records what is left as missing rather than
+    discarding what already resolved. A truncated pass that reports itself
+    truncated is useful; one that reports itself complete is not."""
+    envelopes = await run_capture(SpyLake(), deadline=NOW - timedelta(days=365 * 100))
+    for envelope in envelopes.values():
+        assert envelope.signals == []
+        assert envelope.coverage.present == 0
+        assert envelope.coverage.ratio == 0.0
+        assert len(envelope.errors) == 32
+        assert {e["reason"] for e in envelope.errors} == {"deadline_exceeded"}
+
+
+async def test_one_unbuildable_row_does_not_lose_the_pass(monkeypatch):
+    """A single row that blows up is recorded against its own key with a
+    classified reason; the other thirty-one still land."""
+    real = capture_module.BUILDERS[REST]
+    calls = {"n": 0}
+
+    def flaky(season, record):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("unmappable row")
+        return real(season, record)
+
+    monkeypatch.setitem(capture_module.BUILDERS, REST, flaky)
+    envelopes = await run_capture(SpyLake())
+
+    rest = envelopes[REST]
+    assert rest.coverage.present == 31
+    assert len(rest.errors) == 1
+    assert rest.errors[0]["reason"] == "malformed"
+    # The other signal type is untouched.
+    assert envelopes[SITUATIONAL].coverage.present == 32
+
+
+def test_a_naive_timestamp_is_refused_rather_than_assumed_to_be_utc():
+    """Kickoffs are the most timezone-sensitive data in this repo. A naive
+    value means "some zone the caller forgot to state", and guessing writes a
+    wrong instant into a lake nobody rewrites."""
+    with pytest.raises(ValueError, match="timezone-aware"):
+        _rfc3339(datetime(2026, 9, 13, 17, 0))
+    assert _rfc3339(None) is None
+    assert _rfc3339(NOW) == "2026-09-15T12:00:00Z"
 
 
 async def test_captured_at_is_the_frozen_instant_not_wall_clock():
