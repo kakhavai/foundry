@@ -14,6 +14,7 @@ import httpx
 import pytest
 import respx
 
+from collector_core.conditional import ETagStore, UpstreamUnchanged
 from collector_core.streaming import (
     UpstreamSchemaError,
     UpstreamTooLarge,
@@ -189,3 +190,112 @@ async def test_blank_lines_are_skipped():
     respx.get(URL).mock(return_value=httpx.Response(200, text="a\n\n1\n\n2\n"))
 
     assert await _collect() == [{"a": "1"}, {"a": "2"}]
+
+
+# --- conditional GET ---------------------------------------------------------
+
+CSV = "team,player_name\nSF,A Player\n"
+
+
+def _client(handler) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
+async def test_the_second_request_carries_the_first_responses_etag():
+    """The whole point: request two must be conditional on request one."""
+    seen: list[dict] = []
+
+    def handler(request):
+        seen.append(dict(request.headers))
+        return httpx.Response(200, text=CSV, headers={"ETag": 'W/"v1"'})
+
+    store = ETagStore()
+    async with _client(handler) as client:
+        for _ in range(2):
+            async for _row in stream_csv_dicts(
+                client, "http://x/d.csv", etag_key="k", etag_store=store
+            ):
+                pass
+
+    assert len(seen) == 2
+    assert "if-none-match" not in seen[0]
+    assert seen[1]["if-none-match"] == 'W/"v1"'
+
+
+@pytest.mark.asyncio
+async def test_a_304_raises_upstream_unchanged_and_yields_no_rows():
+    store = ETagStore()
+    store.set("k", 'W/"v1"')
+
+    def handler(request):
+        return httpx.Response(304)
+
+    rows = []
+    async with _client(handler) as client:
+        with pytest.raises(UpstreamUnchanged) as caught:
+            async for row in stream_csv_dicts(
+                client, "http://x/d.csv", etag_key="k", etag_store=store
+            ):
+                rows.append(row)
+
+    assert rows == []
+    assert caught.value.source_ref == 'W/"v1"'
+
+
+@pytest.mark.asyncio
+async def test_without_an_etag_key_nothing_changes():
+    """Every collector that has not opted in must behave exactly as before."""
+    seen: list[dict] = []
+
+    def handler(request):
+        seen.append(dict(request.headers))
+        return httpx.Response(200, text=CSV, headers={"ETag": 'W/"v1"'})
+
+    async with _client(handler) as client:
+        for _ in range(2):
+            async for _row in stream_csv_dicts(client, "http://x/d.csv"):
+                pass
+
+    assert len(seen) == 2
+    assert all("if-none-match" not in headers for headers in seen)
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_that_sends_no_etag_stays_unconditional():
+    """Fails open: no ETag means no conditional request, forever."""
+    seen: list[dict] = []
+
+    def handler(request):
+        seen.append(dict(request.headers))
+        return httpx.Response(200, text=CSV)
+
+    store = ETagStore()
+    async with _client(handler) as client:
+        for _ in range(2):
+            async for _row in stream_csv_dicts(
+                client, "http://x/d.csv", etag_key="k", etag_store=store
+            ):
+                pass
+
+    assert len(seen) == 2
+    assert all("if-none-match" not in headers for headers in seen)
+    assert store.get("k") is None
+
+
+@pytest.mark.asyncio
+async def test_a_changed_etag_replaces_the_stored_one():
+    etags = iter(['W/"v1"', 'W/"v2"'])
+
+    def handler(request):
+        return httpx.Response(200, text=CSV, headers={"ETag": next(etags)})
+
+    store = ETagStore()
+    async with _client(handler) as client:
+        for _ in range(2):
+            async for _row in stream_csv_dicts(
+                client, "http://x/d.csv", etag_key="k", etag_store=store
+            ):
+                pass
+
+    assert store.get("k") == 'W/"v2"'

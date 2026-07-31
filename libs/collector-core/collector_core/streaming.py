@@ -25,6 +25,8 @@ from collections.abc import AsyncIterator
 
 import httpx
 
+from .conditional import ETAGS, ETagStore, UpstreamUnchanged, conditional_headers
+
 logger = logging.getLogger(__name__)
 
 # A ceiling on how much a collector will pull before giving up. Not a memory
@@ -70,6 +72,8 @@ async def stream_csv_dicts(
     required_columns: frozenset[str] | set[str] | None = None,
     max_chars: int = MAX_UPSTREAM_CHARS,
     follow_redirects: bool = True,
+    etag_key: str | None = None,
+    etag_store: ETagStore = ETAGS,
 ) -> AsyncIterator[dict[str, str]]:
     """Stream a CSV document, yielding one header-keyed dict per row.
 
@@ -80,13 +84,31 @@ async def stream_csv_dicts(
     `required_columns`, when given, is asserted against the header before any
     row is yielded — schema drift fails immediately rather than after a
     million rows have been mapped to nulls.
+
+    `etag_key` opts into conditional GET. When set, the request carries
+    `If-None-Match` from `etag_store` and a `304` raises `UpstreamUnchanged`
+    before a single row is yielded. Left unset (the default), this function
+    behaves exactly as it did before conditional GET existed — which is what
+    lets a collector opt in one at a time.
+
+    The 304 check precedes `raise_for_status()` deliberately. httpx only
+    treats 4xx/5xx as errors so a 304 would fall through today, but relying
+    on that would make this correct by accident.
     """
     header: list[str] | None = None
     consumed = 0
     remainder = ""
 
-    async with client.stream("GET", url, follow_redirects=follow_redirects) as response:
+    headers = conditional_headers(etag_key, etag_store) if etag_key else {}
+
+    async with client.stream(
+        "GET", url, follow_redirects=follow_redirects, headers=headers
+    ) as response:
+        if etag_key is not None and response.status_code == 304:
+            raise UpstreamUnchanged(url, source_ref=etag_store.get(etag_key))
         response.raise_for_status()
+        if etag_key is not None:
+            etag_store.set(etag_key, response.headers.get("etag"))
         async for chunk in response.aiter_text():
             consumed += len(chunk)
             if consumed > max_chars:
