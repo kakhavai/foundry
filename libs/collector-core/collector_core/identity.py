@@ -63,16 +63,18 @@ class IdentityClient:
         base_url: str,
         client,
         token: str | None = None,
-        crosswalk_version: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._client = client
         self._token = token
-        self._crosswalk_version = crosswalk_version
-        # Per-instance, in-memory only -- no TTL, no disk, no eviction.
-        # Keyed on (crosswalk_version, query) so a republished crosswalk
-        # invalidates cleanly instead of serving stale ids for a season.
-        self._cache: dict[tuple[str | None, ResolveQuery], str] = {}
+        # Per-instance, in-memory only -- no TTL, no disk, no eviction, and
+        # no version key. A `crosswalk_version` parameter existed here and was
+        # removed: `player-identity` exposes no version, so nothing could ever
+        # populate it and the key it guarded was inert. If cross-pass
+        # invalidation is ever genuinely needed, `GET /catalog`'s
+        # `last_capture_at` and the `player_identity_crosswalk` envelope's
+        # `captured_at` are both available without a new endpoint.
+        self._cache: dict[ResolveQuery, str] = {}
         # The most recent `resolve_many` call's per-chunk request failures --
         # `query -> reason`. See `resolve_many`'s docstring for why this
         # exists as an attribute rather than a second return value or a
@@ -88,11 +90,10 @@ class IdentityClient:
         """Map only the queries player-identity RESOLVED. Unresolved ones are
         absent from the result -- the caller counts them in coverage.missing.
 
-        Successful resolutions are cached per instance, keyed on the
-        crosswalk version supplied at construction. Unresolved queries are
-        never cached -- a miss may become a hit once the crosswalk is
-        republished mid-season, and caching the refusal would pin that gap
-        until the process restarts.
+        Successful resolutions are cached per instance, keyed on the query
+        alone. Unresolved queries are never cached -- a miss may become a hit
+        once the crosswalk is republished mid-season, and caching the refusal
+        would pin that gap until the process restarts.
 
         **A chunk player-identity could not be reached for is not a capture
         failure.** The design spec is explicit: "player-identity unreachable
@@ -138,7 +139,7 @@ class IdentityClient:
         resolved: dict[ResolveQuery, str] = {}
         pending: list[ResolveQuery] = []
         for query in queries:
-            cached = self._cache.get((self._crosswalk_version, query))
+            cached = self._cache.get(query)
             if cached is not None:
                 resolved[query] = cached
             else:
@@ -164,5 +165,5 @@ class IdentityClient:
                 if result.get("resolved") is True and result.get("player_id"):
                     player_id = result["player_id"]
                     resolved[query] = player_id
-                    self._cache[(self._crosswalk_version, query)] = player_id
+                    self._cache[query] = player_id
         return resolved
