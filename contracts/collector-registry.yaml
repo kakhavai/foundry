@@ -179,15 +179,14 @@ collectors:
     # collector's coverage.expected is defined against roster-scope's
     # watchlist and its EXPECTED_FLOOR is derived from roster-scope's config
     # (416 slots minus the 32 team defenses, which have no box score = 384).
-    # The runtime narrowing ships OFF: `ROSTER_SCOPE_URL` is empty in the
-    # values file because roster-scope and this collector currently mint
-    # player_ids from two different stub resolvers, so the id spaces do not
-    # intersect. See services/player-stats/player_stats/adapters/scope.py.
+    # The watchlist itself is read from the lake unconditionally — there is no
+    # env var that turns narrowing off. See
+    # services/player-stats/player_stats/adapters/scope.py.
     scope_aware: true
-    # roster-scope for the watchlist, player-identity for the GSIS ->
-    # canonical id crosswalk. Both are seams today (see scope_aware above);
-    # declared anyway because the phase doc names them and this is the
-    # merge-order gate that keeps this PR behind both of theirs.
+    # roster-scope for the watchlist (read from the lake, never over HTTP —
+    # decision 5 of the narrowing design), player-identity for the GSIS ->
+    # canonical id crosswalk. Declared because the phase doc names them and
+    # this is the merge-order gate that keeps this PR behind both of theirs.
     depends_on: [player-identity, roster-scope]
   - name: schedule-context
     path: /collectors/schedule-context

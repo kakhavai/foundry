@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 import pytest
 from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
-from collector_core.lake import lake_key
+from collector_core.lake import EventLoopGuardedLake, lake_key
 from collector_core.scope import SCOPE_COLLECTOR
 from fastapi.testclient import TestClient
 from opentelemetry import metrics as otel_metrics
@@ -71,7 +71,7 @@ def _stub_identity(monkeypatch):
 
 
 @pytest.fixture
-def client(_collector_token):
+def client(_collector_token, monkeypatch):
     with TestClient(app, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as c:
         # A fresh, scope-seeded lake for every test — the route tests drive
         # real captures through `POST /refresh`, and those now fail closed
@@ -80,8 +80,26 @@ def client(_collector_token):
         # watchlist that is nonetheless successfully fetched. A test that
         # needs its own lake (to inspect writes, or to simulate a read
         # failure) overrides `collector_spec.lake` afterward, same as before.
-        c.app.state.collector_spec.lake = SpyLake()
-        seed_scope(c.app.state.collector_spec.lake)
+        #
+        # Seeded BEFORE wrapping in `EventLoopGuardedLake`: `seed_scope`
+        # writes straight into `SpyLake.objects`, which is a plain
+        # synchronous dict write with no running loop involved yet, but the
+        # guard's job is to catch a *capture-path* call made directly on the
+        # loop thread — `build_collector_app` wraps every collector's real
+        # lake in this exact guard (`collector_core/app.py`), and this task
+        # added the first capture-path lake read besides the box-score
+        # upstream (`ScopeClient` inside `fetch_watchlist`). Leaving the test
+        # lake unwrapped would let a future direct `lake.list_keys(...)` call
+        # from inside the capture coroutine pass here while still breaking a
+        # real deployment. `monkeypatch.setattr` rather than a direct
+        # assignment, so the override reverts even though `app` is a
+        # session-wide singleton — matching `_reset_collector_singletons`
+        # below and the swaps in `test_routes.py`.
+        spy = SpyLake()
+        seed_scope(spy)
+        monkeypatch.setattr(
+            c.app.state.collector_spec, "lake", EventLoopGuardedLake(spy)
+        )
         yield c
 
 

@@ -163,6 +163,35 @@ async def test_a_roster_scope_outage_fails_closed_before_touching_the_upstream()
     assert "scope_unavailable" in {error["reason"] for error in envelope.errors}
 
 
+async def test_a_published_but_empty_scope_is_reported_as_scope_empty():
+    """`scope_unavailable` (roster-scope never published for this partition)
+    and `scope_empty` (it published, and named nobody) are two different
+    fixes, and `capture.py`'s `reason=exc.reason` is the whole reason they
+    stay distinguishable rather than collapsing to one literal. `ScopeClient`
+    sets `scope_empty` when `week`'s own envelope resolves zero members
+    (`collector_core/scope.py`) — with `WEEK == 1` the `week - 1` fallback
+    candidate is `0`, which is skipped outright, so this reason survives to
+    the raised exception rather than being overwritten by a fallback
+    attempt."""
+    lake = SpyLake()
+    envelope = scope_envelope([])
+    lake.objects[lake_key(envelope)] = envelope.to_dict()
+    with respx.mock:
+        route = respx.get(stats_url(SEASON)).mock(
+            return_value=httpx.Response(
+                200, text=feed_csv([feed_row(position="WR", targets=1)])
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(ScopeUnavailable):
+                await capture_player_stats(
+                    SEASON, WEEK, client=client, lake=lake, now=NOW
+                )
+    assert route.call_count == 0
+    envelope_written = lake.writes[0]
+    assert "scope_empty" in {error["reason"] for error in envelope_written.errors}
+
+
 async def test_a_lake_error_during_the_scope_fetch_still_fails_closed():
     """`ScopeUnavailable` is only what `ScopeClient` raises when the lake
     answered and had nothing usable. The lake can also fail outright — here,

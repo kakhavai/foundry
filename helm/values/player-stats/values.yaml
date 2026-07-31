@@ -71,8 +71,15 @@ extraEnv:
   # straight from the lake on every pass (see player_stats/adapters/scope.py),
   # never from roster-scope over HTTP, so a roster-scope outage costs this
   # collector's coverage freshness rather than the availability of /signals.
+  #
+  # PLAYER_IDENTITY_URL points at the real crosswalk, matching roster-scope's
+  # and usage-share's own values files. This collector's ids and roster-
+  # scope's must agree for the watchlist join to land anything: leaving this
+  # empty would mint stub ids here against roster-scope's real `player-
+  # identity`-issued ones, and every one of the ~384 watchlist entries would
+  # read as missing on every pass.
   - name: PLAYER_IDENTITY_URL
-    value: ""
+    value: "http://player-identity:8002"
   - name: CAPTURE_SEASON
     value: "2026"
   - name: CAPTURE_WEEK

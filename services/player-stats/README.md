@@ -117,14 +117,16 @@ coverage *freshness*, never `/signals`'s availability. It raises
 the whole pass closed on that: no scope means zero calls to the box-score
 feed and a `present: 0` envelope, never an unnarrowed capture.
 
-**`PLAYER_IDENTITY_URL` is empty in `helm/values/player-stats/values.yaml`.**
-That is this collector's own crosswalk seam (`adapters/identity.py`), separate
-from the watchlist above: while it is unset, `build_id_resolver` falls back to
-a deterministic stub that hashes the upstream GSIS id. Both `roster-scope` and
-this collector now resolve real ids through `player-identity` when pointed at
-it, so the two collectors' canonical ids agree once both are configured — the
-stub-vs-stub mismatch that used to keep the watchlist unreliable no longer
-applies.
+**`PLAYER_IDENTITY_URL` points at the real crosswalk in
+`helm/values/player-stats/values.yaml`, matching `roster-scope` and
+`usage-share`.** That is this collector's own crosswalk seam
+(`adapters/identity.py`), separate from the watchlist above:
+`build_id_resolver` uses it to resolve real ids through `player-identity`
+rather than falling back to the deterministic GSIS-hash stub. It has to be
+set for the watchlist join to land anything — `roster-scope` mints its
+`player_id`s from the same `player-identity` deployment, so leaving this
+empty would join this collector's stub ids against roster-scope's real ones
+and report every one of the ~384 watchlist entries as missing on every pass.
 
 ## Metrics beyond the fleet-wide set
 

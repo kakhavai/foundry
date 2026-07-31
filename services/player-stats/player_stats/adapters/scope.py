@@ -23,6 +23,7 @@ reports a truncated upstream as perfect — `Coverage.ratio` reads `1.0` when
 regardless, independent of whatever this returns.
 """
 
+from collector_core.lake import LakeWriter
 from collector_core.scope import ScopeClient
 
 # The scope list this collector narrows to. Membership only — box scores are
@@ -37,7 +38,7 @@ SCOPE_SIGNAL_TYPE = "scope_membership_weekly"
 TEAM_DEFENSE_PREFIX = "fdy-dst-"
 
 
-async def fetch_watchlist(lake, season: int, week: int) -> frozenset[str]:
+async def fetch_watchlist(lake: LakeWriter, season: int, week: int) -> frozenset[str]:
     """The canonical `player_id`s this week's capture is owed a row for.
 
     Raises `ScopeUnavailable` when there is no usable scope; the caller must
