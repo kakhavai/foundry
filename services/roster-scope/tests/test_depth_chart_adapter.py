@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 import respx
+from collector_core.conditional import ETAGS, UpstreamUnchanged
 
 from roster_scope.adapters.depth_chart import (
     DepthChartSchemaError,
@@ -384,6 +385,59 @@ async def test_fetch_refuses_an_unbounded_feed(feed_url, monkeypatch):
     async with httpx.AsyncClient() as client:
         with pytest.raises(DepthChartTooLarge):
             await fetch_depth_charts(2026, 1, client, now=FETCHED_AT)
+
+
+@respx.mock
+async def test_a_failed_fetch_does_not_pin_the_etag_of_what_it_did_not_read(
+    feed_url, monkeypatch
+):
+    """A failure mid-body must leave the next pass unconditional.
+
+    This adapter drives `conditional_stream` by hand rather than through
+    `stream_csv_dicts`, so it owns the `commit()` placement itself — and this
+    is the test that says so. Committing on the response headers would make one
+    size-ceiling breach permanent: every later pass 304s, `mark_unchanged`
+    advances `last_capture_at`, and the collector looks healthy while holding
+    nothing.
+    """
+    monkeypatch.setattr("roster_scope.adapters.depth_chart.MAX_DEPTH_CHART_CHARS", 200)
+    body = depth_csv([depth_row("KC", "QB", n, f"P{n}") for n in range(1, 200)])
+    respx.get(feed_url).mock(
+        return_value=httpx.Response(200, text=body, headers={"ETag": 'W/"v1"'})
+    )
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(DepthChartTooLarge):
+            await fetch_depth_charts(2026, 1, client, now=FETCHED_AT)
+
+    assert ETAGS.get(feed_url) is None
+
+
+@respx.mock
+async def test_a_complete_fetch_commits_the_etag_and_the_next_pass_sends_it(feed_url):
+    """The other half: the saving is only real if a good read does commit."""
+    seen: list[dict] = []
+
+    def handler(request):
+        seen.append(dict(request.headers))
+        if "if-none-match" in request.headers:
+            return httpx.Response(304)
+        return httpx.Response(
+            200,
+            text=depth_csv([depth_row("KC", "QB", 1, "Patrick Mahomes")]),
+            headers={"ETag": 'W/"v1"'},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        charts = await fetch_depth_charts(2026, 1, client, now=FETCHED_AT)
+        assert charts["KC"].rows[0].name_raw == "Patrick Mahomes"
+        assert ETAGS.get(feed_url) == 'W/"v1"'
+
+        with pytest.raises(UpstreamUnchanged) as caught:
+            await fetch_depth_charts(2026, 1, client, now=FETCHED_AT)
+
+    assert len(seen) == 2
+    assert seen[1]["if-none-match"] == 'W/"v1"'
+    assert caught.value.source_ref == 'W/"v1"'
 
 
 @respx.mock

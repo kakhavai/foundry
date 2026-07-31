@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 import respx
+from collector_core.conditional import ETAGS
 from collector_core.streaming import UpstreamSchemaError
 
 from depth_chart.adapters.upstream import (
@@ -240,6 +241,47 @@ async def test_a_deadline_truncates_the_stream_and_says_so():
     )
     assert fetched.truncated is True
     assert fetched.histories == {}
+
+
+@respx.mock
+async def test_a_truncated_pass_does_not_pin_the_etag_of_what_it_did_not_read():
+    """The end-to-end shape of the sticky-304 failure, at the real call site.
+
+    This adapter runs on a `volatile` cadence against a 37 MB asset, so
+    truncation on the deadline is a routine outcome, not an exotic one. If the
+    ETag were committed on the response headers, one truncated pass would make
+    every later pass a `304`: `mark_unchanged` advances `last_capture_at`,
+    staleness resets, the failure counter stops moving, and the collector
+    reports itself healthy on a partial chart until the upstream republishes.
+    So the next pass must go out unconditional.
+    """
+    deadline = datetime.now(tz=UTC) - timedelta(seconds=1)
+    seen: list[dict] = []
+
+    def handler(request):
+        seen.append(dict(request.headers))
+        return httpx.Response(
+            200,
+            text=depth_csv([depth_row("KC", "QB", 1, "A Passer")]),
+            headers={"ETag": 'W/"v1"'},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        truncated = await fetch_depth_charts(
+            2026, 1, client=client, now=NOW, deadline=deadline
+        )
+        assert truncated.truncated is True
+        assert ETAGS.get(FEED) is None
+
+        complete = await fetch_depth_charts(2026, 1, client=client, now=NOW)
+        assert complete.truncated is False
+
+    assert len(seen) == 2
+    assert "if-none-match" not in seen[1], (
+        "the pass after a truncated one must re-download unconditionally"
+    )
+    # And a pass that DID read the whole body commits, so the saving is real.
+    assert ETAGS.get(FEED) == 'W/"v1"'
 
 
 @respx.mock
