@@ -106,7 +106,8 @@ recordings landing on a series nobody queries. Build it once at module level in
 
 `collector_core.metrics.CollectorMetrics` owns the fleet-wide series
 (`collector_capture_requests_total`, `collector_capture_failures_total`,
-`collector_coverage_ratio`, `collector_staleness_seconds`,
+`collector_upstream_unchanged_total`, `collector_coverage_ratio`,
+`collector_staleness_seconds`,
 `collector_auth_failures_total`). Series that answer *"is this collector wrong
 in the way only it can be wrong"* go on a subclass in your own `metrics.py` —
 see `roster-scope`'s `scope_missed_producers` and `player-identity`'s
@@ -478,13 +479,14 @@ nobody controls.
 ## Conditional GET: skip a re-fetch the upstream itself says is unnecessary
 
 **Opt-in, one argument wide, for an upstream that changes slower than your
-poll interval.** `depth-chart`'s season CSV moves once or twice a day; a
-`volatile`-cadence collector polling it every 15 minutes spends almost every
-one of those polls re-downloading bytes it already has.
+poll interval.** `depth-chart`'s season CSV is republished far less often than
+a `volatile`-cadence collector polls it — how much less is not measured here,
+so no number is claimed — and a poll landing between two republications spends
+its whole budget re-downloading bytes it already has.
 [`collector_core.conditional`](../libs/collector-core/collector_core/conditional.py)
-gives every collector `ETagStore`, the shared `ETAGS` instance, and
-`conditional_headers` — and there are two ways to use them, depending on how
-your adapter reads the upstream.
+owns the protocol: `ETagStore`, the shared `ETAGS` instance, and
+`conditional_stream`, which is the only supported way to speak it. There are
+two ways to *drive* it, depending on how your adapter reads the upstream.
 
 **Route 1 — your adapter already calls `stream_csv_dicts`.** Pass
 `etag_key=<the URL>` and add `except UpstreamUnchanged: raise` **above** your
@@ -508,25 +510,38 @@ except Exception as exc:
 
 **Route 2 — your adapter streams the response itself**, the way
 `roster-scope` folds the same feed into per-team charts without going through
-`stream_csv_dicts`. Reuse the primitives directly and mirror `stream_csv_dicts`'s
-order of operations exactly: build `conditional_headers` before the request,
-check `response.status_code == 304` **before** `raise_for_status()` (httpx
-only treats 4xx/5xx as errors, so a 304 falls through `raise_for_status()`
-undetected), raise `UpstreamUnchanged` on that branch, and only then call
-`ETAGS.set()` on the success path:
-
-```python
-headers = conditional_headers(url, ETAGS)
-async with client.stream("GET", url, headers=headers) as response:
-    if response.status_code == 304:
-        raise UpstreamUnchanged(url, source_ref=ETAGS.get(url))
-    response.raise_for_status()
-    ETAGS.set(url, response.headers.get("etag"))
-    ...
-```
+`stream_csv_dicts`. Use
+[`conditional_stream`](../libs/collector-core/collector_core/conditional.py)
+in place of `client.stream`, read `stream.response` however you like, and call
+`stream.commit()` as the **last** statement — after the trailing row, after
+every schema check, after anything that can still fail. That is the whole
+difference from `client.stream`; no snippet is reproduced here on purpose.
 
 `roster-scope` (`roster_scope/adapters/depth_chart.py`) is this route, because
 its adapter consumes neither `stream_csv_dicts` nor `fail_capture` directly.
+
+**Do not hand-roll the protocol.** It looks like four lines — headers, a 304
+branch, `raise_for_status`, `ETAGS.set` — and two of them are wrong in ways no
+test in this repo would catch if you wrote them again in a service tree:
+
+- **The `304` check is required, not defensive.** `raise_for_status()` gates on
+  `is_success`, which is 2xx only, so a `304` **raises `HTTPStatusError`** like
+  any other non-2xx. Drop the check and every unchanged upstream becomes a
+  capture failure that writes `present: 0` over healthy data. (An older
+  revision of this page said the opposite — that httpx only errors on 4xx/5xx
+  and the check was belt-and-braces. It was wrong; `test_httpx_raise_for_
+  status_rejects_a_304` in collector-core pins the real behaviour.)
+- **The ETag is committed *after* the body is read, never on the response
+  headers.** An ETag claims you hold the whole document. Commit one for a body
+  that died at 30 MB of 37 and every later pass 304s: `mark_unchanged` advances
+  `last_capture_at`, staleness resets to ~0, the failure counter stops moving,
+  and the collector reports itself healthy on a truncated document until the
+  upstream republishes — hours to days. A loud, self-retrying failure becomes
+  a silent, sticky one.
+
+`conditional_stream` makes the second one unrepresentable by never committing
+for you, and `stream_csv_dicts` commits from its generator tail, which a
+`break` or an exception cannot reach.
 
 **Both halves are required either way.** Without the `etag_key`/`ETagStore`
 half, nothing is saved — every poll still round-trips the full body. Without
@@ -546,6 +561,27 @@ different things, not drift.
 Do not opt in a collector whose upstream is generated per request or otherwise
 lacks a stable `ETag`/`Last-Modified` — a value that changes on every poll
 costs one extra round trip on the conditional request and saves nothing.
+
+### Caveat: `POST /refresh` with a different scope can 304 into a no-op
+
+`POST /refresh` accepts a `season`/`week` override, so an operator can
+backfill a week outside the cadence. The ETag store knows nothing about that:
+it is keyed by **URL**, and neither collector's URL varies by week — the feeds
+are season-scoped current snapshots. So `POST /refresh {"week": 5}` against an
+already-fetched season sends `If-None-Match`, gets a `304`, and takes the
+healthy-pass branch: no envelope is written for week 5, `last_capture_at`
+advances, and the route already returned `202`. **The operator gets every
+signal of success and no data**, with nothing in the metrics to distinguish it
+from an ordinary unchanged poll. Confirm a backfill by reading `/signals` for
+the week you asked for, not by the `202`.
+
+This is a real gap, stated rather than papered over. Plumbing an
+ignore-the-cache flag from the refresh body through `capture` into the adapter
+is the structural fix and is deliberately **not** done here — it touches every
+adapter signature. Until then, the operator workaround is a pod restart: the
+store is in-memory, so a restart costs exactly one full download per key and
+makes the next capture unconditional. A collector whose upstream URL *does*
+vary by week is unaffected, because the week is already part of the key.
 
 ## The lake refuses to run on the event loop
 
