@@ -262,6 +262,16 @@ async def capture_injury_report(
         ),
     }
     for signal_type, envelope in envelopes.items():
-        await awrite(lake, envelope)
+        try:
+            await awrite(lake, envelope)
+        except Exception as exc:  # noqa: BLE001 — the lake is unreachable
+            # Classified before it propagates. Without this the counter stays
+            # flat through an object-store outage while `/signals` quietly
+            # keeps serving the last good capture — the pass DID fail, and
+            # `collector_capture_failures_total` is what says so. Observed
+            # against a running container whose MinIO endpoint did not
+            # resolve: every other signal looked healthy.
+            metrics.capture_failure(exc)
+            raise
         metrics.coverage(signal_type, envelope.coverage.ratio)
     return envelopes

@@ -163,6 +163,18 @@ async def test_a_failed_capture_writes_a_present_zero_envelope(
         assert envelope.errors[0]["reason"] == expected_reason
 
 
+async def test_an_unreachable_lake_propagates_rather_than_reporting_success():
+    """Found against a running container whose MinIO endpoint did not resolve:
+    the pass raised, `/signals` kept serving the last good capture (correct),
+    and every metric looked healthy (not correct). The write failure has to
+    reach `collector_capture_failures_total` and the caller, or an object-store
+    outage is indistinguishable from a quiet cadence."""
+    lake = SpyLake(fail_write=True)
+    with pytest.raises(RuntimeError, match="lake unreachable"):
+        await capture(lake)
+    assert lake.writes == []
+
+
 async def test_a_capture_already_past_its_deadline_fails_rather_than_empties():
     """Out of budget before the injury feed is reached. Reported as a failure —
     which re-raises and leaves the last good capture on `/signals` — rather
