@@ -140,6 +140,9 @@ class ScopeClient:
         """
         members: set[str] = set()
         captured_at: datetime | None = None
+        # Sequential, not asyncio.gather: fail-closed means the first
+        # unavailable signal type should raise immediately rather than
+        # waiting on the rest of the fleet's lake reads.
         for signal_type in signal_types:
             scope = await self.fetch(signal_type, season, week)
             members |= scope.members

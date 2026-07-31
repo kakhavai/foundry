@@ -297,7 +297,9 @@ class SignalTypeAwareFakeLake:
     `fetch_union` calls `fetch` once per signal type against the *same*
     partition, and both existing fakes return one fixed key list regardless
     of which signal type is asked for -- neither can exercise a real union
-    across two distinct lists living in the same season/week.
+    across two distinct lists living in the same season/week. Like
+    `WeekAwareFakeLake`, `season` is accepted but ignored -- these tests only
+    ever exercise one season.
     """
 
     def __init__(self, keys_by_partition=None, objects=None):
@@ -391,3 +393,12 @@ async def test_fetch_union_reports_the_oldest_contributing_capture(lake):
     )
 
     assert scope.captured_at.isoformat().startswith("2026-09-03")
+
+
+@pytest.mark.asyncio
+async def test_fetch_union_with_no_signal_types_fails_closed(lake):
+    """An empty union has no contributing envelope to be stale or fresh --
+    returning an empty `Scope` here would be indistinguishable from a
+    caller-error fail-open, not a legitimately narrowed-to-nothing scope."""
+    with pytest.raises(ScopeUnavailable):
+        await ScopeClient(lake).fetch_union((), 2026, 1)
