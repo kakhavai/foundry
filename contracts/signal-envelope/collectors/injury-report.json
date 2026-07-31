@@ -5,20 +5,148 @@
   "signal_types": {
     "player_injury_status": {
       "type": "object",
-      "required": ["key", "observed_at", "value"],
+      "required": [
+        "player_id",
+        "team",
+        "side_of_ball",
+        "game_designation",
+        "designation_history",
+        "practice_participation",
+        "body_part",
+        "body_part_raw",
+        "is_non_injury",
+        "absence_reason",
+        "roster_status",
+        "report_published_at",
+        "is_final_report",
+        "game_id"
+      ],
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "observed_at": { "type": "string", "format": "date-time" },
-        "value": { "type": "number" }
+        "player_id": { "type": "string", "pattern": "^fdy-" },
+        "team": { "type": "string", "minLength": 2 },
+        "side_of_ball": { "enum": ["offense", "defense", "special_teams"] },
+        "game_designation": {
+          "comment": "null is a FOURTH state, not a missing value: no designation has been published yet. `none` means the club published and designated nobody. Collapsing the two is the single failure this collector exists to prevent.",
+          "oneOf": [
+            { "type": "null" },
+            { "enum": ["out", "doubtful", "questionable", "none"] }
+          ]
+        },
+        "designation_history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["published_at", "designation"],
+            "properties": {
+              "published_at": { "type": "string", "format": "date-time" },
+              "designation": {
+                "enum": ["out", "doubtful", "questionable", "none"]
+              }
+            }
+          }
+        },
+        "practice_participation": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "practice_date",
+              "day_label",
+              "participation",
+              "is_estimated"
+            ],
+            "properties": {
+              "practice_date": { "type": "string", "format": "date" },
+              "day_label": { "enum": ["wednesday", "thursday", "friday"] },
+              "participation": { "enum": ["dnp", "limited", "full"] },
+              "is_estimated": { "type": "boolean" }
+            }
+          }
+        },
+        "body_part": {
+          "comment": "Degrades to `unspecified` rather than guessing; body_part_raw keeps the laterality and specificity normalization loses.",
+          "enum": [
+            "abdomen",
+            "achilles",
+            "ankle",
+            "back",
+            "biceps",
+            "calf",
+            "chest",
+            "concussion",
+            "elbow",
+            "finger",
+            "foot",
+            "forearm",
+            "groin",
+            "hamstring",
+            "hand",
+            "hip",
+            "illness",
+            "knee",
+            "neck",
+            "pectoral",
+            "quadriceps",
+            "ribs",
+            "shoulder",
+            "thigh",
+            "thumb",
+            "toe",
+            "triceps",
+            "wrist",
+            "unspecified"
+          ]
+        },
+        "body_part_raw": { "type": "string" },
+        "is_non_injury": { "type": "boolean" },
+        "absence_reason": {
+          "comment": "`unspecified` rather than a default of `injury`: a scheduled rest day coded as an injury is how a healthy starter acquires a durability problem it does not have.",
+          "enum": [
+            "injury",
+            "rest",
+            "illness",
+            "personal",
+            "suspension",
+            "unspecified"
+          ]
+        },
+        "roster_status": {
+          "enum": [
+            "active",
+            "ir",
+            "ir_designated_return",
+            "pup",
+            "nfi",
+            "suspended"
+          ]
+        },
+        "report_published_at": { "type": "string", "format": "date-time" },
+        "is_final_report": { "type": "boolean" },
+        "game_id": { "type": "string", "minLength": 1 }
       }
     },
     "team_injury_report": {
+      "comment": "The record that a club filed at all. A club that filed nothing has NO row here and appears in coverage.missing with reason report_not_published — absence of a row is the missing report, and `filing_status: empty` is a club that filed and listed nobody.",
       "type": "object",
-      "required": ["key", "observed_at", "value"],
+      "required": [
+        "team",
+        "practice_day",
+        "game_id",
+        "report_published_at",
+        "is_final_report",
+        "is_estimated",
+        "filing_status",
+        "player_count"
+      ],
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "observed_at": { "type": "string", "format": "date-time" },
-        "value": { "type": "number" }
+        "team": { "type": "string", "minLength": 2 },
+        "practice_day": { "enum": ["wednesday", "thursday", "friday"] },
+        "game_id": { "type": "string", "minLength": 1 },
+        "report_published_at": { "type": "string", "format": "date-time" },
+        "is_final_report": { "type": "boolean" },
+        "is_estimated": { "type": "boolean" },
+        "filing_status": { "enum": ["published", "empty"] },
+        "player_count": { "type": "integer", "minimum": 0 }
       }
     }
   }

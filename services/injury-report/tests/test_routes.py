@@ -96,10 +96,35 @@ def test_a_row_filter_narrows_the_signals(client):
     client.post("/refresh", json={})
     wait_for_signals(client, count=len(SIGNAL_TYPES))
 
-    body = client.get("/signals?key=placeholder-a").json()
+    body = client.get("/signals?team=KC").json()
     rows = [row for envelope in body["envelopes"] for row in envelope["signals"]]
     assert rows, "the filter matched nothing — is ROW_FILTERS wired up?"
-    assert {row["key"] for row in rows} == {"placeholder-a"}
+    assert {row["team"] for row in rows} == {"KC"}
+
+
+def test_the_unfiltered_response_carries_every_club(client):
+    """The counterweight to the test above, and the reason it is not enough:
+    a `signal_matches` that returned `False` for everything would also make the
+    filtered set look narrow. It also pins the collector's defining property —
+    `injury-report` ignores the roster scope and carries every club's report,
+    because an opposing defender's absence moves a projection too."""
+    client.post("/refresh", json={})
+    body = wait_for_signals(client, count=len(SIGNAL_TYPES))
+    rows = [row for envelope in body["envelopes"] for row in envelope["signals"]]
+    assert len({row["team"] for row in rows}) > 1, rows[:3]
+
+
+def test_a_practice_day_filter_narrows_the_team_reports(client):
+    """`practice_day` exists on the club-level rows only, and the router hands
+    the same params to both envelopes. A filter this collector declares but
+    does not implement would return everything and look like it worked."""
+    client.post("/refresh", json={})
+    wait_for_signals(client, count=len(SIGNAL_TYPES))
+
+    body = client.get("/signals?signal_type=team_injury_report&practice_day=friday")
+    rows = [row for envelope in body.json()["envelopes"] for row in envelope["signals"]]
+    assert rows, "the filter matched nothing — is ROW_FILTERS wired up?"
+    assert {row["practice_day"] for row in rows} == {"friday"}
 
 
 def test_a_data_route_without_a_token_is_401(client):

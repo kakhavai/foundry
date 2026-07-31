@@ -22,7 +22,56 @@ TEST_TOKEN = "test-collector-token"
 # One frozen instant the whole suite describes. `Envelope` rejects a naive
 # datetime rather than assuming UTC — guessing puts a wrong instant into an
 # append-only lake nobody rewrites.
+#
+# A **Tuesday**, which for this collector means all three of the week's
+# practice days have elapsed: the report week runs Wednesday to Tuesday, so a
+# capture here expects a full Wed/Thu/Fri filing from every scheduled club. See
+# `report.practice_days_elapsed`.
 NOW = datetime(2026, 9, 15, 12, 0, tzinfo=UTC)
+
+# Column-complete wire defaults. Tests override only the cells they are about,
+# so a schema change shows up as one edit here rather than thirty.
+WIRE_DEFAULTS: dict[str, str] = {
+    "season": "2026",
+    "week": "1",
+    "team": "KC",
+    "practice_day": "wednesday",
+    "report_published_at": "2026-09-16T21:00:00Z",
+    "is_final_report": "false",
+    "is_estimated": "false",
+    "player_external_id": "kc-01",
+    "player_name": "KC Player",
+    "position": "WR",
+    "practice_status": "limited",
+    "report_status": "",
+    "injury_primary": "knee",
+    "roster_status": "active",
+    "absence_reason": "injury",
+}
+
+
+def wire(**overrides: str) -> dict[str, str]:
+    """One upstream row, defaults filled in."""
+    return {**WIRE_DEFAULTS, **overrides}
+
+
+def empty_filing(**overrides: str) -> dict[str, str]:
+    """A club filing a report that lists nobody — a real, complete observation.
+
+    Distinct from a club that filed nothing, which produces no row at all. The
+    whole collector turns on the two staying apart.
+    """
+    return wire(
+        player_external_id="",
+        player_name="",
+        position="",
+        practice_status="",
+        report_status="",
+        injury_primary="",
+        roster_status="",
+        absence_reason="",
+        **overrides,
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)

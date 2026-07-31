@@ -109,7 +109,18 @@ collectors:
     cadence_class: volatile
     envelope_version: "1"
     signal_types: [player_injury_status, team_injury_report]
-    # TYPE-CHECKED ONLY — nothing verifies this is correct. Set it true if this
-    # collector narrows to roster-scope's membership list before it fetches.
+    # FALSE ON PURPOSE, and it is not the default falling through. Every other
+    # signal collector narrows to roster-scope's membership list before it
+    # fetches; this one must not. An opposing cornerback ruled out moves a
+    # receiver's projection as much as the receiver's own hamstring does, and
+    # defenders never appear on an offence-oriented watchlist at all — so
+    # narrowing here would silently discard the half of the signal that is
+    # hardest to get anywhere else. The phase doc states it outright in this
+    # collector's `Scope-aware` line. TYPE-CHECKED ONLY: nothing verifies the
+    # value, which is why the reason is written down rather than inferred.
     scope_aware: false
+    # Every emitted row carries a canonical player_id, and player-identity is
+    # the collector that decides what one is. The seam is
+    # `injury_report/adapters/identity.py`; PLAYER_IDENTITY_URL ships empty and
+    # ids are minted deterministically until it does not.
     depends_on: [player-identity]
