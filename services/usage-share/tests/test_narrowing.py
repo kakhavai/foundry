@@ -26,10 +26,11 @@ import json
 import httpx
 import pytest
 import respx
+from collector_core.coverage import MAX_ERRORS
 from collector_core.identity import BATCH_LIMIT, IdentityClient
 from collector_core.scope import ScopeUnavailable
 
-from usage_share.adapters.scope import IDENTITY_UNAVAILABLE
+from usage_share.adapters.scope import IDENTITY_UNAVAILABLE, IDENTITY_UPSTREAM_ERROR
 from usage_share.capture import EXPECTED_FLOOR, capture_usage_share
 
 from .conftest import (
@@ -387,3 +388,156 @@ async def test_the_published_id_is_the_canonical_one(lake, upstream):
     for row in rows:
         assert row["player_id_source"] == "player_identity"
         assert row["player_id"].startswith("fdy-")
+
+
+async def test_a_raw_upstream_id_is_never_adopted_for_a_refused_row(lake):
+    """ "Never fall back to the upstream id", isolated from the scope filter.
+
+    The whole suite above passed with `resolved.get(query)` mutated to
+    `resolved.get(query, row.upstream_player_id)` — adopting an id
+    `player-identity` explicitly refused — because the very next clause
+    (`player_id in scope.members`) filtered the raw GSIS id out anyway: a raw
+    key cannot collide with a canonical `fdy-` member. Two independent
+    mechanisms, one test between them, and the protection was **positional**.
+    A fourth collector resolving through `IdentityClient` *without* narrowing
+    inherits the pattern with the guard silently gone.
+
+    So this scope deliberately contains the raw upstream id alongside the
+    canonical ones. The membership check can no longer do the dropping, which
+    leaves `resolved.get(query)`'s absent default as the only thing standing
+    between a refusal and a published row.
+    """
+    body = to_csv(SAMPLE_RECORDS)
+    refused = "00-KC-WR1"
+    # The raw GSIS key, in scope. A real `roster-scope` never publishes one —
+    # its members are canonical — which is exactly why nothing else in this
+    # suite can exercise the drop on its own.
+    scoped = {*scope_for(body), refused}
+
+    with respx.mock(assert_all_called=False) as router:
+        router.get(UPSTREAM_FOR_SEASON).mock(
+            return_value=httpx.Response(200, text=body)
+        )
+        mock_identity(router, unresolvable={refused})
+        seed_scope(lake, scoped)
+        envelopes = await _capture(lake)
+
+    published = {row["player_id"] for row in envelopes[SIGNAL_TYPE].signals}
+    assert refused not in published, (
+        "a row player-identity REFUSED was published under the upstream's own "
+        "GSIS id — `resolved.get(query, row.upstream_player_id)` is the "
+        "mutation this test exists for"
+    )
+    assert canonical_id(refused) not in published, "a refused candidate was adopted"
+    assert len(published) == SAMPLE_PLAYER_ROWS - 1
+    assert canonical_id("00-KC-WR2") in published, "the rest of the week was lost"
+
+
+# --- a player-identity OUTAGE is not an ordinary miss ------------------------
+#
+# `IdentityClient.resolve_many` answers a chunk it could not reach by returning
+# a PARTIAL dict and recording the reason on `IdentityClient.failures` — data,
+# not an exception, so one dead chunk cannot discard the chunks that resolved.
+# A caller reading only the dict therefore cannot tell a 401 or a connection
+# refusal from `player-identity` doing its job and refusing a row.
+
+
+def _unreachable_identity(router):
+    """`player-identity` refusing connections, the way a dead pod does."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    return router.post(RESOLVE_BATCH_URL).mock(side_effect=handler)
+
+
+async def test_an_identity_outage_is_named_not_merely_a_low_ratio(lake):
+    """The failure mode this branch introduced: before it, `usage-share` never
+    called `player-identity` at all.
+
+    An outage drops every player row, so the envelope reports a handful of
+    denominator keys and a shortfall — and `below_expected_floor` alone is
+    indistinguishable from "the scope named two players" or "the feed was
+    truncated". Three incidents, three fixes, one symptom. `player-stats` and
+    `roster-scope` both already keep "identity said no" and "the request to
+    identity failed" apart; this is the same distinction.
+    """
+    body = to_csv(SAMPLE_RECORDS)
+
+    with respx.mock(assert_all_called=False) as router:
+        router.get(UPSTREAM_FOR_SEASON).mock(
+            return_value=httpx.Response(200, text=body)
+        )
+        _unreachable_identity(router)
+        seed_scope(lake, scope_for(body))
+        envelopes = await _capture(lake)
+
+    envelope = envelopes[SIGNAL_TYPE]
+    assert envelope.signals == [], "a row resolved through an unreachable seam"
+
+    errors = {error["reason"]: error["detail"] for error in envelope.errors}
+    assert IDENTITY_UPSTREAM_ERROR in errors, errors
+    assert set(errors) != {"below_expected_floor"}, (
+        "an outage reported nothing but a shortfall — the same envelope a "
+        "two-member scope or a truncated feed produces"
+    )
+    detail = errors[IDENTITY_UPSTREAM_ERROR]
+    assert f"{SAMPLE_PLAYER_ROWS} row(s) unresolved" in detail, detail
+    assert "identity_upstream_error" in detail, detail
+
+
+async def test_the_outage_entry_is_summarised_not_one_per_row(lake):
+    """Summarised, so it cannot push every other reason past the 50-entry cap.
+
+    A ~1,700-row feed against a dead `player-identity` would otherwise file
+    ~1,700 entries — `player-stats` rolls up its own `no_box_row` shortfall for
+    exactly this reason. 1,200 rows here, over three batches, so the roll-up
+    also has to survive being accumulated across `resolve_many` calls (which
+    reset `IdentityClient.failures` on every one of them).
+    """
+    body = full_league_csv(teams=30, players_per_team=40)
+
+    with respx.mock(assert_all_called=False) as router:
+        router.get(UPSTREAM_FOR_SEASON).mock(
+            return_value=httpx.Response(200, text=body)
+        )
+        _unreachable_identity(router)
+        seed_scope(lake, scope_for(body))
+        envelopes = await _capture(lake)
+
+    envelope = envelopes[SIGNAL_TYPE]
+    reasons = [error["reason"] for error in envelope.errors]
+    assert reasons.count(IDENTITY_UPSTREAM_ERROR) == 1, reasons
+    assert len(reasons) < MAX_ERRORS, (
+        f"{len(reasons)} entries — a per-row entry would have filled the cap"
+    )
+    assert "errors_truncated" not in reasons, reasons
+
+    detail = next(
+        error["detail"]
+        for error in envelope.errors
+        if error["reason"] == IDENTITY_UPSTREAM_ERROR
+    )
+    # Every row across all three batches, not just the last one: `resolve_many`
+    # resets `failures` per call, so anything less means the accumulation was
+    # lost between batches.
+    assert detail.startswith("1200 row(s) unresolved"), detail
+
+
+async def test_a_genuine_refusal_is_not_reported_as_an_outage(lake):
+    """The control. `resolved: false` is `player-identity` working — filing the
+    miss server-side against its own name-resolution queue — and reporting it
+    as an upstream error would train an operator to ignore the entry that
+    actually means the seam is down."""
+    body = to_csv(SAMPLE_RECORDS)
+
+    with respx.mock(assert_all_called=False) as router:
+        router.get(UPSTREAM_FOR_SEASON).mock(
+            return_value=httpx.Response(200, text=body)
+        )
+        mock_identity(router, unresolvable={"00-KC-WR1"})
+        seed_scope(lake, scope_for(body))
+        envelopes = await _capture(lake)
+
+    reasons = {error["reason"] for error in envelopes[SIGNAL_TYPE].errors}
+    assert IDENTITY_UPSTREAM_ERROR not in reasons, reasons

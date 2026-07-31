@@ -88,6 +88,19 @@ or `malformed`/`unknown` (the lake read itself failed). There is deliberately
 **no unnarrowed fallback** — one would blow the vendor's request budget
 precisely during an incident.
 
+`identity_unavailable` is the *config* case only, and that distinction matters
+because the other one does not fail the pass at all. If `PLAYER_IDENTITY_URL`
+**is** set but `player-identity` cannot be reached — a 401, a connection
+refusal, a timeout — `IdentityClient.resolve_many` returns a partial result and
+records the reason out of band rather than raising, so one dead chunk cannot
+discard the chunks that resolved. The capture therefore runs to completion with
+those rows dropped, and files one summarised `identity_upstream_error` entry
+naming how many rows were lost and to what. Without it an outage would report
+nothing but `below_expected_floor` — the same envelope a two-member scope or a
+truncated feed produces, and three incidents with three different fixes should
+not share one symptom. One entry per pass, never one per row, so a total outage
+cannot push every other reason past the 50-entry cap.
+
 `PLAYER_IDENTITY_URL` is therefore set in `helm/values/usage-share/values.yaml`
 rather than shipping empty as it does for `player-stats` and `injury-report`.
 An empty value here is not "run unnarrowed", it is "resolve nothing, narrow to

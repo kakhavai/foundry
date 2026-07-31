@@ -47,6 +47,7 @@ KB at ~1,700 rows, nowhere near the 256Mi limit, but not "one batch" either.
 
 import os
 from collections.abc import AsyncIterator, Iterable
+from dataclasses import dataclass, field
 
 import httpx
 from collector_core.identity import BATCH_LIMIT, IdentityClient, ResolveQuery
@@ -73,6 +74,60 @@ PLAYER_IDENTITY_URL_ENV = "PLAYER_IDENTITY_URL"
 # can tell "roster-scope published nothing" from "this pod was never pointed at
 # player-identity". They are different fixes.
 IDENTITY_UNAVAILABLE = "identity_unavailable"
+
+# The `errors` reason for the OTHER identity failure: `player-identity` was
+# configured and reached for, and the request itself failed — a 401, a
+# connection refusal, a timeout. Distinct from `IDENTITY_UNAVAILABLE`, which is
+# only ever the *config* case, and distinct again from a genuine refusal
+# (`resolved: false`), which is `player-identity` doing its job. The name
+# matches `roster_scope.adapters.identity` and `player_stats.adapters.identity`,
+# both of which already separate "identity said no" from "the request to
+# identity failed" under exactly this reason.
+IDENTITY_UPSTREAM_ERROR = "identity_upstream_error"
+
+# `IdentityClient.failures` carries the whole exception string per query, and a
+# botocore- or httpx-style message can run to hundreds of characters. One
+# summary entry lands in an append-only lake object, so it is bounded.
+MAX_FAILURE_DETAIL_CHARS = 200
+
+
+@dataclass
+class IdentityFailures:
+    """Rows this pass lost to a failed `player-identity` REQUEST, not a refusal.
+
+    `IdentityClient.resolve_many` returns a **partial** dict when a chunk's
+    request fails: the affected queries are simply absent from the result, and
+    the reason is recorded on `IdentityClient.failures` instead — see that
+    method's docstring for why it is data rather than an exception. A caller
+    that reads only the dict therefore treats a `player-identity` outage
+    exactly like an ordinary miss, and the pass publishes a short envelope
+    whose `errors` array says nothing but `below_expected_floor` — which is
+    indistinguishable from "the scope named two players" or "the feed was
+    truncated". Three different incidents, one symptom.
+
+    Accumulated across every batch of one pass because `resolve_many` resets
+    `failures` on each call, so the attribute alone only ever describes the
+    last chunk.
+
+    **Summarised, never per row.** A total outage against a ~1,700-row feed
+    would otherwise file ~1,700 entries and push every other error past
+    `CoverageAccumulator`'s 50-entry cap — the same reasoning `player-stats`
+    applies to its own `no_box_row` roll-up.
+    """
+
+    rows: int = 0
+    reasons: list[str] = field(default_factory=list)
+
+    def record(self, failures: dict) -> None:
+        self.rows += len(failures)
+        for reason in failures.values():
+            if reason not in self.reasons:
+                self.reasons.append(reason)
+
+    def detail(self) -> str:
+        """One line naming how many rows were lost and to what."""
+        reasons = "; ".join(self.reasons)[:MAX_FAILURE_DETAIL_CHARS]
+        return f"{self.rows} row(s) unresolved: {reasons}"
 
 
 async def fetch_scope(lake, season: int, week: int) -> Scope:
@@ -124,6 +179,7 @@ async def _resolve_batch(
     season: int,
     scope: Scope,
     identity: IdentityClient,
+    failures: IdentityFailures,
 ) -> list[tuple[UsageRow, str]]:
     """One batch's kept `(row, player_id)` pairs.
 
@@ -131,14 +187,31 @@ async def _resolve_batch(
     row missing from the result is unresolved — whether it was refused outright
     or the request for its chunk failed (`IdentityClient.failures`). Either way
     it is dropped here rather than published under a guessed id.
+
+    The two are not the same *fact*, though, and only one of them is a
+    `player-identity` incident, so the request failures are accumulated onto
+    `failures` for the caller to report. Reading only the dict — as this used
+    to — makes an outage silent: every row drops, and the envelope says nothing
+    but `below_expected_floor`.
     """
     # Built once and carried alongside its row. `resolve_many` keys its result
     # on the query, so rebuilding one to look the answer up would make the join
     # depend on `_query` staying byte-identical across two call sites.
     queries = [(row, _query(row, season)) for row in batch]
     resolved = await identity.resolve_many([query for _, query in queries])
+    # Read immediately: `resolve_many` resets `failures` at the top of its next
+    # call, so the attribute only ever describes the batch that just returned.
+    failures.record(identity.failures)
     kept: list[tuple[UsageRow, str]] = []
     for row, query in queries:
+        # `.get(query)`, never `.get(query, row.upstream_player_id)`. The
+        # default is the whole non-negotiable: `player-identity` is
+        # authoritative, and a row it did not resolve must be dropped rather
+        # than published under the feed's own GSIS key. The `in scope.members`
+        # clause below happens to filter a raw GSIS id too, because it cannot
+        # collide with a canonical `fdy-` member — that is a second, positional
+        # accident, not the guard. `test_a_raw_upstream_id_is_never_adopted_
+        # for_a_refused_row` isolates this one.
         player_id = resolved.get(query)
         if player_id is not None and player_id in scope.members:
             kept.append((row, player_id))
@@ -151,6 +224,7 @@ async def resolve_in_scope(
     season: int,
     scope: Scope,
     identity: IdentityClient,
+    failures: IdentityFailures,
 ) -> AsyncIterator[tuple[UsageRow, str]]:
     """Yield `(row, player_id)` for rows resolving into `scope.members`.
 
@@ -168,18 +242,28 @@ async def resolve_in_scope(
     cannot be attributed to a scope slot without the very join that just
     failed. `EXPECTED_FLOOR` is what keeps a week that resolved almost nothing
     from reading as complete.
+
+    `failures` is the one exception, and it is an out-parameter rather than a
+    return value because this is an async generator: the rows have to stream,
+    so there is nowhere to put a second value. The caller reads it once the
+    iteration is done and files a single summarised `errors` entry — see
+    `IdentityFailures`.
     """
     batch: list[UsageRow] = []
     for row in rows:
         batch.append(row)
         if len(batch) >= BATCH_LIMIT:
             for pair in await _resolve_batch(
-                batch, season=season, scope=scope, identity=identity
+                batch,
+                season=season,
+                scope=scope,
+                identity=identity,
+                failures=failures,
             ):
                 yield pair
             batch = []
     if batch:
         for pair in await _resolve_batch(
-            batch, season=season, scope=scope, identity=identity
+            batch, season=season, scope=scope, identity=identity, failures=failures
         ):
             yield pair
