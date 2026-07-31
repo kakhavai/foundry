@@ -289,3 +289,105 @@ def test_age_seconds_measures_from_captured_at():
         signal_type="scope_membership_weekly",
     )
     assert scope.age_seconds(datetime(2026, 9, 2, 1, 0, 0, tzinfo=UTC)) == 3600.0
+
+
+class SignalTypeAwareFakeLake:
+    """Like `WeekAwareFakeLake`, but keyed by `signal_type` as well as `week`.
+
+    `fetch_union` calls `fetch` once per signal type against the *same*
+    partition, and both existing fakes return one fixed key list regardless
+    of which signal type is asked for -- neither can exercise a real union
+    across two distinct lists living in the same season/week.
+    """
+
+    def __init__(self, keys_by_partition=None, objects=None):
+        self._keys_by_partition = keys_by_partition or {}
+        self._objects = objects or {}
+        self.list_calls = []
+
+    def list_keys(self, collector, signal_type, season, week, version="1"):
+        self.list_calls.append((collector, signal_type, season, week))
+        return list(self._keys_by_partition.get((signal_type, week), []))
+
+    def read(self, key):
+        return self._objects[key]
+
+    def write(self, envelope):  # pragma: no cover - unused here
+        raise AssertionError("ScopeClient must never write")
+
+
+@pytest.fixture
+def lake():
+    return SignalTypeAwareFakeLake()
+
+
+def _seed(
+    lake,
+    signal_type: str,
+    season: int,
+    week: int,
+    player_ids: list[str],
+    captured_at: str = "2026-09-02T00:00:00Z",
+) -> None:
+    """Write one envelope for `signal_type`/`season`/`week` into `lake`."""
+    key = (
+        f"signals/roster-scope/v1/season={season}/week={week:02d}/"
+        f"{captured_at}-{signal_type}.json"
+    )
+    lake._keys_by_partition.setdefault((signal_type, week), []).append(key)
+    lake._objects[key] = _envelope(captured_at, player_ids)
+
+
+@pytest.mark.asyncio
+async def test_fetch_union_returns_every_members_set_combined(lake):
+    """injury-report needs offensive watchlist AND matchup defenders."""
+    _seed(lake, "scope_membership_weekly", 2026, 1, ["fdy-a", "fdy-b"])
+    _seed(lake, "scope_matchup_weekly", 2026, 1, ["fdy-c"])
+
+    scope = await ScopeClient(lake).fetch_union(
+        ("scope_membership_weekly", "scope_matchup_weekly"), 2026, 1
+    )
+
+    assert scope.members == frozenset({"fdy-a", "fdy-b", "fdy-c"})
+    assert len(scope.members) == 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_union_fails_closed_when_any_signal_type_is_missing(lake):
+    """Strictly all-or-nothing. A present membership list with an absent
+    matchup list would narrow to offence only and silently drop every
+    defender -- a partial scope that looks like a working one."""
+    _seed(lake, "scope_membership_weekly", 2026, 1, ["fdy-a"])
+
+    with pytest.raises(ScopeUnavailable):
+        await ScopeClient(lake).fetch_union(
+            ("scope_membership_weekly", "scope_matchup_weekly"), 2026, 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_fetch_union_reports_the_oldest_contributing_capture(lake):
+    """`age_seconds` must describe the STALEST input, not the freshest --
+    otherwise a fresh membership list hides a week-old matchup list."""
+    _seed(
+        lake,
+        "scope_membership_weekly",
+        2026,
+        1,
+        ["fdy-a"],
+        captured_at="2026-09-10T00:00:00Z",
+    )
+    _seed(
+        lake,
+        "scope_matchup_weekly",
+        2026,
+        1,
+        ["fdy-c"],
+        captured_at="2026-09-03T00:00:00Z",
+    )
+
+    scope = await ScopeClient(lake).fetch_union(
+        ("scope_membership_weekly", "scope_matchup_weekly"), 2026, 1
+    )
+
+    assert scope.captured_at.isoformat().startswith("2026-09-03")

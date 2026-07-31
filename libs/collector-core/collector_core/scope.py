@@ -7,6 +7,7 @@ being a fleet-wide stop. `roster-scope`'s HTTP routes exist for the
 out-of-repo generator and for operators; collectors do not use them.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -114,3 +115,42 @@ class ScopeClient:
             )
 
         raise ScopeUnavailable(reason)
+
+    async def fetch_union(
+        self, signal_types: Sequence[str], season: int, week: int
+    ) -> Scope:
+        """The union of several scope lists -- membership ∪ matchup.
+
+        `injury-report` is the case this exists for: an opposing cornerback
+        ruled out moves a receiver's projection as much as the receiver's own
+        hamstring does, and defenders never appear on the offence-oriented
+        membership list. Narrowing to membership alone would silently discard
+        the half of the signal that is hardest to get anywhere else.
+
+        **All or nothing.** If any requested signal type is unavailable the
+        whole call raises, rather than returning the lists that did resolve.
+        A partial union is the dangerous shape: it looks exactly like a
+        working narrow while dropping an entire class of player, and the
+        collector would publish a confident, short answer. Failing closed
+        turns that into an obvious `present: 0`.
+
+        `captured_at` is the OLDEST contributing envelope's, so
+        `age_seconds` describes the stalest input rather than the freshest --
+        a week-old matchup list must not hide behind a fresh membership one.
+        """
+        members: set[str] = set()
+        captured_at: datetime | None = None
+        for signal_type in signal_types:
+            scope = await self.fetch(signal_type, season, week)
+            members |= scope.members
+            if captured_at is None or scope.captured_at < captured_at:
+                captured_at = scope.captured_at
+
+        if captured_at is None:
+            raise ScopeUnavailable("scope_unavailable")
+
+        return Scope(
+            members=frozenset(members),
+            captured_at=captured_at,
+            signal_type="+".join(signal_types),
+        )
