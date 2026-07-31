@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/roster-transactions.json",
+  "title": "roster-transactions collector signal fields",
+  "signal_types": {
+    "roster_transaction": {
+      "type": "object",
+      "required": ["key", "observed_at", "value"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "value": { "type": "number" }
+      }
+    }
+  }
+}
