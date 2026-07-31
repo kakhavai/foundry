@@ -5,11 +5,121 @@
   "signal_types": {
     "player_usage_weekly": {
       "type": "object",
-      "required": ["key", "observed_at", "value"],
+      "required": [
+        "player_id",
+        "player_id_source",
+        "game_id",
+        "team",
+        "snap_share",
+        "route_participation",
+        "target_share",
+        "air_yards_share",
+        "wopr",
+        "carry_share",
+        "redzone",
+        "goal_line",
+        "two_minute",
+        "alignment",
+        "denominators",
+        "usage_source"
+      ],
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "observed_at": { "type": "string", "format": "date-time" },
-        "value": { "type": "number" }
+        "player_id": { "type": "string", "minLength": 1 },
+        "player_id_source": { "enum": ["player_identity", "upstream_gsis"] },
+        "game_id": { "type": "string", "minLength": 1 },
+        "team": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "snap_share": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "route_participation": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "target_share": { "type": "number", "minimum": 0, "maximum": 1 },
+        "air_yards_share": {
+          "type": "number",
+          "maximum": 1,
+          "description": "Deliberately unbounded below: air yards are negative on a target behind the line of scrimmage, so a screen-heavy back legitimately posts a share below zero."
+        },
+        "wopr": {
+          "type": "number",
+          "maximum": 2.2,
+          "description": "1.5*target_share + 0.7*air_yards_share. Unbounded below for the same reason air_yards_share is."
+        },
+        "carry_share": { "type": "number", "minimum": 0, "maximum": 1 },
+        "redzone": {
+          "type": "object",
+          "required": ["carries", "targets", "snap_share"],
+          "properties": {
+            "carries": { "type": ["integer", "null"], "minimum": 0 },
+            "targets": { "type": ["integer", "null"], "minimum": 0 },
+            "snap_share": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "goal_line": {
+          "type": "object",
+          "required": ["carries", "targets"],
+          "properties": {
+            "carries": { "type": ["integer", "null"], "minimum": 0 },
+            "targets": { "type": ["integer", "null"], "minimum": 0 }
+          }
+        },
+        "two_minute": {
+          "type": "object",
+          "required": ["snaps", "route_participation"],
+          "properties": {
+            "snaps": { "type": ["integer", "null"], "minimum": 0 },
+            "route_participation": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "alignment": {
+          "type": "object",
+          "required": [
+            "slot_rate",
+            "wide_rate",
+            "inline_rate",
+            "backfield_rate"
+          ],
+          "properties": {
+            "slot_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "wide_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "inline_rate": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1
+            },
+            "backfield_rate": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "denominators": {
+          "type": "object",
+          "required": [
+            "team_offense_snaps",
+            "team_dropbacks",
+            "team_targets",
+            "team_air_yards",
+            "team_carries"
+          ],
+          "properties": {
+            "team_offense_snaps": { "type": ["integer", "null"], "minimum": 0 },
+            "team_dropbacks": { "type": "integer", "minimum": 0 },
+            "team_targets": { "type": "integer", "minimum": 0 },
+            "team_air_yards": { "type": "number" },
+            "team_carries": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "usage_source": { "enum": ["charted", "derived", "mixed"] }
       }
     }
   }

@@ -11,20 +11,27 @@ a loud error, not look like a quiet week.
 
 from collections.abc import Mapping
 
-# TODO: declare the filters this collector's rows actually support.
-# Do not list one you do not implement below — the router will accept it and
-# `signal_matches` will ignore it, which returns everything and looks like a
-# working filter.
+# Exactly the fields `capture.build_signal` emits that a caller would narrow on.
+# Nothing here is declared that `ROW_FILTERS` does not implement: the router
+# would accept it, the predicate would ignore it, and the response would return
+# everything — which looks precisely like a working filter.
+#
+# `position` is deliberately absent even though the adapter carries one: it is
+# not a published field, so filtering on it would match no row at all. The
+# phase doc's field table for this collector has no position column, and this
+# collector does not add one.
 SUPPORTED_FILTERS: tuple[str, ...] = (
     "season",
     "week",
     "signal_type",
-    "key",
+    "player_id",
+    "team",
+    "game_id",
 )
 
 # The subset of the above this module filters on: the universal three are
 # already applied by the router before a row reaches here.
-ROW_FILTERS: tuple[str, ...] = ("key",)
+ROW_FILTERS: tuple[str, ...] = ("player_id", "team", "game_id")
 
 
 def signal_matches(row: dict, params: Mapping[str, str]) -> bool:

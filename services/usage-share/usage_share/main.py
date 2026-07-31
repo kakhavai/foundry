@@ -1,4 +1,9 @@
-"""usage-share's process wiring: the descriptor, and nothing else yet.
+"""usage-share's process wiring: the descriptor, and nothing else.
+
+"Nothing else" is a decision rather than a stage this file has not reached yet.
+The phase doc's spec for this collector states its extra routes as **none**: a
+season aggregate is the generator's job, and everything a caller needs is one
+`GET /signals?season=&week=` away.
 
 Everything else — environment parsing, `CaptureState`, the capture loop, bearer
 auth, the OTel guard and the standard five routes — lives in

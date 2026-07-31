@@ -11,8 +11,9 @@ import time
 from collector_core.envelope import ENVELOPE_VERSION
 
 from usage_share.capture import SIGNAL_TYPES
+from usage_share.signals import ROW_FILTERS, SUPPORTED_FILTERS
 
-from .conftest import TEST_TOKEN
+from .conftest import SAMPLE_PLAYER_ROWS, TEST_TOKEN
 
 
 def wait_for_signals(client, *, count: int, timeout: float = 10.0) -> dict:
@@ -68,38 +69,65 @@ def test_an_undeclared_filter_is_422_not_ignored(client):
     assert client.get("/signals?not_a_filter=x").status_code == 422
 
 
+def test_position_is_not_an_accepted_filter(client):
+    """`position` is on the adapter's row but not on the published one, so a
+    filter for it could only ever match nothing. 422 says that; an empty list
+    would look like a quiet week."""
+    assert client.get("/signals?position=WR").status_code == 422
+
+
 def test_an_unknown_signal_type_is_422(client):
     assert client.get("/signals?signal_type=nope").status_code == 422
 
 
-def test_refresh_is_accepted_and_the_capture_eventually_lands(client):
+def test_every_declared_filter_is_implemented():
+    """A filter the router accepts but `signal_matches` ignores returns
+    everything, which is indistinguishable from a working filter."""
+    universal = {"season", "week", "signal_type"}
+    assert ROW_FILTERS, "no row filters — the comparison below would be vacuous"
+    assert set(SUPPORTED_FILTERS) - universal == set(ROW_FILTERS)
+
+
+def test_refresh_is_accepted_and_the_capture_eventually_lands(client, upstream):
     """202 means accepted. Observe it by polling — see `wait_for_signals`."""
-    accepted = client.post("/refresh", json={})
+    accepted = client.post("/refresh", json={"season": 2026, "week": 1})
     assert accepted.status_code == 202
 
     body = wait_for_signals(client, count=len(SIGNAL_TYPES))
     assert body["count"] == len(SIGNAL_TYPES)
+    assert body["envelopes"], "no envelopes to assert against"
     for envelope in body["envelopes"]:
         assert envelope["collector"] == "usage-share"
         assert envelope["coverage"]["expected"] >= envelope["coverage"]["present"]
+        assert len(envelope["signals"]) == SAMPLE_PLAYER_ROWS
 
 
-def test_a_second_refresh_inside_the_floor_is_429(client):
+def test_a_second_refresh_inside_the_floor_is_429(client, upstream):
     client.post("/refresh", json={})
     response = client.post("/refresh", json={})
     assert response.status_code == 429
     assert int(response.headers["Retry-After"]) > 0
 
 
-def test_a_row_filter_narrows_the_signals(client):
+def test_a_row_filter_narrows_the_signals(client, upstream):
     """`signal_matches` is this collector's own, so prove it is consulted."""
-    client.post("/refresh", json={})
+    client.post("/refresh", json={"season": 2026, "week": 1})
     wait_for_signals(client, count=len(SIGNAL_TYPES))
 
-    body = client.get("/signals?key=placeholder-a").json()
+    body = client.get("/signals?team=KC").json()
     rows = [row for envelope in body["envelopes"] for row in envelope["signals"]]
-    assert rows, "the filter matched nothing — is ROW_FILTERS wired up?"
-    assert {row["key"] for row in rows} == {"placeholder-a"}
+    assert len(rows) == 5, f"expected KC's five skill players, got {len(rows)}"
+    assert {row["team"] for row in rows} == {"KC"}
+
+
+def test_a_player_id_filter_narrows_to_one_row(client, upstream):
+    client.post("/refresh", json={"season": 2026, "week": 1})
+    wait_for_signals(client, count=len(SIGNAL_TYPES))
+
+    body = client.get("/signals?player_id=00-KC-WR1").json()
+    rows = [row for envelope in body["envelopes"] for row in envelope["signals"]]
+    assert len(rows) == 1
+    assert rows[0]["player_id"] == "00-KC-WR1"
 
 
 def test_a_data_route_without_a_token_is_401(client):
