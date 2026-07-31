@@ -21,7 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
-      platform-python: ${{ steps.filter.outputs.platform-python }}
+      # Underscore, not a hyphen. GitHub documents hyphenated context property
+      # names as working, but nothing else in this repo proves it, and the
+      # failure mode if it did not would be silent: the expression evaluates to
+      # the empty string, the job's `if` is false, and platform-lint is skipped
+      # forever with no error anywhere.
+      platform_python: ${{ steps.filter.outputs.platform_python }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -36,7 +41,7 @@ jobs:
             # set for these two directories is declared — edit the select list
             # and nothing else, and without this entry nothing would check the
             # result.
-            platform-python:
+            platform_python:
               - 'scripts/**'
               - 'tests/**'
               - 'pyproject.toml'
@@ -86,7 +91,7 @@ jobs:
   # here, so `ruff check scripts/ tests/` run locally gives the same answer.
   platform-lint:
     needs: changes
-    if: needs.changes.outputs.platform-python == 'true'
+    if: needs.changes.outputs.platform_python == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
