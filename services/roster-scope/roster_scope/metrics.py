@@ -9,7 +9,7 @@ drove the fetch. Catching it needs assertions external to scope, and these
 are the two.
 """
 
-from collector_core.metrics import CollectorMetrics
+from collector_core.metrics import CollectorMetrics, LastValueGauge
 from opentelemetry import metrics as otel_metrics
 
 COLLECTOR = "roster-scope"
@@ -27,7 +27,8 @@ class RosterScopeMetrics(CollectorMetrics):
                 "membership_status was excluded. Alert on any nonzero value."
             ),
         )
-        self._stale_depth_charts = meter.create_gauge(
+        self._stale_depth_charts = LastValueGauge(
+            meter,
             "roster_scope_stale_depth_charts",
             description=(
                 "Teams whose depth_source_captured_at is older than the "

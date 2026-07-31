@@ -31,7 +31,7 @@ is interesting cannot be alerted on.
 process — the library never constructs one, it takes the one below.
 """
 
-from collector_core.metrics import CollectorMetrics
+from collector_core.metrics import CollectorMetrics, LastValueGauge
 from opentelemetry import metrics as otel_metrics
 
 COLLECTOR = "schedule-context"
@@ -41,11 +41,13 @@ class ScheduleContextMetrics(CollectorMetrics):
     def __init__(self, collector: str = COLLECTOR) -> None:
         super().__init__(collector)
         meter = otel_metrics.get_meter(collector)
-        self._games_in_scope = meter.create_gauge(
+        self._games_in_scope = LastValueGauge(
+            meter,
             "schedule_context_games_in_scope",
             description="Distinct games the scoped week resolved to, by collector.",
         )
-        self._unresolved_venues = meter.create_gauge(
+        self._unresolved_venues = LastValueGauge(
+            meter,
             "schedule_context_unresolved_venues",
             description=(
                 "Team-records in the scoped week whose venue could not be "

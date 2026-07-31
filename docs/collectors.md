@@ -117,6 +117,48 @@ Record on every pass, including zero. An absent Prometheus series and a healthy
 one are indistinguishable in PromQL, so a gauge written only when it is
 interesting cannot be alerted on.
 
+**Build every gauge with
+[`LastValueGauge`](../libs/collector-core/collector_core/metrics.py), never
+`meter.create_gauge`.** Recording on every pass is only half the job: OTel's
+*synchronous* gauge is last-value aggregated with the point **consumed** by a
+collection, so it is exported on the first scrape after a recording and absent
+from every scrape after that. Collectors record on a capture cadence — minutes
+to hours — and Prometheus scrapes every 15-30 seconds, so the overwhelming
+majority of scrapes saw nothing at all. That is the exact failure the
+"record even at zero" rule exists to prevent, arriving by a different route,
+and it is why `scripts/run-chaos.py` treating an empty result as a hard error
+would have made any criterion on `collector_coverage_ratio` flaky by
+construction.
+
+`LastValueGauge` wraps `create_observable_gauge` behind the same
+`.set(value, attributes)` call, so the only thing that changes is the
+constructor:
+
+```python
+self._rows_captured = LastValueGauge(
+    meter,
+    "betting_lines_rows_captured",
+    description="Rows captured in the last pass, by collector.",
+)
+...
+self._rows_captured.set(count, {"collector": self.collector})
+```
+
+Two consequences. The callback runs at **collection** time on whichever thread
+drives the scrape — the event loop, for `/metrics` — so it must never block and
+must never reach the lake, which raises on a loop-thread call. And a label set,
+once written, is reported forever; that is the point, and it means the wrapper
+is only safe for **bounded** label sets. Every gauge in the fleet is keyed by
+`collector` plus at most `signal_type`. Do not put a `player_id` in one.
+
+Counters (`meter.create_counter`) are a different instrument class, already
+cumulative, and need none of this.
+
+**Test it with two consecutive scrapes.** A single scrape passes either way,
+which is why this survived nine collectors. `libs/collector-core`'s
+`test_coverage_ratio_is_present_on_a_second_consecutive_scrape` is the model,
+and each service's `tests/test_metrics.py` pins its own series the same way.
+
 ---
 
 ## The five-route contract

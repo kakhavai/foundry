@@ -33,7 +33,7 @@ only when it is interesting cannot be alerted on.
 process — the library never constructs one, it takes the one below.
 """
 
-from collector_core.metrics import CollectorMetrics
+from collector_core.metrics import CollectorMetrics, LastValueGauge
 from opentelemetry import metrics as otel_metrics
 
 COLLECTOR = "roster-transactions"
@@ -43,18 +43,21 @@ class RosterTransactionsMetrics(CollectorMetrics):
     def __init__(self, collector: str = COLLECTOR) -> None:
         super().__init__(collector)
         meter = otel_metrics.get_meter(collector)
-        self._rows_captured = meter.create_gauge(
+        self._rows_captured = LastValueGauge(
+            meter,
             "roster_transactions_rows_captured",
             description="Transaction rows captured in the last pass, by collector.",
         )
-        self._unknown_types = meter.create_gauge(
+        self._unknown_types = LastValueGauge(
+            meter,
             "roster_transactions_unknown_types",
             description=(
                 "Rows rejected in the last pass for a transaction_type outside "
                 "the closed vocabulary, by collector."
             ),
         )
-        self._duplicate_signings = meter.create_gauge(
+        self._duplicate_signings = LastValueGauge(
+            meter,
             "roster_transactions_duplicate_signings",
             description=(
                 "(player_id, to_team) pairs with two signing-class rows inside "

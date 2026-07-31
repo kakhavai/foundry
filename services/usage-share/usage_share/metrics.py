@@ -32,7 +32,7 @@ recorded here:
 process — the library never constructs one, it takes the one below.
 """
 
-from collector_core.metrics import CollectorMetrics
+from collector_core.metrics import CollectorMetrics, LastValueGauge
 from opentelemetry import metrics as otel_metrics
 
 COLLECTOR = "usage-share"
@@ -46,11 +46,13 @@ class UsageShareMetrics(CollectorMetrics):
     def __init__(self, collector: str = COLLECTOR) -> None:
         super().__init__(collector)
         meter = otel_metrics.get_meter(collector)
-        self._rows_captured = meter.create_gauge(
+        self._rows_captured = LastValueGauge(
+            meter,
             "usage_share_rows_captured",
             description="Player usage rows captured in the last pass.",
         )
-        self._team_sum_drift = meter.create_gauge(
+        self._team_sum_drift = LastValueGauge(
+            meter,
             "usage_share_team_sum_drift",
             description=(
                 "Largest |sum(upstream target_share) - 1.0| across teams in the "

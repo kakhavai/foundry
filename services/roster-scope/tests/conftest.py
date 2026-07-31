@@ -70,13 +70,19 @@ def _lookup(series):
 def scrape():
     """Take one Prometheus scrape, then look series up from it.
 
-    **Every gauge assertion must go through this, not `metric_value`.** OTel's
-    synchronous Gauge is last-value aggregated: a data point is exported only
-    on the first collection *after* a measurement, and `generate_latest`
-    triggers a collection. Two `metric_value` calls therefore mean two
-    collections, and the second one silently reports the gauge as absent —
-    indistinguishable from a gauge that was never recorded, which is exactly
-    the bug these tests exist to catch.
+    This used to exist because OTel's *synchronous* Gauge is last-value
+    aggregated with the point consumed by a collection: it was exported on the
+    first collection after a measurement and absent from every one after that,
+    so two `metric_value` calls silently reported the second as missing. That
+    was a real defect rather than a test-harness quirk — Prometheus scrapes
+    every 15-30s against a capture cadence of minutes, so almost every real
+    scrape saw nothing — and it is fixed:
+    `collector_core.metrics.LastValueGauge` makes every fleet and per-collector
+    gauge observable, reporting current state on every collection.
+
+    The fixture stays, because taking one scrape and asserting several series
+    against it is the honest shape for a test that means "this is what
+    Prometheus sees".
     """
 
     def take():
@@ -90,8 +96,8 @@ def metric_value():
     """Read one series out of real /metrics output, so these tests check
     exactly what Prometheus scrapes — including OTel's name mangling.
 
-    Safe for counters, which accumulate across collections. For gauges use
-    `scrape`; see the warning there.
+    Prefer `scrape` when one test asserts several series, so they all come
+    from one collection rather than one each.
 
     Returns None when the series is absent, which is distinct from a series
     present with value 0.0. That distinction is the entire point of

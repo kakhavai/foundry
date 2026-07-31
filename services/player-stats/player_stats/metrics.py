@@ -24,7 +24,7 @@ series and a healthy one are indistinguishable in PromQL, so a value only
 written when it is interesting cannot be alerted on.
 """
 
-from collector_core.metrics import CollectorMetrics
+from collector_core.metrics import CollectorMetrics, LastValueGauge
 from opentelemetry import metrics as otel_metrics
 
 COLLECTOR = "player-stats"
@@ -44,7 +44,8 @@ class PlayerStatsMetrics(CollectorMetrics):
                 "snapshot, by collector."
             ),
         )
-        self._identity_misses = meter.create_gauge(
+        self._identity_misses = LastValueGauge(
+            meter,
             "player_stats_identity_misses",
             description=(
                 "Box-score rows in the last pass whose upstream id did not "

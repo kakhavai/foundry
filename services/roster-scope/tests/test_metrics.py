@@ -43,6 +43,31 @@ def test_missed_producers_counts_up(metric_value):
     assert after - before == 3.0
 
 
+def test_the_gauges_survive_a_scrape_they_were_not_written_before(scrape):
+    """Prometheus scrapes every 15-30s; this collector captures on a cadence of
+    minutes. Almost every scrape therefore happens with no intervening
+    recording, and a synchronous OTel gauge is absent from all of them — which
+    PromQL cannot tell apart from a series that never existed.
+
+    One scrape passes either way. The second one is the test.
+    """
+    metrics.stale_depth_charts(4)
+    metrics.coverage("scope_membership_weekly", 0.75)
+
+    scrape()  # discard
+    second = scrape()
+
+    assert second("roster_scope_stale_depth_charts", collector=COLLECTOR) == 4.0
+    assert (
+        second(
+            "collector_coverage_ratio",
+            collector=COLLECTOR,
+            signal_type="scope_membership_weekly",
+        )
+        == 0.75
+    )
+
+
 def test_stale_depth_charts_is_a_gauge_that_can_fall(scrape):
     metrics.stale_depth_charts(5)
     assert scrape()("roster_scope_stale_depth_charts", collector=COLLECTOR) == 5.0
