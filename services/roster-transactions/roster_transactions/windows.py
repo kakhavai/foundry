@@ -35,6 +35,20 @@ never once polled reports perfect coverage. `capture.py` floors `expected` to
 fifteen minutes of a scoped week read 0.0; that is the deliberate trade, and it
 is the right way round.
 
+**`expected: 1, present: 0` with signals still emitted is that case, not a bug.**
+It has been reported as one, so: coverage and `signals` measure different axes
+and are not required to agree. Coverage answers *how much of this week's polling
+time has been covered*; `signals` answers *what did the feed hand this pass*.
+The deployed defaults (`CAPTURE_SEASON=2026`, `CAPTURE_WEEK=1`) scope a week
+opening 2026-09-01, so before that date nothing has elapsed, `expected` reads
+the floor, and `present` cannot be anything but 0 — while the placeholder feed,
+whose rows are timestamped relative to the scoped week's own start, emits three
+rows anyway. The same shape occurs against a real upstream: a move announced
+three minutes ago sits in an interval that has not finished elapsing, so it is a
+signal without being coverage. The envelope says so itself — `errors` carries
+`below_expected_floor`. Pinned by
+`tests/test_coverage_floor.py::test_a_future_week_reports_zero_coverage_while_still_emitting_signals`.
+
 **What this cannot assert, stated rather than implied.** A single envelope
 describes a single pass. Whether interval T was *itself* polled successfully at
 time T is a property of the history of passes, and no one pass can see it —

@@ -128,6 +128,56 @@ async def test_a_week_not_yet_started_reports_zero_not_one(monkeypatch):
     assert coverage.ratio == 0.0
 
 
+async def test_a_future_week_reports_zero_coverage_while_still_emitting_signals():
+    """`expected: 1, present: 0` **alongside emitted signals** — the combination
+    that reads as a bug and is not one.
+
+    It is what the deployed defaults produce today. `CAPTURE_SEASON=2026` /
+    `CAPTURE_WEEK=1` scope a week that opens 2026-09-01, so on any date before
+    that no 15-minute interval of it has elapsed, `elapsed_interval_keys` is
+    empty, and `expected` reads the floor with nothing able to be `present`.
+    That is `windows.py`'s stated design: a week nobody has polled must read
+    0.0, never the vacuous 1.0 that `Coverage.ratio` returns at `expected == 0`.
+
+    The signals come from a different axis entirely. Coverage answers *how much
+    of this week's polling time has been covered*; `signals` answers *what did
+    the feed hand this pass*. `PLACEHOLDER_ROWS` timestamps every row relative
+    to the scoped week's own start, so the placeholder feed emits regardless of
+    where `now` sits. Nothing asserts — or should assert — that `present > 0`
+    implies rows, or the reverse: a real feed can hand back a move announced
+    three minutes ago, whose interval has not finished elapsing and so is not
+    yet expected.
+
+    Runs the **real** placeholder adapter rather than `capture_with`, because
+    the monkeypatched seam is exactly what would hide a placeholder that had
+    stopped emitting.
+    """
+    now = WEEK_START - timedelta(days=30)
+    lake = SpyLake()
+    async with httpx.AsyncClient() as client:
+        envelopes = await capture_roster_transactions(
+            SEASON, WEEK, client=client, lake=lake, now=now
+        )
+
+    coverage = envelopes[SIGNAL_TYPE].coverage
+    assert elapsed_interval_keys(SEASON, WEEK, now) == [], (
+        "the premise: no interval of a future week has elapsed"
+    )
+    assert coverage.expected == EXPECTED_FLOOR[SIGNAL_TYPE] == 1
+    assert coverage.present == 0
+    assert coverage.ratio == 0.0
+
+    signals = envelopes[SIGNAL_TYPE].signals
+    assert len(signals) == 3, "the placeholder feed emits regardless of `now`"
+    assert all(s["player_id"].startswith("fdy-placeholder-") for s in signals)
+
+    # The envelope explains itself rather than leaving a reader to infer it
+    # from expected and missing disagreeing.
+    reasons = [error["reason"] for error in envelopes[SIGNAL_TYPE].errors]
+    assert len(reasons) >= 1
+    assert "below_expected_floor" in reasons, reasons
+
+
 async def test_a_completed_week_expects_the_full_672_intervals(monkeypatch):
     """The floor never caps a genuine count, and a finished week is the whole
     universe: 7 days x 24 hours x 4."""
