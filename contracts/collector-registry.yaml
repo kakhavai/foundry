@@ -95,9 +95,12 @@ collectors:
     signal_types: [scope_membership_weekly, scope_change_event, scope_matchup_weekly]
     # It defines the scope rather than consuming it.
     scope_aware: false
-    # Conceptual today, not yet a runtime call: `PLAYER_IDENTITY_URL` ships
-    # empty and the in-process stub resolver is used, so nothing here reaches
-    # player-identity over HTTP until that value is set. Declared anyway
+    # A real runtime call, not a conceptual dependency: `helm/values/
+    # roster-scope/values.yaml` sets `PLAYER_IDENTITY_URL` to
+    # `http://player-identity:8002`, so `build_resolver` selects
+    # `HttpPlayerIdentityResolver` and every capture pass resolves names over
+    # HTTP against the real service (~992 calls per pass, confirmed against
+    # a live container run) rather than the in-process stub. Declared here
     # because the seam exists and the phase doc names the dependency — and
     # because this is the merge-order gate that kept this PR behind
     # player-identity's, which is the gate working as designed.
