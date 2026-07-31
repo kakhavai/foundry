@@ -176,6 +176,47 @@ async def test_a_row_older_than_the_eviction_horizon_cannot_resurrect_a_bucket()
 
 
 @respx.mock
+async def test_a_straggler_older_than_a_full_history_is_dropped_not_kept():
+    """The eviction horizon's other entry point: the buckets fill up without
+    anything ever being evicted, then an ancient row arrives. It must be
+    dropped, not swapped in for a newer week."""
+    base = datetime(2026, 1, 5, 7, 0, tzinfo=UTC)
+
+    def stamp(index):
+        return (base + timedelta(weeks=index)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    rows = [
+        depth_row("KC", "QB", 1, f"Passer {index}", dt=stamp(index))
+        for index in range(1, MAX_WEEKS + 1)
+    ]
+    rows.append(depth_row("KC", "QB", 1, "Ancient", dt=stamp(0)))
+
+    fetched = await fetch(rows)
+    history = fetched.histories["KC:QB"]
+    assert len(history.weeks) == MAX_WEEKS
+    kept = {e.player_name for week in history.weeks for e in week.entries}
+    assert "Ancient" not in kept
+    assert len(kept) == MAX_WEEKS
+
+
+@respx.mock
+async def test_an_older_publication_arriving_late_does_not_overwrite_a_newer_one():
+    """Feed order is not guaranteed. A stale row for the same week arriving
+    after the newer one must be ignored rather than reinstating a superseded
+    ordering."""
+    early, late = "2026-09-07T07:00:00Z", "2026-09-09T07:00:00Z"
+    fetched = await fetch(
+        [
+            depth_row("KC", "QB", 1, "New Starter", dt=late),
+            depth_row("KC", "QB", 1, "Old Starter", dt=early),
+        ]
+    )
+    current = fetched.histories["KC:QB"].current
+    assert [e.player_name for e in current.entries] == ["New Starter"]
+    assert current.captured_at == parse_dt(late)
+
+
+@respx.mock
 async def test_lines_split_across_chunk_boundaries_are_stitched():
     """`aiter_text` splits on transport chunks, not on newlines. A row cut in
     half must not be dropped or half-parsed."""
@@ -223,9 +264,7 @@ def test_parse_dt_rejects_garbage_rather_than_substituting_now():
     assert parse_dt("not-a-date") is None
     assert parse_dt("") is None
     assert parse_dt(None) is None
-    assert parse_dt("2026-09-08T07:00:00Z") == datetime(
-        2026, 9, 8, 7, 0, tzinfo=UTC
-    )
+    assert parse_dt("2026-09-08T07:00:00Z") == datetime(2026, 9, 8, 7, 0, tzinfo=UTC)
 
 
 def test_a_naive_timestamp_is_read_as_utc():

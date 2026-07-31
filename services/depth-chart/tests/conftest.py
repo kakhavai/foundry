@@ -153,9 +153,7 @@ def depth_row(
     gsis_id: str | None = None,
 ) -> str:
     gid = gsis_for(name) if gsis_id is None else gsis_id
-    return (
-        f"{dt},{team},{name},1,{gid},1,3WR 1TE,1,Position,{pos_abb},{rank},{rank}"
-    )
+    return f"{dt},{team},{name},1,{gid},1,3WR 1TE,1,Position,{pos_abb},{rank},{rank}"
 
 
 def depth_csv(rows: list[str], header: str = DEPTH_HEADER) -> str:

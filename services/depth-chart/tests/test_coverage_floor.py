@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import respx
 
-from depth_chart.adapters.upstream import source_ref
+from depth_chart.adapters.upstream import fetch_depth_charts, source_ref
 from depth_chart.capture import (
     CHART_SIGNAL,
     EXPECTED_FLOOR,
@@ -22,9 +22,18 @@ from depth_chart.capture import (
     STABILITY_SIGNAL,
     capture_depth_chart,
 )
+from depth_chart.stability import STALE_AFTER_DAYS
 from depth_chart.universe import POSITIONS, TEAMS, expected_groups
 
-from .conftest import NOW, SpyLake, depth_csv, depth_row, full_chart_rows
+from .conftest import (
+    CURRENT_DT,
+    NOW,
+    SpyLake,
+    depth_csv,
+    depth_row,
+    dt_plus_days,
+    full_chart_rows,
+)
 
 FEED = source_ref(2026, 1)
 
@@ -127,6 +136,57 @@ async def test_an_elapsed_deadline_leaves_groups_missing_and_says_why():
         assert envelope.coverage.expected == EXPECTED_FLOOR[envelope.signal_type]
         reasons = {error["reason"] for error in envelope.errors}
         assert "capture_truncated" in reasons, reasons
+
+
+@respx.mock
+async def test_a_deadline_elapsing_during_mapping_leaves_groups_missing(monkeypatch):
+    """Distinct from the fetch-side truncation above: here the feed arrives
+    intact and the budget runs out while groups are being mapped.
+
+    The adapter is stubbed for this one case, because the fetch-side deadline
+    check fires first by construction and would leave nothing to map — which
+    means this branch is only reachable with the fetch replaced.
+    """
+    respx.get(FEED).mock(
+        return_value=httpx.Response(200, text=depth_csv(full_chart_rows()))
+    )
+    async with httpx.AsyncClient() as client:
+        prefetched = await fetch_depth_charts(2026, 1, client=client, now=NOW)
+    assert len(prefetched.histories) == EXPECTED_FLOOR[CHART_SIGNAL]
+
+    async def already_read(*args, **kwargs):
+        return prefetched
+
+    monkeypatch.setattr("depth_chart.capture.fetch_depth_charts", already_read)
+    async with httpx.AsyncClient() as client:
+        envelopes = await capture_depth_chart(
+            2026,
+            1,
+            client=client,
+            lake=SpyLake(),
+            now=NOW,
+            deadline=datetime.now(tz=UTC) - timedelta(seconds=1),
+        )
+
+    for envelope in envelopes.values():
+        assert envelope.coverage.present == 0
+        assert envelope.coverage.expected == EXPECTED_FLOOR[envelope.signal_type]
+        reasons = {error["reason"] for error in envelope.errors}
+        assert "deadline_exceeded" in reasons, reasons
+
+
+@respx.mock
+async def test_a_stale_chart_is_captured_and_flagged_rather_than_dropped():
+    """A frozen chart is still the best available ordering, so it is published
+    — with `is_stale` set. Dropping it would turn a detectable staleness
+    problem into an undetectable coverage hole."""
+    frozen = dt_plus_days(CURRENT_DT, -(STALE_AFTER_DAYS + 20))
+    envelopes = await capture(full_chart_rows(dt=frozen))
+    stability = envelopes[STABILITY_SIGNAL]
+    assert stability.coverage.ratio == 1.0
+    assert stability.signals
+    assert all(row["is_stale"] for row in stability.signals)
+    assert len(stability.signals) == EXPECTED_FLOOR[STABILITY_SIGNAL]
 
 
 def test_every_signal_type_declares_a_floor():

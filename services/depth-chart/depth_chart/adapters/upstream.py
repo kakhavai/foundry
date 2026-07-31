@@ -186,9 +186,16 @@ class _GroupAccumulator:
             return
         bucket[1][rank] = entry
 
-    def result(self) -> PositionHistory | None:
-        if not self.buckets:
-            return None
+    def result(self) -> PositionHistory:
+        """The retained history, newest week first.
+
+        Non-optional, and that is an invariant rather than an oversight: an
+        accumulator is only ever constructed immediately before an `add` that
+        creates a bucket, and every early return in `add` requires a bucket to
+        already exist. A `| None` return here would be a branch no test could
+        reach, which is worse than no branch — it reads as a handled case while
+        being dead code.
+        """
         weeks = tuple(
             WeekOrdering(
                 iso_year=key[0],
@@ -310,10 +317,7 @@ async def fetch_depth_charts(
         )
         rows_kept += 1
 
-    histories: dict[str, PositionHistory] = {}
-    for key, accumulator in accumulators.items():
-        history = accumulator.result()
-        if history is not None:
-            histories[key] = history
-
-    return DepthChartFetch(histories=histories, rows_kept=rows_kept, truncated=truncated)
+    histories = {key: acc.result() for key, acc in accumulators.items()}
+    return DepthChartFetch(
+        histories=histories, rows_kept=rows_kept, truncated=truncated
+    )

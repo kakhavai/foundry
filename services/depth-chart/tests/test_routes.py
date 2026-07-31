@@ -183,7 +183,7 @@ def test_the_diff_route_reads_the_lake_off_the_event_loop(client, monkeypatch):
 
 
 def test_the_diff_route_404s_for_a_capture_that_never_happened(client):
-    """"Nothing changed" and "that capture never happened" are different
+    """ "Nothing changed" and "that capture never happened" are different
     answers, and collapsing them would let a typo'd timestamp read as a quiet
     week."""
     response = client.get(
@@ -207,9 +207,7 @@ def test_the_extra_route_is_behind_auth_too(client):
     """Middleware, not a per-route decorator — so a route added after the fact
     is protected by default. Asserted rather than assumed, because the extra
     route is the one that would be forgotten."""
-    response = client.get(
-        "/signals/diff?from=a&to=b", headers={"Authorization": ""}
-    )
+    response = client.get("/signals/diff?from=a&to=b", headers={"Authorization": ""})
     assert response.status_code == 401
 
 

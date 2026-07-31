@@ -86,10 +86,9 @@ EXPECTED_FLOOR: dict[str, int] = {
     STABILITY_SIGNAL: len(expected_groups()),
 }
 
-# Recorded in `coverage.missing` when a group's chart could not be believed.
+# Recorded in `coverage.missing` / `errors` when a group could not be captured.
 REASON_TRUNCATED = "capture_truncated"
 REASON_DEADLINE = "deadline_exceeded"
-REASON_EMPTY_ORDERING = "empty_ordering"
 
 
 def _rfc3339(value: datetime) -> str:
@@ -253,13 +252,10 @@ async def capture_depth_chart(
         group_hash = hashes[key]
         current = history.current
 
-        if not current.entries:
-            # A group the feed named but ordered nobody into. Emitting a row
-            # would claim a chart exists; counting it missing says the truth.
-            for accumulator in accumulators.values():
-                accumulator.fail(key, REASON_EMPTY_ORDERING)
-            continue
-
+        # `current.entries` is never empty by construction — the adapter only
+        # creates a group when it has a row to put in it (see
+        # `_GroupAccumulator.result`). No guard here, deliberately: a branch no
+        # test can reach reads as a handled case while being dead code.
         if deadline is not None and datetime.now(tz=UTC) >= deadline:
             # Over budget. Record the rest as missing rather than throwing away
             # what already resolved: a truncated pass that reports itself

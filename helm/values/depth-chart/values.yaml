@@ -35,6 +35,10 @@ gateway:
   publicPaths:
     - /catalog
     - /signals
+    # The spec's extra route. Published explicitly: the gateway rewrites onto
+    # each declared entry, so `/signals` alone does NOT carry `/signals/diff`
+    # through — it would work in-cluster and 404 at the edge.
+    - /signals/diff
     - /refresh
 
 extraEnv:
@@ -54,11 +58,14 @@ extraEnv:
     value: "http://minio.monitoring.svc.cluster.local:9000"
   - name: REFRESH_MIN_INTERVAL_SECONDS
     value: "300"
-  # Scaffolded false. Flip to "true" once the real upstream is wired AND you
-  # have decided the third-party load is acceptable: the cluster is recreated
-  # on every CI run and every pod restart re-captures, so a large or
-  # rate-limited upstream should stay false here. A dispatched POST /refresh
-  # reaches the upstream regardless of this flag.
+  # FALSE AS A LOAD DECISION, not to dodge a startup bug — the same call
+  # player-identity and roster-scope made, for the same reason. The upstream
+  # asset is **52.9 MB** (measured `Content-Length`, 2026-07-30) and this
+  # collector's cadence class is `volatile`, i.e. every 15 minutes. Left on,
+  # every CI cluster and every pod restart would pull ~5 GB/day from a free
+  # community mirror this project does not pay for. `POST /refresh` still
+  # reaches the upstream regardless of this flag, which is how the route is
+  # exercised deliberately rather than continuously.
   - name: CAPTURE_ENABLED
     value: "false"
   - name: CAPTURE_SEASON

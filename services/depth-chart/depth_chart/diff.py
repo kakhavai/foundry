@@ -138,9 +138,7 @@ def build_diff(
         if not changes:
             continue
         team, _, position = group.partition(":")
-        groups.append(
-            {"team": team, "position": position, "changes": changes}
-        )
+        groups.append({"team": team, "position": position, "changes": changes})
 
     return {
         "signal_type": signal_type,

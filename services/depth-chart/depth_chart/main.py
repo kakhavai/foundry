@@ -1,9 +1,7 @@
 """depth-chart's process wiring: the descriptor and `/signals/diff`.
 
-Everything else — environment parsing, `CaptureState`, the capture loop, bearer
-auth, the OTel guard and the standard five routes — lives in
-`collector_core.app`. The diff's own logic lives in `diff.py`, so the route body
-here stays a parse and a delegate.
+Everything else lives in `collector_core.app`, and the diff's own logic lives in
+`diff.py` — so the route body here stays a parse and a delegate.
 """
 
 import asyncio
@@ -32,9 +30,8 @@ app = build_collector_app(
         signal_matches=signal_matches,
         metrics=metrics,
         # No `telemetry_module`: it defaults to `collector_core.telemetry`.
-        # No `next_event_at`: the volatile cadence's base interval is the whole
-        # schedule — a depth chart has no single perishable moment to escalate
-        # toward the way a kickoff does.
+        # No `next_event_at`: a depth chart has no single perishable moment to
+        # escalate toward the way a kickoff does.
     )
 )
 
@@ -49,10 +46,8 @@ async def signals_diff(
     """Ordering changes between two captures, per the Phase 8 spec.
 
     Offloaded whole rather than awaiting each lake call: `build_diff` is
-    synchronous and does one `list_keys` plus two `read`s, so running it on the
-    event loop would stall every other request — including `/health` — for the
-    duration of a prefix scan. The guarded lake makes forgetting an error rather
-    than a stall.
+    synchronous and does one `list_keys` plus two `read`s, and running a prefix
+    scan on the event loop would stall every other request, `/health` included.
     """
     spec = app.state.collector_spec
     try:

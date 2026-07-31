@@ -76,8 +76,12 @@ def test_a_promotion_is_named_as_one():
     """Named by direction rather than left as a delta: a promotion is the event
     a consumer is watching for."""
     lake = SpyLake()
-    write(lake, FIRST, [row("KC", "WR", "A", 1, "00-1"), row("KC", "WR", "B", 2, "00-2")])
-    write(lake, SECOND, [row("KC", "WR", "B", 1, "00-2"), row("KC", "WR", "A", 2, "00-1")])
+    write(
+        lake, FIRST, [row("KC", "WR", "A", 1, "00-1"), row("KC", "WR", "B", 2, "00-2")]
+    )
+    write(
+        lake, SECOND, [row("KC", "WR", "B", 1, "00-2"), row("KC", "WR", "A", 2, "00-1")]
+    )
 
     result = diff(lake)
     assert len(result["groups"]) == 1
@@ -136,6 +140,16 @@ def test_a_missing_snapshot_raises_rather_than_returning_an_empty_diff():
     with pytest.raises(SnapshotNotFound) as excinfo:
         diff(lake)
     assert stamp(SECOND) in str(excinfo.value)
+
+
+def test_a_row_identifying_nobody_is_skipped_rather_than_keyed_on_empty():
+    """Two such rows would collide on the empty key and read as one player
+    replacing another."""
+    lake = SpyLake()
+    anonymous = {"team": "KC", "position": "QB", "official_rank": 1}
+    write(lake, FIRST, [anonymous, row("KC", "QB", "Real", 2, "00-1")])
+    write(lake, SECOND, [anonymous, row("KC", "QB", "Real", 2, "00-1")])
+    assert diff(lake)["count"] == 0
 
 
 def test_only_the_two_named_objects_are_read():

@@ -104,6 +104,4 @@ def expected_groups() -> tuple[str, ...]:
     upstream is contacted, so a truncated feed carrying three teams reports
     `expected: 160, present: 15` rather than `expected: 15, present: 15`.
     """
-    return tuple(
-        group_key(team, position) for team in TEAMS for position in POSITIONS
-    )
+    return tuple(group_key(team, position) for team in TEAMS for position in POSITIONS)

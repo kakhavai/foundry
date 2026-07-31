@@ -93,6 +93,23 @@ def test_weeks_at_rank_falls_back_to_the_name_when_no_crosswalk_id_exists():
     assert weeks_at_rank(subject, None, "A") == 2
 
 
+def test_a_name_lookup_scans_past_non_matching_entries():
+    """The name fallback must keep scanning rather than stopping at the first
+    row: an early non-match would otherwise report the player as absent and
+    reset `weeks_at_rank` to zero every week."""
+    week = WeekOrdering(
+        iso_year=2026,
+        iso_week=37,
+        captured_at=NOW,
+        entries=(
+            ChartEntry(rank=1, player_name="Someone Else", gsis_id=None),
+            ChartEntry(rank=2, player_name="Wanted", gsis_id=None),
+        ),
+    )
+    subject = PositionHistory(team="KC", position="WR", weeks=(week, week))
+    assert weeks_at_rank(subject, None, "Wanted") == 2
+
+
 def test_rank_changes_counts_week_to_week_transitions_not_republishes():
     subject = history(
         ordering("B", "A", week=37),
