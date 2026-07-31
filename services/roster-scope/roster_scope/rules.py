@@ -52,6 +52,17 @@ POSITION_ALIASES: dict[str, str] = {
     "WR": "WR", "SE": "WR", "FL": "WR", "SLOT": "WR", "X": "WR", "Z": "WR",
     "TE": "TE", "Y": "TE",
     "K": "K", "PK": "K",
+    # Defensive and offensive-line labels, added for the matchup scope. These
+    # vary far more between sources than offensive ones do. EDGE collapses to
+    # LB rather than DL: charts use it for stand-up rushers who line up off
+    # the line, and the matchup question it answers is coverage/containment.
+    "CB": "CB", "DB": "CB", "NB": "CB", "NCB": "CB",
+    "S": "S", "FS": "S", "SS": "S", "SAF": "S",
+    "LB": "LB", "ILB": "LB", "OLB": "LB", "MLB": "LB", "WLB": "LB",
+    "SLB": "LB", "EDGE": "LB",
+    "DL": "DL", "DE": "DL", "DT": "DL", "NT": "DL",
+    "OL": "OL", "LT": "OL", "LG": "OL", "C": "OL", "RG": "OL", "RT": "OL",
+    "OT": "OL", "OG": "OL", "G": "OL", "T": "OL",
 }  # fmt: skip
 
 

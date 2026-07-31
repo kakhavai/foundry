@@ -57,13 +57,21 @@ def test_unranked_or_nameless_rows_are_dropped():
     assert [r.name_raw for r in charts["KC"].rows] == ["Real Player"]
 
 
-def test_rows_outside_the_scopes_positions_are_dropped_at_ingest():
-    """A memory decision, not a modelling one.
+def test_rows_outside_every_rules_demand_are_dropped_at_ingest():
+    """A memory decision, not a modelling one -- and gated on rule demand,
+    not on recognition.
 
-    The feed carries the full two-deep for every unit; the rules only ever
-    consult QB/RB/WR/TE/K. Retaining the rest OOM-killed a 256Mi pod even
-    after the body stopped being buffered, so the filter moved into the
-    adapter.
+    Two different paths to the same drop, both pinned here: `LDE` is a label
+    `canonical_position` does not recognise at all (`None`), and `LT` *is*
+    recognised -- it canonicalizes to `OL` -- but `OL` is not in
+    `WANTED_POSITIONS` because no rule here demands it yet. Gating on
+    `position not in WANTED_POSITIONS` rather than on `position is None` is
+    what keeps both dropped even though `canonical_position` now recognises
+    far more labels (CB/S/LB/DL/OL, for the matchup scope) than this rule set
+    asks for. Conflating "recognised" with "wanted" is exactly what silently
+    stopped dropping `OL` rows when the matchup scope's aliases first landed
+    in `POSITION_ALIASES` -- retaining the full two-deep for every unit is
+    what OOM-killed a 256Mi pod in the first place.
     """
     charts = parse(
         [

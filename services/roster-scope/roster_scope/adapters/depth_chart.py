@@ -31,7 +31,18 @@ from datetime import UTC, datetime
 
 import httpx
 
-from ..rules import canonical_position, canonical_team
+from ..rules import ALL_RULES, canonical_position, canonical_team
+
+# The positions any rule actually demands, derived from the rule sets rather
+# than from "canonical_position recognises it". Those two questions were the
+# same question only by accident, while the player scope was the only rule
+# set `canonical_position` served. Widening `POSITION_ALIASES` for the
+# matchup scope broke that coincidence, and the coincidence was load-bearing
+# for memory: this adapter streams a multi-megabyte feed and must retain only
+# what a rule demands, or the OOM this collector was killed by once in CI
+# comes right back. Gating on rule demand instead of on recognition keeps
+# this filter honest regardless of how wide `POSITION_ALIASES` grows.
+WANTED_POSITIONS: frozenset[str] = frozenset(rule.position for rule in ALL_RULES)
 
 # A `{season}` template, mirroring `player-projections`' PROJECTIONS_SNAPSHOT_URL:
 # the feed is published one asset per season, so a URL without the placeholder
@@ -116,12 +127,15 @@ class _ChartAccumulator:
     **Bounded by the config, not by the feed.** Two filters do that, and both
     are load-bearing rather than tidiness:
 
-    1. Rows whose position is outside the scope's rules are dropped at ingest.
-       The feed carries the full two-deep for every unit — offensive line,
-       defense, special teams — and this collector's rules only ever consult
-       QB/RB/WR/TE/K, so ~70% of it is dead weight. Carrying it to preserve
-       "the adapter does not decide what matters" cost more than the purity
-       was worth.
+    1. Rows whose position no rule demands (`WANTED_POSITIONS`) are dropped at
+       ingest. The feed carries the full two-deep for every unit — offensive
+       line, defense, special teams — and only some of that is ever consulted
+       by a rule, so the rest is dead weight. Carrying it to preserve "the
+       adapter does not decide what matters" cost more than the purity was
+       worth. Gated on rule demand rather than on whether `canonical_position`
+       merely recognises the label — recognising a label and wanting its rows
+       are different questions once more than one rule set shares
+       `canonical_position`.
 
     2. The feed is a **time series of snapshots**, not one snapshot: the same
        player appears once per `dt`, going back over the season. Only the
@@ -167,9 +181,10 @@ class _ChartAccumulator:
 
         position_raw = get("pos_abb").strip()
         position = canonical_position(position_raw)
-        if position is None:
-            # Outside the scope's rules — offensive line, defense, special
-            # teams. Filter 1 in the class docstring.
+        if position not in WANTED_POSITIONS:
+            # Dropped whether the label was unrecognised (`position is None`)
+            # or recognised but not wanted by any rule here. Filter 1 in the
+            # class docstring.
             return
 
         depth_order = _int_or_none(get("pos_rank"))
