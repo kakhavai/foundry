@@ -54,9 +54,18 @@
 #                    passed 1 against "1.0". Both gates now compare exactly.
 #   signal_types     must match the CollectorDescriptor's declared tuple
 #   scope_aware      whether the collector narrows to the roster scope.
-#                    TYPE-CHECKED ONLY. No code representation of this exists
-#                    today, so nothing verifies the value is correct — it is
-#                    human-reviewed. Do not read a green gate as confirming it.
+#                    tests/test_scope_aware_gate.py checks it STRUCTURALLY: a
+#                    collector declaring `true` must import
+#                    collector_core.scope.ScopeClient, read by AST for the
+#                    same reason this file's own gate is (platform-tests has
+#                    no fastapi/httpx). That proves the narrowing code path
+#                    exists, not that it behaves correctly — whether a capture
+#                    actually fails closed and drops out-of-scope rows is
+#                    proven per-collector by that collector's own test suite
+#                    (e.g. services/usage-share/tests/), never by this file.
+#                    A collector could still import the seam and call it
+#                    wrongly; that residual gap is human-reviewed, same as
+#                    before, just smaller than "the whole claim."
 #   depends_on       other collectors in THIS file. Self-dependency and cycles
 #                    are rejected.
 
@@ -112,16 +121,31 @@ collectors:
     cadence_class: volatile
     envelope_version: "1"
     signal_types: [player_injury_status, team_injury_report]
-    # FALSE ON PURPOSE, and it is not the default falling through. Every other
-    # signal collector narrows to roster-scope's membership list before it
-    # fetches; this one must not. An opposing cornerback ruled out moves a
-    # receiver's projection as much as the receiver's own hamstring does, and
-    # defenders never appear on an offence-oriented watchlist at all — so
-    # narrowing here would silently discard the half of the signal that is
-    # hardest to get anywhere else. The phase doc states it outright in this
-    # collector's `Scope-aware` line. TYPE-CHECKED ONLY: nothing verifies the
-    # value, which is why the reason is written down rather than inferred.
-    scope_aware: false
+    # TRUE, but on the UNION, not the membership list alone. An opposing
+    # cornerback ruled out moves a receiver's projection as much as the
+    # receiver's own hamstring does, and defenders never appear on the
+    # offence-oriented membership list at all — that observation used to be
+    # read as an argument for staying unnarrowed. It is actually the reason
+    # this collector also reads `scope_matchup_weekly`: `roster-scope`
+    # publishes a separately-bounded ~608-slot CB/S/LB/DL/OL universe for
+    # exactly this case, and `ScopeClient.fetch_union` turns the two lists
+    # into the one set this collector needs. See
+    # `injury_report/adapters/scope.py`.
+    #
+    # Honest limitation: the narrowing runs, but it currently publishes ZERO
+    # `player_injury_status` rows against a real `roster-scope`, because this
+    # collector's `resolve_player_id` mints `fdy-<sha256(...)>` stub ids and
+    # raises rather than resolving once `PLAYER_IDENTITY_URL` is set — its
+    # HTTP resolver was never built — while `roster-scope` mints
+    # `fdy-<sha1(...)>` ids. The two id spaces cannot intersect, so every row
+    # is dropped and the pass emits a loud `scope_dropped_everything` error
+    # plus counter rather than a silent empty success. Checked structurally
+    # (imports the narrowing seam) by tests/test_scope_aware_gate.py; that a
+    # capture actually narrows and fails closed is
+    # services/injury-report/tests/. Building the crosswalk so a row can
+    # actually survive the join is a known follow-up, tracked separately from
+    # this flag.
+    scope_aware: true
     # Every emitted row carries a canonical player_id, and player-identity is
     # the collector that decides what one is. The seam is
     # `injury_report/adapters/identity.py`; PLAYER_IDENTITY_URL ships empty and
@@ -133,22 +157,22 @@ collectors:
     cadence_class: weekly
     envelope_version: "1"
     signal_types: [player_usage_weekly]
-    # TYPE-CHECKED ONLY — nothing verifies this is correct.
+    # TRUE. Narrows forward, not backward: the scope is a set of canonical
+    # `fdy-` ids and the feed is keyed by GSIS id, so every upstream row's
+    # `gsis_id` is resolved to an `fdy-` id via `IdentityClient` and checked
+    # against `roster-scope`'s membership list. `gsis` is a published
+    # crosswalk source, so `player-identity` adopts the link at Tier 1 with no
+    # attribute scoring at all. See `usage_share/adapters/scope.py`.
     #
-    # `false`, and deliberately NOT the `true` the phase doc's plan line
-    # predicted. This describes what the code does, not what it intends: the
-    # collector captures every offensive-skill player its feed carries — a
-    # SUPERSET of the watchlist — because roster-scope's membership rows carry
-    # no name and no external id, so there is nothing to join a GSIS-keyed feed
-    # onto. Narrowing is impossible today, and claiming it here would be a lie
-    # only a human reviewer could catch.
-    #
-    # The superset is also the safer half of the trade: the spec's own second
-    # failure mode for this collector is scope drift — "a player promoted into
-    # the watchlist in week 9 has no rows for weeks 1-8, so any trailing
-    # average silently computes over a shorter denominator". Capturing everyone
-    # removes that failure entirely. Flip to true when the join exists.
-    scope_aware: false
+    # This replaces an earlier claim that narrowing was "impossible" because
+    # the scope's rows carry no name or external id to join a GSIS-keyed feed
+    # onto — that predated `collector_core.identity` and assumed the only
+    # possible join ran in the reverse direction (scope -> GSIS). It does not;
+    # the forward direction needs nothing from the scope but the `fdy-` id set
+    # it already publishes. Checked structurally (imports the narrowing seam)
+    # by tests/test_scope_aware_gate.py; that a capture actually narrows and
+    # fails closed is services/usage-share/tests/.
+    scope_aware: true
     depends_on: [player-identity, roster-scope]
   - name: roster-transactions
     path: /collectors/roster-transactions
