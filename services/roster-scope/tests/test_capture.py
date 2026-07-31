@@ -26,16 +26,6 @@ def _feed_url(monkeypatch):
     monkeypatch.setattr("roster_scope.adapters.depth_chart.DEPTH_CHART_URL", FEED)
 
 
-@pytest.fixture(autouse=True)
-def _reset_etags():
-    """`ETAGS` is a process-global singleton (`collector_core.conditional`), so
-    a test that seeds it must not leak state into the rest of the session's
-    suite."""
-    ETAGS.clear()
-    yield
-    ETAGS.clear()
-
-
 def mock_feed(text: str):
     return respx.get(FEED_2026).mock(return_value=httpx.Response(200, text=text))
 

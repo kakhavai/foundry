@@ -19,6 +19,7 @@ import zlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from collector_core.conditional import ETAGS
 from collector_core.envelope import ENVELOPE_VERSION, Envelope
 from collector_core.lake import lake_key
 from fastapi.testclient import TestClient
@@ -52,6 +53,22 @@ def _meter_provider():
 @pytest.fixture(autouse=True)
 def _collector_token(monkeypatch):
     monkeypatch.setenv("COLLECTOR_TOKEN", TEST_TOKEN)
+
+
+@pytest.fixture(autouse=True)
+def _reset_etags():
+    """`ETAGS` (`collector_core.conditional`) is a **process-global** singleton
+    and this collector's adapter writes to it on every successful fetch.
+
+    Here rather than in the one file that happens to seed it today: pytest runs
+    the whole suite in one process, so a stored ETag leaks into every later
+    test's transport as an `If-None-Match` header. In `conftest.py` the
+    isolation is structural; in a test file it lasts exactly as long as the
+    next author remembering to re-add it.
+    """
+    ETAGS.clear()
+    yield
+    ETAGS.clear()
 
 
 @pytest.fixture

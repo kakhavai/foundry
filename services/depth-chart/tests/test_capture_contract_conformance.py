@@ -38,16 +38,6 @@ FIELD_SCHEMAS = json.loads((CONTRACTS / "collectors" / "depth-chart.json").read_
 FEED = source_ref(2026, 1)
 
 
-@pytest.fixture(autouse=True)
-def _reset_etags():
-    """`ETAGS` is a process-global singleton (`collector_core.conditional`), so
-    a test that seeds it must not leak state into the rest of the session's
-    suite."""
-    ETAGS.clear()
-    yield
-    ETAGS.clear()
-
-
 def validate(envelopes: dict) -> None:
     for signal_type, envelope in envelopes.items():
         body = envelope.to_dict()
