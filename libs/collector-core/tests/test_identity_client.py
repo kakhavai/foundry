@@ -350,6 +350,196 @@ async def test_a_new_crosswalk_version_invalidates_the_cache():
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_an_unreachable_upstream_does_not_raise():
+    """THE regression test for the missing error contract.
+
+    The design spec: 'player-identity unreachable -> affected players
+    resolve to nothing; each lands in coverage.missing with reason
+    identity_unresolved. The pass still writes an envelope.' A bare
+    `raise_for_status()` used to propagate `httpx.HTTPStatusError` straight
+    out of `resolve_many`, which would take a collector's whole capture pass
+    down on a single 503 instead of a classified partial.
+    """
+    respx.post(f"{BASE}/resolve/batch").mock(return_value=httpx.Response(503))
+    query = ResolveQuery(
+        name="X", team=None, position=None, source=None, source_id=None
+    )
+    async with httpx.AsyncClient() as client:
+        identity = IdentityClient(BASE, client, token="t")
+        got = await identity.resolve_many([query])
+
+    assert got == {}
+    assert identity.failures == {query: identity.failures[query]}
+    assert "identity_upstream_error" in identity.failures[query]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_connection_error_does_not_raise():
+    respx.post(f"{BASE}/resolve/batch").mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+    query = ResolveQuery(
+        name="X", team=None, position=None, source=None, source_id=None
+    )
+    async with httpx.AsyncClient() as client:
+        identity = IdentityClient(BASE, client, token="t")
+        got = await identity.resolve_many([query])
+
+    assert got == {}
+    assert query in identity.failures
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_failed_chunk_does_not_discard_an_earlier_successful_chunk():
+    """A batch spanning two chunks where only the second fails must not lose
+    what the first already resolved -- the exact shape of the review's
+    failure scenario: chunks 1-2 resolve, chunk 3 gets a 503."""
+    route = respx.post(f"{BASE}/resolve/batch")
+    calls = {"n": 0}
+
+    def _respond(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        _result(f"P{i}", True, f"fdy-{i}") for i in range(BATCH_LIMIT)
+                    ],
+                    "count": BATCH_LIMIT,
+                    "resolved_count": BATCH_LIMIT,
+                    "unresolved_count": 0,
+                },
+            )
+        return httpx.Response(503)
+
+    route.mock(side_effect=_respond)
+
+    queries = [
+        ResolveQuery(
+            name=f"P{i}", team=None, position=None, source=None, source_id=None
+        )
+        for i in range(BATCH_LIMIT)
+    ]
+    straggler = ResolveQuery(
+        name="Straggler", team=None, position=None, source=None, source_id=None
+    )
+    queries.append(straggler)
+
+    async with httpx.AsyncClient() as client:
+        identity = IdentityClient(BASE, client, token="t")
+        got = await identity.resolve_many(queries)
+
+    assert len(got) == BATCH_LIMIT
+    assert route.call_count == 2
+    assert identity.failures == {straggler: identity.failures[straggler]}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_failures_reset_on_each_call_even_when_the_new_call_succeeds():
+    route = respx.post(f"{BASE}/resolve/batch")
+    responses = iter(
+        [
+            httpx.Response(503),
+            httpx.Response(
+                200,
+                json={
+                    "results": [_result("X", True, "fdy-x")],
+                    "count": 1,
+                    "resolved_count": 1,
+                    "unresolved_count": 0,
+                },
+            ),
+        ]
+    )
+    route.mock(side_effect=lambda request: next(responses))
+    query = ResolveQuery(
+        name="X", team=None, position=None, source=None, source_id=None
+    )
+    async with httpx.AsyncClient() as client:
+        identity = IdentityClient(BASE, client, token="t")
+        await identity.resolve_many([query])
+        assert identity.failures, "first call failed and must be recorded"
+        await identity.resolve_many([query])
+        assert identity.failures == {}, "a clean call must clear the prior failure"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_malformed_response_still_raises_rather_than_being_swallowed():
+    """The failure-handling added for an unreachable upstream must not widen
+    to cover a `player-identity` contract violation too -- a response with
+    the wrong shape is a bug in that service, not a reachability problem,
+    and must keep raising."""
+    respx.post(f"{BASE}/resolve/batch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [_result("A", True, "fdy-a")],
+                "count": 1,
+                "resolved_count": 1,
+                "unresolved_count": 0,
+            },
+        )
+    )
+    queries = [
+        ResolveQuery(name="A", team=None, position=None, source=None, source_id=None),
+        ResolveQuery(name="B", team=None, position=None, source=None, source_id=None),
+    ]
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(ValueError):
+            await IdentityClient(BASE, client, token="t").resolve_many(queries)
+
+
+def test_resolve_query_carries_jersey_number_and_season():
+    """`player-identity`'s `build_query` reads both straight off the request
+    body and `resolution.WEIGHTS` scores `jersey_number` at parity with
+    `team` -- omitting either would resolve a collector on this seam worse
+    than `roster-scope`'s own single-query resolver, which already sends
+    `jersey_number` today."""
+    query = ResolveQuery(name="X", jersey_number=87, season=2026)
+    assert query.jersey_number == 87
+    assert query.season == 2026
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_jersey_number_and_season_are_sent_on_the_wire():
+    route = respx.post(f"{BASE}/resolve/batch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [_result("X", True, "fdy-x")],
+                "count": 1,
+                "resolved_count": 1,
+                "unresolved_count": 0,
+            },
+        )
+    )
+    query = ResolveQuery(
+        name="X",
+        team=None,
+        position=None,
+        jersey_number=87,
+        season=2026,
+        source=None,
+        source_id=None,
+    )
+    async with httpx.AsyncClient() as client:
+        await IdentityClient(BASE, client, token="t").resolve_many([query])
+
+    import json as _json
+
+    sent = _json.loads(route.calls[0].request.content)["queries"][0]
+    assert sent["jersey_number"] == 87
+    assert sent["season"] == 2026
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_a_crosswalk_version_change_on_the_same_client_invalidates_the_cache():
     """A two-instance version bump doesn't distinguish a version-keyed cache
     from a version-blind one: a fresh IdentityClient always starts with an
