@@ -2,12 +2,29 @@
 
 A subclass rather than a bare `CollectorMetrics(COLLECTOR)` instance, and
 deliberately **not** consolidated into `collector-core`: the fleet-wide series
-(`collector_capture_*`, `collector_coverage_ratio`, `collector_staleness_
-seconds`) belong to the library, and the series that answer "is THIS collector
-wrong in the way only it can be wrong" belong here. A metric only one service
-records must not grow into the shared library — see player-identity's
-`identity_merge_conflicts` and roster-scope's `scope_missed_producers` for what
-that looks like when it is real.
+(`collector_capture_*`, `collector_coverage_ratio`,
+`collector_staleness_seconds`) belong to the library, and the series that
+answer "is THIS collector wrong in the way only it can be wrong" belong here.
+
+The two below are exactly that.
+
+`schedule_context_games_in_scope` catches the failure `collector_coverage_ratio`
+structurally cannot see. Coverage is computed against a floor, and the floor is
+a *lower* bound — a week that legitimately runs 13 games and a week whose feed
+lost three both report 1.0 once the observed count clears the floor. The raw
+game count is what makes "this week suddenly has fewer games than last week"
+queryable.
+
+`schedule_context_unresolved_venues` counts team-records whose venue could not
+be determined — an unrecognised neutral-site stadium name is the realistic
+cause, and it arrives silently when the league announces a new international
+venue. Those rows are dropped from `game_situational_context` with a reason,
+so the coverage ratio does move; the counter is what says *which* failure it
+was without reading every envelope's errors array.
+
+Both record on every pass, including zero. An absent Prometheus series and a
+healthy one are indistinguishable in PromQL, so a gauge written only when it
+is interesting cannot be alerted on.
 
 `ScheduleContextMetrics` is still a `CollectorMetrics`, so it satisfies
 `CollectorDescriptor.metrics` unchanged. Exactly one instance exists per
@@ -24,24 +41,23 @@ class ScheduleContextMetrics(CollectorMetrics):
     def __init__(self, collector: str = COLLECTOR) -> None:
         super().__init__(collector)
         meter = otel_metrics.get_meter(collector)
-        # PLACEHOLDER. Replace with the series that make THIS collector's own
-        # failure mode visible — the one `collector_coverage_ratio` cannot see
-        # because coverage is computed against the same input that drove the
-        # fetch. If there genuinely is no such series, delete the subclass and
-        # use `metrics = CollectorMetrics(COLLECTOR)` (weather does).
-        self._rows_captured = meter.create_gauge(
-            "schedule_context_rows_captured",
-            description="Rows captured in the last pass, by collector.",
+        self._games_in_scope = meter.create_gauge(
+            "schedule_context_games_in_scope",
+            description="Distinct games the scoped week resolved to, by collector.",
+        )
+        self._unresolved_venues = meter.create_gauge(
+            "schedule_context_unresolved_venues",
+            description=(
+                "Team-records in the scoped week whose venue could not be "
+                "resolved, by collector."
+            ),
         )
 
-    def rows_captured(self, count: int) -> None:
-        """Record every pass, including zero.
+    def games_in_scope(self, count: int) -> None:
+        self._games_in_scope.set(count, {"collector": self.collector})
 
-        An absent Prometheus series and a healthy one are indistinguishable in
-        PromQL, so a gauge only written when it is interesting cannot be
-        alerted on.
-        """
-        self._rows_captured.set(count, {"collector": self.collector})
+    def unresolved_venues(self, count: int) -> None:
+        self._unresolved_venues.set(count, {"collector": self.collector})
 
 
 metrics = ScheduleContextMetrics()

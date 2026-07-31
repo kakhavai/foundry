@@ -1,4 +1,8 @@
-"""schedule-context's process wiring: the descriptor, and nothing else yet.
+"""schedule-context's process wiring: the descriptor, and nothing else.
+
+Its spec declares no routes beyond the standard five, so there is nothing
+below the `build_collector_app` call and no `smoke.sh` — the shared contract
+surface is asserted for every registered collector automatically.
 
 Everything else — environment parsing, `CaptureState`, the capture loop, bearer
 auth, the OTel guard and the standard five routes — lives in
@@ -32,19 +36,15 @@ app = build_collector_app(
         # never pass a callable here — an already-bound function defeats the
         # guard while every test stays green.
         #
-        # No `next_event_at`: the loop runs on its cadence class's base
-        # interval and never escalates. Add one only if this collector has a
-        # genuinely perishable moment to escalate toward — weather's
-        # `next_kickoff` is the only example in the fleet.
+        # No `next_event_at`, and therefore no `scheduler.py`. weather has one
+        # because a forecast decays right up to kickoff, so the closer the
+        # game the more a re-capture is worth. Nothing here works that way:
+        # rest, travel and bye adjacency are settled the moment the kickoff
+        # time is published, days ahead, and they do not change again as the
+        # game approaches. What *does* change them is a flex or a
+        # postponement, which arrives on the league's schedule rather than on
+        # the game's — which is precisely what the weekly cadence's daily
+        # re-derivation is for. Escalating toward kickoff would poll a 2 MB
+        # feed harder for an answer that stopped moving days earlier.
     )
 )
-
-# Routes beyond the standard five go below this line, as plain `@app.get` /
-# `@app.post` handlers. Reach the lake and the collector name through
-# `app.state.collector_spec` — never a module-level global, which only this
-# file could see. Anything that touches the lake must be offloaded with
-# `asyncio.to_thread` (or `collector_core.lake`'s awrite/aread/alist_keys);
-# the lake you are handed refuses a synchronous call from the loop thread.
-#
-# Remember to publish any new path in this collector's Helm values under
-# `gateway.publicPaths`, or it 404s at the gateway while working in-cluster.

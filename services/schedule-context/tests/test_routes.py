@@ -8,11 +8,24 @@ consulted, and that auth is mounted.
 
 import time
 
+import pytest
 from collector_core.envelope import ENVELOPE_VERSION
 
-from schedule_context.capture import SIGNAL_TYPES
+from schedule_context.capture import REST, SIGNAL_TYPES, SITUATIONAL
 
-from .conftest import TEST_TOKEN
+from .conftest import TEST_TOKEN, mock_upstream, season_csv
+
+
+@pytest.fixture
+def served_upstream():
+    """The feed, served over a mocked transport for the whole test.
+
+    The capture a `/refresh` dispatches runs on the app's own event loop
+    thread, so this has to be in place before the POST rather than awaited
+    around it.
+    """
+    with mock_upstream(season_csv()):
+        yield
 
 
 def wait_for_signals(client, *, count: int, timeout: float = 10.0) -> dict:
@@ -68,38 +81,67 @@ def test_an_undeclared_filter_is_422_not_ignored(client):
     assert client.get("/signals?not_a_filter=x").status_code == 422
 
 
+def test_player_id_is_not_an_accepted_filter(client):
+    """This collector emits no `player_id`. Accepting one would return every
+    row for a query that asked about one player."""
+    assert client.get("/signals?player_id=fdy-a1b2c3").status_code == 422
+
+
 def test_an_unknown_signal_type_is_422(client):
     assert client.get("/signals?signal_type=nope").status_code == 422
 
 
-def test_refresh_is_accepted_and_the_capture_eventually_lands(client):
+def test_refresh_is_accepted_and_the_capture_eventually_lands(
+    client, served_upstream
+):
     """202 means accepted. Observe it by polling — see `wait_for_signals`."""
     accepted = client.post("/refresh", json={})
     assert accepted.status_code == 202
 
     body = wait_for_signals(client, count=len(SIGNAL_TYPES))
     assert body["count"] == len(SIGNAL_TYPES)
+    assert len(body["envelopes"]) == len(SIGNAL_TYPES)
     for envelope in body["envelopes"]:
         assert envelope["collector"] == "schedule-context"
         assert envelope["coverage"]["expected"] >= envelope["coverage"]["present"]
+        assert len(envelope["signals"]) == 32
 
 
-def test_a_second_refresh_inside_the_floor_is_429(client):
+def test_a_second_refresh_inside_the_floor_is_429(client, served_upstream):
     client.post("/refresh", json={})
     response = client.post("/refresh", json={})
     assert response.status_code == 429
     assert int(response.headers["Retry-After"]) > 0
 
 
-def test_a_row_filter_narrows_the_signals(client):
-    """`signal_matches` is this collector's own, so prove it is consulted."""
+def test_a_row_filter_narrows_the_signals(client, served_upstream):
+    """`signal_matches` is this collector's own, so prove it is consulted —
+    and that it maps the `team` parameter onto the row's `team_id`, which is
+    the mismatch that returns everything while looking like a working
+    filter."""
     client.post("/refresh", json={})
     wait_for_signals(client, count=len(SIGNAL_TYPES))
 
-    body = client.get("/signals?key=placeholder-a").json()
+    body = client.get("/signals?team=BUF").json()
     rows = [row for envelope in body["envelopes"] for row in envelope["signals"]]
-    assert rows, "the filter matched nothing — is ROW_FILTERS wired up?"
-    assert {row["key"] for row in rows} == {"placeholder-a"}
+    assert len(rows) == len(SIGNAL_TYPES), "one row per signal type for one club"
+    assert {row["team_id"] for row in rows} == {"BUF"}
+
+
+def test_the_two_signal_types_carry_their_own_fields(client, served_upstream):
+    """The split is the whole reason there are two: rest survives an
+    unresolvable venue and travel does not."""
+    client.post("/refresh", json={})
+    wait_for_signals(client, count=len(SIGNAL_TYPES))
+
+    by_type = {
+        envelope["signal_type"]: envelope
+        for envelope in client.get("/signals").json()["envelopes"]
+    }
+    assert set(by_type) == {SITUATIONAL, REST}
+    assert "days_rest" in by_type[REST]["signals"][0]
+    assert "travel_distance_mi" in by_type[SITUATIONAL]["signals"][0]
+    assert "days_rest" not in by_type[SITUATIONAL]["signals"][0]
 
 
 def test_a_data_route_without_a_token_is_401(client):
