@@ -110,7 +110,7 @@ class _RecordingMetrics:
     def upstream_unchanged(self) -> None:
         self._recorded.append("unchanged")
 
-    def capture_failure(self, exc: BaseException) -> None:
+    def capture_failure(self, exc: BaseException, reason: str | None = None) -> None:
         self._recorded.append("failure")
 
 

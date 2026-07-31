@@ -181,9 +181,28 @@ class CollectorMetrics:
         """
         self._unchanged.add(1, {"collector": self.collector})
 
-    def capture_failure(self, exc: BaseException) -> None:
+    def capture_failure(self, exc: BaseException, reason: str | None = None) -> None:
+        """Count a failed pass, labelled by cause.
+
+        `reason` overrides the exception classifier, and exists because the
+        classifier can only see exception *types*. A collector that fails
+        closed raises `ScopeUnavailable`, which `_reason` has no case for and
+        therefore labels `unknown` — so `scope_unavailable`, `scope_empty` and
+        `identity_unavailable`, three facts with three different fixes that
+        the envelope's `errors` array keeps carefully apart, all arrived in
+        Prometheus as one undifferentiated bucket shared with genuine crashes.
+        Prometheus is the alerting surface; the envelope is the forensic one,
+        and the distinction has to exist in both.
+
+        `fail_capture` passes the same `reason` it writes into the envelope, so
+        the label and the `errors` entry cannot disagree. Every value in the
+        fleet is a literal (`_reason`'s five, plus each collector's own small
+        set), so the label stays bounded — do not pass an exception string, a
+        player id, or anything else derived from data.
+        """
         self._failures.add(
-            1, {"collector": self.collector, "reason": self._reason(exc)}
+            1,
+            {"collector": self.collector, "reason": reason or self._reason(exc)},
         )
 
     def auth_failure(self, reason: str) -> None:

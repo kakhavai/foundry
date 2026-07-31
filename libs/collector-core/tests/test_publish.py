@@ -101,7 +101,7 @@ class _SpyMetrics:
     def coverage(self, signal_type: str, ratio: float) -> None:
         self.coverage_calls.append((signal_type, ratio))
 
-    def capture_failure(self, exc: BaseException) -> None:
+    def capture_failure(self, exc: BaseException, reason: str | None = None) -> None:
         self.failures.append(exc)
 
     def staleness(self, seconds: float) -> None:  # used by run_capture_loop

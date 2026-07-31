@@ -45,7 +45,7 @@ class RecordingMetrics:
     def capture_attempt(self):
         self.attempts += 1
 
-    def capture_failure(self, exc):
+    def capture_failure(self, exc, reason=None):
         self.failures.append(exc)
 
     def coverage(self, signal_type, ratio):
