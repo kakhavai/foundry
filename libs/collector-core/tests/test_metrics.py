@@ -266,3 +266,9 @@ def test_last_value_gauge_is_reusable_by_a_per_collector_subclass(scrape):
     series = scrape()
 
     assert read(series, "example_subclass_gauge", collector="survives-subclass") == 7.0
+
+
+def test_upstream_unchanged_is_recordable():
+    """Named `collector_upstream_unchanged`; OTel appends `_total`."""
+    metrics = CollectorMetrics("a-collector")
+    metrics.upstream_unchanged()  # must not raise

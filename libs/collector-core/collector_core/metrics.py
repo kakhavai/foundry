@@ -124,6 +124,13 @@ class CollectorMetrics:
             "collector_auth_failures",
             description="Collector API requests rejected by the token check, by cause.",
         )
+        self._unchanged = meter.create_counter(
+            "collector_upstream_unchanged",
+            description=(
+                "Capture passes skipped because the upstream answered 304, "
+                "by collector."
+            ),
+        )
         # Observable, not synchronous. A synchronous gauge here is absent from
         # every scrape that does not immediately follow a capture -- see
         # `LastValueGauge`.
@@ -164,6 +171,15 @@ class CollectorMetrics:
 
     def capture_attempt(self) -> None:
         self._requests.add(1, {"collector": self.collector})
+
+    def upstream_unchanged(self) -> None:
+        """A pass that fetched nothing because the upstream was unchanged.
+
+        Deliberately NOT `collector_capture_failures_total`: this is a
+        healthy outcome, and the whole saving the mechanism exists for is
+        invisible without a counter that says how often it fires.
+        """
+        self._unchanged.add(1, {"collector": self.collector})
 
     def capture_failure(self, exc: BaseException) -> None:
         self._failures.add(

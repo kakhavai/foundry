@@ -100,6 +100,27 @@ class CaptureState:
             self.envelopes = envelopes
             self.last_capture_at = now
 
+    def mark_unchanged(self, now: datetime) -> None:
+        """Record a pass that confirmed the upstream is unchanged (a 304).
+
+        Advances `last_capture_at` but leaves `envelopes` alone. Staleness
+        means "how long since we confirmed this data is current", not "since
+        we last wrote bytes" — otherwise a perfectly healthy collector climbs
+        toward a staleness alert precisely *because* its upstream is stable,
+        which is backwards.
+
+        Consequence worth knowing: `/catalog`'s `last_capture_at` advances
+        while the newest lake envelope's `captured_at` does not. That is the
+        two fields meaning different things, not drift — a lake consumer
+        reading the older timestamp is reading the truth, because the data
+        genuinely is that old.
+
+        Same monotonicity guard as `apply_capture`, for the same reason.
+        Call only while holding `lock`.
+        """
+        if self.last_capture_at is None or now > self.last_capture_at:
+            self.last_capture_at = now
+
 
 # The capture entry point a collector supplies. Matches the shape of
 # weather's `capture_week`: positional `season`, `week`, keyword-only

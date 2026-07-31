@@ -408,6 +408,34 @@ def test_apply_capture_accepts_a_newer_pass(spec):
     assert state.envelopes["alpha"].signals == [{"widget_id": "x"}]
 
 
+def _sentinel_envelopes():
+    return {"a_signal": object()}
+
+
+def test_mark_unchanged_advances_the_clock_without_touching_envelopes():
+    """A 304 confirms the data is current. Staleness must reset; the
+    published envelopes must survive untouched."""
+    state = CaptureState()
+    envelopes = _sentinel_envelopes()
+    state.apply_capture(envelopes, NOW)
+
+    state.mark_unchanged(NOW + timedelta(minutes=15))
+
+    assert state.last_capture_at == NOW + timedelta(minutes=15)
+    assert state.envelopes is envelopes
+
+
+def test_mark_unchanged_never_moves_the_clock_backwards():
+    """Same belt-and-braces `apply_capture` applies: a pass describing an
+    older `now` must not overwrite a newer one."""
+    state = CaptureState()
+    state.apply_capture(_sentinel_envelopes(), NOW)
+
+    state.mark_unchanged(NOW - timedelta(minutes=15))
+
+    assert state.last_capture_at == NOW
+
+
 async def test_the_loop_and_a_dispatched_refresh_serialize_on_the_shared_lock(spec):
     """FINDING 3: `/refresh`'s dispatched capture (`_run_capture`) and the
     background loop (`run_capture_loop`) each used to write
