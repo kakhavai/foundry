@@ -66,19 +66,35 @@ ships empty and ids are minted deterministically from the upstream's own stable
 player key; a row with no such key is dropped and counted rather than hashed
 from a display name.
 
-**Known gap: the stub ids do not join with `roster-scope`'s real ones.**
-`roster-scope` (and `usage-share`, `player-stats`) resolve through the real
-`player-identity` deployment, so their published ids are canonical
-`player-identity` ids. This collector's stub mints `fdy-<sha256(external_id)>`
-locally instead — a different id space entirely. Until `adapters/identity.py`
-grows an HTTP crosswalk like `player-stats`' `HttpIdCrosswalk` (unlike that
+**Known gap: the stub ids do not join with `roster-scope`'s real ones, so
+`player_injury_status` publishes NOTHING today.** `roster-scope` (and
+`usage-share`, `player-stats`) resolve through the real `player-identity`
+deployment, so their published ids are canonical `player-identity` ids
+(`fdy-<sha1("sleeper:<id>")[:12]>`, see `roster_scope/scope.py`). This
+collector's stub mints `fdy-<sha256(external_id)[:12]>` locally instead — a
+different digest over a different input, so the two id spaces do not
+intersect. Until `adapters/identity.py` grows
+an HTTP crosswalk like `player-stats`' `HttpIdCrosswalk` (unlike that
 collector, this one's `PLAYER_IDENTITY_URL` path is not built; it deliberately
 raises `identity_resolver_unavailable` rather than silently minting stub ids
 against a cluster expecting real ones), `player_injury_status` narrows against
-a scope it can never actually match in a real deployment — every row is
-dropped, silently, because none of its stub ids are ever in `roster-scope`'s
-real membership or matchup lists. `team_injury_report` is unaffected, since it
-does not narrow by player id at all.
+a scope it can never actually match in **any** real deployment, local Kind
+included — every row is dropped, every pass, because none of its stub ids are
+ever in `roster-scope`'s real membership or matchup lists. `team_injury_report`
+is unaffected, since it does not narrow by player id at all.
+
+**This is loud, not silent — that is how an operator will know.** Coverage
+alone can't show it: `coverage.expected`/`present`/`ratio` are computed from
+team-level filing keys shared with `team_injury_report`, so a
+`player_injury_status` pass that drops every row still reports a *healthy*
+ratio. Instead, whenever narrowing resolves at least one player row and keeps
+none of them, the pass records an `errors` entry with reason
+`scope_dropped_everything` (carrying how many rows were offered) and
+increments `injury_report_scope_dropped_everything_total`. It does **not**
+fire on a genuinely quiet week (no rows offered at all) — those two states
+must stay distinguishable, which is the entire point. Until the crosswalk
+above is built, expect this counter to increment on essentially every pass
+that has an injury to report.
 
 ## Empty report vs. no report
 
@@ -127,6 +143,7 @@ Beyond the fleet-wide `collector_*` series:
 |---|---|
 | `injury_report_teams_published{practice_day}` / `injury_report_teams_with_games{practice_day}` | one club's feed breaking on **one day**, which a week-level ratio hides |
 | `injury_report_unmapped_rows{reason}` | understanding less of the feed every week, which otherwise looks like the feed getting quieter |
+| `injury_report_scope_dropped_everything_total` | narrowing excluding every resolved `player_injury_status` row in a pass — invisible to `coverage.ratio`, which is team-keyed, so this is the only signal that distinguishes it from a genuinely quiet week. See "Known gap" above |
 
 ## Before the real upstream is wired
 

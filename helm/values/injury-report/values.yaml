@@ -94,10 +94,12 @@ extraEnv:
   # narrows against `roster-scope`'s real membership/matchup ids either way
   # (see capture.py), so until that crosswalk is built, every
   # `player_injury_status` row is dropped in a real deployment regardless of
-  # this setting — silently (scope mismatch) if left empty, loudly
-  # (`identity_resolver_unavailable`) if set. Left empty for the quieter of
-  # two non-functional outcomes; flip this in the same change that builds
-  # the crosswalk, not before.
+  # this setting. Left empty rather than set, because flipping it does not
+  # fix the join — it only trades one non-functional failure mode for
+  # another (a per-row `identity_resolver_unavailable` flood vs. this
+  # collector's own `scope_dropped_everything` pass-level signal, see
+  # capture.py and README.md's "Known gap"). Flip this in the same change
+  # that builds the crosswalk, not before.
   - name: PLAYER_IDENTITY_URL
     value: ""
   - name: CAPTURE_SEASON

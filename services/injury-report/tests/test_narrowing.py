@@ -26,12 +26,14 @@ import pytest
 from collector_core.lake import lake_key
 from collector_core.scope import ScopeUnavailable
 
+from injury_report import capture as capture_module
 from injury_report.capture import SIGNAL_TYPES, capture_injury_report
 
 from .conftest import (
     MATCHUP_SIGNAL_TYPE,
     MEMBERSHIP_SIGNAL_TYPE,
     NOW,
+    empty_filing,
     player_ids_in,
     scope_envelope,
     seed_scope,
@@ -233,3 +235,106 @@ async def test_team_injury_report_is_not_narrowed(lake, monkeypatch):
     team_rows = [row for row in envelopes[TEAM_SIGNAL].signals if row["team"] == "KC"]
     assert team_rows, "KC filed and must still appear at the team level"
     assert team_rows[0]["filing_status"] == "published"
+
+
+def _spy_on_scope_dropped_everything(monkeypatch) -> list:
+    """Records calls to `metrics.scope_dropped_everything` without touching
+    the real OTel counter, so a test can assert the metric fired (or did not)
+    independent of the errors array."""
+    calls: list = []
+    monkeypatch.setattr(
+        capture_module.metrics, "scope_dropped_everything", lambda: calls.append(1)
+    )
+    return calls
+
+
+async def test_narrowing_to_nothing_is_loud(lake, monkeypatch):
+    """Rows offered, none in scope. This must NOT look like a quiet week:
+    `coverage.ratio` is team-keyed and cannot tell the two apart on its own,
+    so both the errors array and the dedicated counter carry the signal."""
+    bench_row = wire(
+        team="KC", practice_day="wednesday", player_external_id="kc-deep-bench"
+    )
+
+    async def fake_schedule(*args, **kwargs):
+        return {"KC": "2026_01_KC_BUF"}
+
+    async def fake_rows(*args, **kwargs):
+        return [bench_row]
+
+    monkeypatch.setattr("injury_report.capture.fetch_scheduled_games", fake_schedule)
+    monkeypatch.setattr("injury_report.capture.fetch_report_rows", fake_rows)
+    calls = _spy_on_scope_dropped_everything(monkeypatch)
+    # A row was offered (the bench player resolves fine); neither list names
+    # it, so the union drops the only candidate this pass had.
+    seed_scope(lake, membership=set(), matchup=set())
+
+    envelopes = await _capture(lake)
+
+    assert envelopes[PLAYER_SIGNAL].signals == []
+    reasons = [error["reason"] for error in envelopes[PLAYER_SIGNAL].errors]
+    assert "scope_dropped_everything" in reasons, reasons
+    detail = next(
+        error["detail"]
+        for error in envelopes[PLAYER_SIGNAL].errors
+        if error["reason"] == "scope_dropped_everything"
+    )
+    assert "1" in detail, detail  # one row offered, zero survived
+    assert len(calls) == 1
+
+
+async def test_a_partial_narrow_does_not_trip_the_total_drop_guard(lake, monkeypatch):
+    """Rows offered, SOME in scope: ordinary narrowing, not an anomaly. Most
+    of a real week's offered rows are expected to be dropped -- that is the
+    whole point of narrowing -- so this must stay quiet."""
+    wr_row = wire(team="KC", practice_day="wednesday", player_external_id="kc-wr")
+    bench_row = wire(
+        team="KC", practice_day="wednesday", player_external_id="kc-deep-bench"
+    )
+    wr_id = player_ids_in([wr_row]).pop()
+
+    async def fake_schedule(*args, **kwargs):
+        return {"KC": "2026_01_KC_BUF"}
+
+    async def fake_rows(*args, **kwargs):
+        return [wr_row, bench_row]
+
+    monkeypatch.setattr("injury_report.capture.fetch_scheduled_games", fake_schedule)
+    monkeypatch.setattr("injury_report.capture.fetch_report_rows", fake_rows)
+    calls = _spy_on_scope_dropped_everything(monkeypatch)
+    seed_scope(lake, membership={wr_id}, matchup=set())
+
+    envelopes = await _capture(lake)
+
+    published = {row["player_id"] for row in envelopes[PLAYER_SIGNAL].signals}
+    assert published == {wr_id}
+    reasons = [error["reason"] for error in envelopes[PLAYER_SIGNAL].errors]
+    assert "scope_dropped_everything" not in reasons, reasons
+    assert calls == []
+
+
+async def test_a_genuinely_quiet_week_does_not_trip_the_total_drop_guard(
+    lake, monkeypatch
+):
+    """No player rows offered at all -- nobody hurt, nothing to narrow. This
+    is the case the guard exists to leave alone: a quiet week and a total
+    narrowing drop must stay distinguishable, not both trip the same alarm."""
+    quiet_filing = empty_filing(team="KC", practice_day="wednesday")
+
+    async def fake_schedule(*args, **kwargs):
+        return {"KC": "2026_01_KC_BUF"}
+
+    async def fake_rows(*args, **kwargs):
+        return [quiet_filing]
+
+    monkeypatch.setattr("injury_report.capture.fetch_scheduled_games", fake_schedule)
+    monkeypatch.setattr("injury_report.capture.fetch_report_rows", fake_rows)
+    calls = _spy_on_scope_dropped_everything(monkeypatch)
+    seed_scope(lake, membership=set(), matchup=set())
+
+    envelopes = await _capture(lake)
+
+    assert envelopes[PLAYER_SIGNAL].signals == []
+    reasons = [error["reason"] for error in envelopes[PLAYER_SIGNAL].errors]
+    assert "scope_dropped_everything" not in reasons, reasons
+    assert calls == []

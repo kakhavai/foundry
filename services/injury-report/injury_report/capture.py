@@ -297,14 +297,37 @@ async def capture_injury_report(
 
     # Narrowing's actual filter. Deliberately AFTER `build_rows` and against
     # its own coverage — `acc` above tracks one thing, "did this club file",
-    # which is unaffected by which of its players are in scope, so a player
-    # dropped here is neither `coverage.missing` nor an `errors` entry: the
-    # scope excluded it, which is not this collector's own gap. Never applied
-    # to `aggregate.team_rows` — see `adapters/scope.py` and this module's own
-    # docstring for why the team-level signal does not narrow.
+    # which is unaffected by which of its players are in scope, so an
+    # individual player dropped here is neither `coverage.missing` nor its own
+    # `errors` entry: the scope excluded it, which is not this collector's own
+    # gap. Never applied to `aggregate.team_rows` — see `adapters/scope.py`
+    # and this module's own docstring for why the team-level signal does not
+    # narrow.
+    offered_players = len(aggregate.player_rows)
     aggregate.player_rows = [
         row for row in aggregate.player_rows if row["player_id"] in player_scope.members
     ]
+
+    if offered_players and not aggregate.player_rows:
+        # The all-or-nothing case, and the one that is NOT silent: rows were
+        # resolved and offered, and the union kept none of them.
+        # `coverage.ratio` cannot reveal this — it is team-keyed, unaffected
+        # by which players survive this filter — so `signals: []` on a pass
+        # that genuinely had players to publish would otherwise look
+        # identical to a quiet week with nobody hurt. That conflation is
+        # exactly what `collector_core.failure` refuses to allow one level up
+        # (a poll that fails still writes a loud, explicit envelope rather
+        # than an inferred gap); this is the same refusal against a scope
+        # that resolves but cannot ever intersect this collector's own ids —
+        # see `adapters/identity.py`'s docstring for why that is the case
+        # today. Guarded on `offered_players` so a pass with nothing to
+        # narrow in the first place (no player rows at all) does not trip it.
+        acc.add_error(
+            "scope_dropped_everything",
+            f"{offered_players} player row(s) resolved, 0 survived the "
+            "membership/matchup union",
+        )
+        metrics.scope_dropped_everything()
 
     for day in days:
         # Every elapsed day, every pass, including the days on which nothing
