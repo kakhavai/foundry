@@ -120,9 +120,17 @@ def main() -> None:
 
     if service.build_context_root:
         # Collectors are uv workspace members depending on libs/collector-core/
-        # by path, so the build needs the repo root in its context.
+        # by path, so the build needs the repo root in its context — and they
+        # all build from ONE Dockerfile. The three build args are the only
+        # things that differ between collectors, and all three are derived:
+        # PACKAGE from the name, PORT from the Helm values file Kubernetes
+        # actually applies, so the port the container listens on cannot drift
+        # from the one the probes dial.
         run(
-            ["docker", "build", "-f", f"services/{name}/Dockerfile",
+            ["docker", "build", "-f", "Dockerfile.collector",
+             "--build-arg", f"SERVICE={name}",
+             "--build-arg", f"PACKAGE={service.package}",
+             "--build-arg", f"PORT={service.port}",
              "-t", f"{name}:local", "."],
             env=_BUILD_ENV,
         )

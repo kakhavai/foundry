@@ -251,11 +251,39 @@ def test_a_synthetic_collector_reaches_the_ci_matrix(tmp_path):
         "package": "throwaway_signal",
         # A collector builds from the repo root without being told to.
         "context": ".",
+        # And from the ONE collector Dockerfile, parameterised by three build
+        # args — all of them derived here, none in any CI file. PORT comes from
+        # the Helm values file Kubernetes applies, so the port the container
+        # listens on cannot drift from the one the probes dial.
+        "dockerfile": "Dockerfile.collector",
+        "build_args": (
+            "SERVICE=throwaway-signal\nPACKAGE=throwaway_signal\nPORT=8099\n"
+        ),
         "image": "ghcr.io/kakhavai/foundry/throwaway-signal",
     }
 
     # And the whole matrix is valid JSON, which is how the workflow consumes it.
+    # `build_args` is multi-line, so this also covers it surviving the JSON
+    # round-trip the workflow does through `fromJSON`.
     assert json.loads(json.dumps(list(entries.values())))
+
+
+def test_a_non_collector_gets_its_own_dockerfile_and_no_build_args(tmp_path):
+    """The other half of the parameterised build, and it fails quietly.
+
+    `player-projections` is not a workspace member, owns its own uv.lock, and
+    builds from its own directory — so it keeps its own Dockerfile, which
+    declares no ARGs. Handing it the collector build args anyway is not an
+    error: BuildKit prints "one or more build args were not consumed" and
+    carries on, which is precisely the kind of standing warning that teaches a
+    repo's readers to stop reading warnings.
+    """
+    synthetic, _ = _synthetic_fleet(tmp_path)
+    leg = filters.build(synthetic)[1]["player-projections"]
+
+    assert leg["dockerfile"] == "services/player-projections/Dockerfile"
+    assert leg["build_args"] == ""
+    assert leg["context"] == "services/player-projections"
 
 
 def test_a_synthetic_collector_is_generated_by_the_applicationset(tmp_path):

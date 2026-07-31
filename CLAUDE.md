@@ -513,72 +513,67 @@ committed file from the repo meanwhile, which is the spec's own fallback.
 
 ## Dockerfile Pattern (Canonical)
 
-**Collectors build from the repo root**, not the service directory, because they
-depend on the `libs/collector-core/` workspace member by path:
+**There is ONE Dockerfile for the whole collector fleet: `Dockerfile.collector`
+at the repo root.** A collector does not have, and must not acquire, a
+Dockerfile of its own. Read the file — it carries the full reasoning inline.
 
-    docker build -f services/<name>/Dockerfile -t <name>:local .
-
-`player-projections` is **not** a workspace member, owns its own `uv.lock`, and
-still builds from its own directory as the context. Do not use it as a collector
-template — `services/weather/Dockerfile` is the collector reference.
-
-**Every collector opens with the shared `workspace-manifests` stage, and it is
-not optional.** `uv sync --locked --package <x>` resolves the ENTIRE workspace
-graph before it can sync any single member, so every member's `pyproject.toml`
-must be in the build context — including members the service does not depend on.
-Listing them one `COPY` line at a time is quadratic (26 lines in each of 26
-Dockerfiles), and the line you forget breaks an **unrelated** service's image
-with `the lockfile needs to be updated`. **No pytest run can see that break**,
-because pytest never touches a Dockerfile — adding `roster-scope` broke
-`services/weather/Dockerfile` exactly this way.
-
-The stage names no member, so adding a workspace member requires no Dockerfile
-edit anywhere. `tests/test_dockerfile_workspace.py` fails the build if a
-collector loses the stage or reintroduces a per-member `COPY`.
-
-Note `COPY services/*/pyproject.toml ./services/` does **not** work as a
-shortcut: Docker flattens a multi-source `COPY` into the destination directory.
-
-```dockerfile
-FROM python:3.12-slim AS workspace-manifests
-WORKDIR /src
-COPY . .
-RUN set -eu; \
-    mkdir -p /manifests; \
-    cp pyproject.toml uv.lock /manifests/; \
-    cp -a libs /manifests/libs; \
-    find services -mindepth 2 -maxdepth 2 -name pyproject.toml \
-        -exec cp --parents {} /manifests/ \;
-
-FROM python:3.12-slim AS builder
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
-WORKDIR /app
-# Step 1: deps only. BuildKit keys `COPY --from` on the CONTENT it copies, so
-# this layer survives a service source edit and busts on a manifest/lock change.
-COPY --from=workspace-manifests /manifests/ ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-install-project --package <name>
-# Step 2: install package as wheel (--no-editable bakes it into the venv).
-# --reinstall-package is REQUIRED: the version never changes (0.1.0), so uv's
-# build cache can serve a previously built wheel for changed source and the
-# image silently ships stale code. Observed twice on roster-scope.
-COPY services/<name>/<pkg>/ ./services/<name>/<pkg>/
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable --package <name> \
-        --reinstall-package <name>
-
-FROM python:3.12-slim
-# Use numeric UID — Kubernetes runAsNonRoot requires a numeric user to verify non-root
-RUN addgroup --system --gid 65532 app && adduser --system --uid 65532 --ingroup app appuser
-WORKDIR /app
-COPY --from=builder /app/.venv /app/.venv
-USER 65532
-ENV PATH="/app/.venv/bin:$PATH"
-# No PYTHONPATH needed — --no-editable installs the package as a proper wheel
-EXPOSE <port>
-CMD ["uvicorn", "<pkg>.main:app", "--host", "0.0.0.0", "--port", "<port>"]
+```bash
+docker build -f Dockerfile.collector \
+    --build-arg SERVICE=weather --build-arg PACKAGE=weather --build-arg PORT=8000 \
+    -t weather:local .
 ```
+
+Three build args, and they are the *only* thing that differs between two
+collector images. **Nobody types them.** Both callers derive all three:
+
+| Caller | Where |
+|---|---|
+| local Kind builds | `scripts/deploy-local.py` (via `scripts/collectors.py`) |
+| CI | `.github/actions/changed-services/filters.py` → the matrix → `build-push` |
+
+`PORT` is read from `helm/values/<name>/values.yaml`'s `service.port` — the
+artifact Kubernetes actually applies — so the port the container listens on
+cannot drift from the one the probes dial. `PACKAGE` is the name with dashes
+swapped for underscores.
+
+**Collectors build from the repo root**, not the service directory, because they
+depend on the `libs/collector-core/` workspace member by path.
+`player-projections` is **not** a workspace member, owns its own `uv.lock`, and
+still builds from its own directory as the context — it is the one service that
+legitimately keeps `services/<name>/Dockerfile`. Do not use it as a collector
+template, and do not fold it into `Dockerfile.collector`.
+
+`tests/test_dockerfile_workspace.py` is the guard. It fails if a
+`services/<collector>/Dockerfile` reappears, and it pins the four mechanisms
+inside the shared file that all fail **silently** — the image builds, starts and
+passes a health check either way:
+
+- **The `workspace-manifests` stage.** `uv sync --locked --package <x>` resolves
+  the ENTIRE workspace graph before it can sync any single member, so every
+  member's `pyproject.toml` must be in the build context — including members the
+  service does not depend on. The stage gathers them by glob and names no
+  member, so adding a workspace member requires no Dockerfile edit. Listing them
+  one `COPY` line at a time was quadratic, and the line you forget breaks an
+  **unrelated** service's image with `the lockfile needs to be updated` —
+  a break **no pytest run can see**, because pytest never touches a Dockerfile.
+  (`COPY services/*/pyproject.toml ./services/` is not a shortcut: Docker
+  flattens a multi-source `COPY` into the destination directory.)
+- **Ordering: manifests → dependency sync → service source.** BuildKit keys
+  `COPY --from` on the CONTENT it copies, so the expensive sync layer survives a
+  source edit and busts on a manifest/lock change. Any other order either breaks
+  resolution or re-downloads every dependency on every source edit.
+- **`--reinstall-package ${SERVICE}` on the final sync.** The version never
+  changes (0.1.0), so uv's build cache can serve a previously built wheel for
+  changed source and the image silently ships stale code. Observed twice on
+  `roster-scope`, invalidating two rounds of measurements.
+- **`CMD ["sh", "-c", "exec uvicorn ..."]`.** Shell form is forced — exec form
+  does no variable expansion and the module and port are build args. The `exec`
+  is what makes that safe: it replaces the shell, so **PID 1 is uvicorn** and
+  Kubernetes' SIGTERM reaches the app's graceful shutdown. Drop the `exec` and
+  the only symptom is that every pod deletion burns the full grace period.
+
+Plus `USER 65532` — Kubernetes `runAsNonRoot` can only verify a **numeric**
+user, and a name makes the kubelet refuse to start the pod.
 
 ---
 

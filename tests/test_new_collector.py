@@ -507,8 +507,21 @@ def test_the_final_sync_reinstalls_the_service_package(service):
 
 
 def test_the_dockerfile_matches_the_reference_collectors_stage():
-    """The stage is verbatim across the fleet. If weather's changes and the
-    scaffolder's does not, every collector generated afterwards is wrong."""
+    """The stage is verbatim across the fleet. If the shared one changes and
+    the scaffolder's does not, every collector generated afterwards is wrong.
+
+    The reference is now the root `Dockerfile.collector` — the ONE file that
+    builds every collector — because `services/weather/Dockerfile` and its
+    eight siblings no longer exist.
+
+    Which makes this whole section a transitional check: the scaffolder should
+    stop templating a Dockerfile at all, since the file it generates would
+    immediately fail
+    `tests/test_dockerfile_workspace.py::test_no_collector_has_its_own_dockerfile`
+    once committed. Until `scripts/new-collector.py` drops `DOCKERFILE` and its
+    `services/<name>/Dockerfile` output, this at least keeps the generated copy
+    from drifting away from the real one.
+    """
     def commands(text: str) -> list[str]:
         """The stage's instructions, comments and banner styling stripped.
 
@@ -524,7 +537,7 @@ def test_the_dockerfile_matches_the_reference_collectors_stage():
         ]
 
     assert commands(new_collector.DOCKERFILE) == commands(
-        _read(ROOT / "services" / "weather" / "Dockerfile")
+        _read(ROOT / "Dockerfile.collector")
     )
 
 

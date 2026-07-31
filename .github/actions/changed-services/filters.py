@@ -106,13 +106,38 @@ def matrix_entry(service) -> dict[str, str]:
     `context` is the Docker build context — the repo root for collectors,
     because they depend on `libs/collector-core/` by path and the lock cannot
     resolve without it in the context.
+
+    `dockerfile` and `build_args` exist because every collector builds from the
+    one root `Dockerfile.collector`, parameterised by SERVICE/PACKAGE/PORT.
+    `build_args` is EMPTY for a non-collector — its own Dockerfile declares no
+    ARGs, and passing them anyway makes BuildKit warn "one or more build args
+    were not consumed" on every single build, which is how a repo teaches its
+    readers to ignore warnings.
+
+    Every field is derived — from registry membership and from the Helm values
+    file Kubernetes actually applies — so adding a collector still changes no
+    CI file. In particular PORT comes from `service.port`, so the port the
+    container listens on cannot drift from the one the probes dial.
     """
     return {
         "name": service.name,
-        "package": service.name.replace("-", "_"),
+        "package": service.package,
         "context": "." if service.is_collector else f"services/{service.name}",
+        "dockerfile": service.dockerfile,
+        "build_args": build_args(service),
         "image": f"{IMAGE_PREFIX}/{service.name}",
     }
+
+
+def build_args(service) -> str:
+    """`docker build --build-arg` lines for this service, or '' if it takes none.
+
+    The newline-separated form `docker/build-push-action`'s `build-args` input
+    takes directly.
+    """
+    if not service.is_collector:
+        return ""
+    return f"SERVICE={service.name}\nPACKAGE={service.package}\nPORT={service.port}\n"
 
 
 def build(fleet) -> tuple[dict[str, list[str]], dict[str, dict[str, str]]]:

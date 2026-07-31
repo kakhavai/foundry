@@ -202,7 +202,12 @@ jobs:
           # repo root in the context. Derived, not declared — see
           # .github/actions/changed-services/filters.py.
           context: ${{ matrix.service.context }}
-          dockerfile: services/${{ matrix.service.name }}/Dockerfile
+          # 'Dockerfile.collector' for collectors — ONE file builds the whole
+          # fleet, parameterised by the build args below; empty args and the
+          # service's own Dockerfile for a non-collector. Both derived from
+          # registry membership, same as `context`.
+          dockerfile: ${{ matrix.service.dockerfile }}
+          build-args: ${{ matrix.service.build_args }}
           image-name: ${{ matrix.service.image }}
           tag: ${{ github.sha }}
 

@@ -123,6 +123,31 @@ class Service:
         """
         return self.is_collector
 
+    @property
+    def package(self) -> str:
+        """The importable module name: the service name, dashes to underscores.
+
+        `usage-share` -> `usage_share`. Every service in the tree follows it,
+        and both the CI runtime-import check and `Dockerfile.collector`'s
+        PACKAGE build arg read it from here rather than each deriving it.
+        """
+        return self.name.replace("-", "_")
+
+    @property
+    def dockerfile(self) -> str:
+        """The Dockerfile that builds this service's image.
+
+        One file builds every collector — the only things that differ are the
+        three build args, so a per-collector Dockerfile is ~70 lines of
+        duplication whose failure mode is one image quietly drifting (a lost
+        `--reinstall-package`, a missing numeric UID) while the rest are fine.
+        `player-projections` is not a collector: not a workspace member, its
+        own uv.lock, its own directory as the build context, its own file.
+        """
+        if self.is_collector:
+            return "Dockerfile.collector"
+        return f"services/{self.name}/Dockerfile"
+
 
 def load_registry(registry_path: Path | None = None) -> list[dict]:
     """The registry's `collectors` list, in file (merge) order."""
