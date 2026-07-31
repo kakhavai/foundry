@@ -66,13 +66,19 @@ OBS_FORWARDS = [
 
 def run(cmd: list, cwd: Path | None = None) -> None:
     print(f"\n$ {' '.join(str(c) for c in cmd)}")
-    result = subprocess.run(cmd, cwd=cwd)
+    # check=False: the child's own exit code is propagated below, where
+    # CalledProcessError would replace it with a traceback and exit 1.
+    result = subprocess.run(cmd, cwd=cwd, check=False)
     if result.returncode != 0:
         sys.exit(result.returncode)
 
 
 def cluster_running() -> bool:
-    result = subprocess.run(["kind", "get", "clusters"], capture_output=True, text=True)
+    # check=False: `kind get clusters` exiting non-zero (no Docker, no kind)
+    # means "no cluster named foundry", which is exactly what False says.
+    result = subprocess.run(
+        ["kind", "get", "clusters"], capture_output=True, text=True, check=False
+    )
     return "foundry" in result.stdout.splitlines()
 
 

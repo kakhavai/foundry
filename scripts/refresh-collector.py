@@ -288,7 +288,9 @@ def refresh_url(base_url: str, service) -> str:
 def post_refresh_http(
     url: str, token: str, scope: dict, timeout: float
 ) -> tuple[int, str, str | None]:
-    """POST the scope to `url`, bearer-authenticated. Returns (status, body, Retry-After).
+    """POST the scope to `url`, bearer-authenticated.
+
+    Returns (status, body, Retry-After).
 
     A 4xx/5xx is a *reply*, not an exception -- 429 in particular is an
     expected outcome with a documented meaning, and letting urllib raise it
@@ -397,8 +399,11 @@ def post_refresh_pod(
     command = pod_command(service, scope, timeout, namespace)
     # A generous margin over the in-pod timeout: kubectl has to schedule the
     # exec before the inner request even starts.
+    # check=False: a non-zero kubectl exec is only fatal when the in-pod script
+    # also failed to emit POD_MARKER — the branch below makes that distinction,
+    # and CalledProcessError would collapse it.
     result = subprocess.run(
-        command, capture_output=True, text=True, timeout=timeout + 30
+        command, capture_output=True, text=True, timeout=timeout + 30, check=False
     )
     if result.returncode != 0 and POD_MARKER not in result.stdout:
         message = result.stderr.strip() or result.stdout.strip() or "no output"
@@ -548,9 +553,11 @@ def main(argv: list[str] | None = None) -> int:
 
     scope = build_scope(args.season, args.week)
     where = "in-pod" if args.via_pod else args.base_url
+    scope_text = (
+        json.dumps(scope, sort_keys=True) if scope else "each collector default"
+    )
     print(
-        f"POST /refresh to {len(targets)} collector(s) via {where}; "
-        f"scope: {json.dumps(scope, sort_keys=True) if scope else 'each collector default'}"
+        f"POST /refresh to {len(targets)} collector(s) via {where}; scope: {scope_text}"
     )
 
     outcomes: list[Outcome] = []

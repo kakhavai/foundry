@@ -508,7 +508,8 @@ def _mock_cluster(
 
 
 def _summary_log(metrics: dict) -> str:
-    return f"{K6_BANNER}TOTAL RESULTS\n{rl.SUMMARY_MARKER}\n{json.dumps({'metrics': metrics})}\n"
+    payload = json.dumps({"metrics": metrics})
+    return f"{K6_BANNER}TOTAL RESULTS\n{rl.SUMMARY_MARKER}\n{payload}\n"
 
 
 def test_run_shape_names_the_breached_threshold_for_a_failing_shape(

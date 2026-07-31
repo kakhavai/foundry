@@ -37,7 +37,7 @@ _BUILD_ENV = {**os.environ, "DOCKER_BUILDKIT": "1"}
 
 def run(cmd: list[str], env: dict | None = None) -> None:
     print(f"\n$ {' '.join(str(c) for c in cmd)}")
-    result = subprocess.run(cmd, env=env)
+    result = subprocess.run(cmd, env=env, check=False)
     if result.returncode != 0:
         sys.exit(result.returncode)
 
@@ -47,6 +47,7 @@ def deployment_exists(service: str) -> bool:
         ["kubectl", "get", "deployment", service],
         capture_output=True,
         text=True,
+        check=False,
     )
     return result.returncode == 0
 
@@ -58,12 +59,12 @@ def run_piped(render_cmd: list[str], apply_cmd: list[str]) -> None:
     apply -f -`, which is idempotent across every deploy after the first,
     unlike `kubectl create secret` alone.
     """
-    rendered = subprocess.run(render_cmd, capture_output=True, text=True)
+    rendered = subprocess.run(render_cmd, capture_output=True, text=True, check=False)
     if rendered.returncode != 0:
         print(rendered.stderr)
         sys.exit(rendered.returncode)
 
-    applied = subprocess.run(apply_cmd, input=rendered.stdout, text=True)
+    applied = subprocess.run(apply_cmd, input=rendered.stdout, text=True, check=False)
     if applied.returncode != 0:
         sys.exit(applied.returncode)
 

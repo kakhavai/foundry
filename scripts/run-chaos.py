@@ -71,9 +71,7 @@ def is_trivially_true(op: str, value: float) -> bool:
         return True
     if op == ">" and value < 0:
         return True
-    if op == "!=" and value < 0:
-        return True
-    return False
+    return op == "!=" and value < 0
 
 
 def parse_duration(text) -> float:
@@ -168,7 +166,9 @@ def validate_scenario(head: dict, chaos_docs: list[dict]) -> list[str]:
 def run_cmd(cmd: list[str], check: bool = True) -> None:
     """Run a command, printing it first. Optionally tolerate failure."""
     print(f"  $ {' '.join(str(c) for c in cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # `check=False` on subprocess.run, not this function's own `check` — the
+    # raising is done below, with the child's stderr in the message.
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip()
         if check:
@@ -185,8 +185,10 @@ def promql(query: str) -> dict:
     is a single invocation that behaves identically on Windows and in CI.
     """
     url = f"{PROM_PROXY}?query={urllib.parse.quote(query)}"
+    # check=False: the raise below carries kubectl's stderr, which is what
+    # actually says whether Prometheus is down or the proxy path is wrong.
     result = subprocess.run(
-        ["kubectl", "get", "--raw", url], capture_output=True, text=True
+        ["kubectl", "get", "--raw", url], capture_output=True, text=True, check=False
     )
     if result.returncode != 0:
         raise RuntimeError(f"kubectl get --raw failed: {result.stderr.strip()}")
@@ -222,8 +224,14 @@ def kubectl_docs(action: str, docs: list[dict]) -> None:
     if action == "delete":
         args.append("--ignore-not-found")
     print(f"  $ kubectl {action} -f - ({len(docs)} document(s))")
+    # check=False: a failed `delete` is tolerated (teardown is best-effort),
+    # a failed `apply` raises. The branch below draws that line.
     result = subprocess.run(
-        args, input=yaml.safe_dump_all(docs), capture_output=True, text=True
+        args,
+        input=yaml.safe_dump_all(docs),
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip()
@@ -253,6 +261,9 @@ def gateway_host() -> str:
         ],
         capture_output=True,
         text=True,
+        # check=False: an empty stdout is just as much a failure as a non-zero
+        # exit here, and the condition below has to cover both anyway.
+        check=False,
     )
     if result.returncode != 0 or not result.stdout.strip():
         raise RuntimeError("could not resolve the Envoy data-plane Service")
@@ -263,8 +274,13 @@ def traffic_up(name: str) -> None:
     """Apply a traffic Deployment, substituting the resolved gateway host."""
     text = (TRAFFIC_DIR / f"{name}.yaml").read_text()
     text = text.replace("${GATEWAY_HOST}", gateway_host())
+    # check=False: the raise below carries kubectl's stderr.
     result = subprocess.run(
-        ["kubectl", "apply", "-f", "-"], input=text, capture_output=True, text=True
+        ["kubectl", "apply", "-f", "-"],
+        input=text,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         raise RuntimeError(f"applying traffic failed: {result.stderr.strip()}")

@@ -1,11 +1,11 @@
 """Tests for scripts/argocd-deploy.py."""
 
-import sys
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 import base64
 import importlib.util
+import sys
 from itertools import cycle
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -160,11 +160,13 @@ def test_argo_password_returns_placeholder_on_failure():
 
 
 def test_poll_applications_returns_true_when_all_healthy():
-    with patch("argocd_deploy.kubectl_capture", return_value=(0, "Synced,Healthy")):
-        with patch("time.sleep"):
-            result = ad.poll_applications(
-                ["weather"], "local", None, timeout=30, poll_interval=1
-            )
+    with (
+        patch("argocd_deploy.kubectl_capture", return_value=(0, "Synced,Healthy")),
+        patch("time.sleep"),
+    ):
+        result = ad.poll_applications(
+            ["weather"], "local", None, timeout=30, poll_interval=1
+        )
     assert result is True
 
 
@@ -176,14 +178,16 @@ def test_poll_applications_returns_false_on_timeout():
         call_count += 1
         return 0 if call_count == 1 else 31  # immediate timeout on second call
 
-    with patch(
-        "argocd_deploy.kubectl_capture", return_value=(0, "OutOfSync,Progressing")
+    with (
+        patch(
+            "argocd_deploy.kubectl_capture", return_value=(0, "OutOfSync,Progressing")
+        ),
+        patch("time.sleep"),
+        patch("time.time", side_effect=fake_time),
     ):
-        with patch("time.sleep"):
-            with patch("time.time", side_effect=fake_time):
-                result = ad.poll_applications(
-                    ["weather"], "local", None, timeout=30, poll_interval=1
-                )
+        result = ad.poll_applications(
+            ["weather"], "local", None, timeout=30, poll_interval=1
+        )
     assert result is False
 
 
@@ -202,18 +206,21 @@ def test_poll_applications_all_services_must_be_healthy():
         call_count += 1
         return 0 if call_count <= 3 else 31
 
-    with patch(
-        "argocd_deploy.kubectl_capture", side_effect=lambda *a, **kw: next(responses)
+    with (
+        patch(
+            "argocd_deploy.kubectl_capture",
+            side_effect=lambda *a, **kw: next(responses),
+        ),
+        patch("time.sleep"),
+        patch("time.time", side_effect=fake_time),
     ):
-        with patch("time.sleep"):
-            with patch("time.time", side_effect=fake_time):
-                result = ad.poll_applications(
-                    ["weather", "player-projections"],
-                    "local",
-                    None,
-                    timeout=30,
-                    poll_interval=1,
-                )
+        result = ad.poll_applications(
+            ["weather", "player-projections"],
+            "local",
+            None,
+            timeout=30,
+            poll_interval=1,
+        )
     assert result is False
 
 
@@ -224,11 +231,11 @@ def test_poll_applications_uses_app_name_per_env():
         captured_names.append(args[2])
         return (0, "Synced,Healthy")
 
-    with patch("argocd_deploy.kubectl_capture", side_effect=fake_capture):
-        with patch("time.sleep"):
-            ad.poll_applications(
-                ["weather"], "staging", None, timeout=30, poll_interval=1
-            )
+    with (
+        patch("argocd_deploy.kubectl_capture", side_effect=fake_capture),
+        patch("time.sleep"),
+    ):
+        ad.poll_applications(["weather"], "staging", None, timeout=30, poll_interval=1)
     assert captured_names[0] == "weather-staging"
 
 
@@ -267,9 +274,10 @@ def test_git_commit_and_push_exits_on_commit_failure(tmp_path):
 # tmpdir and asserted the copy-and-rewrite worked — but Wave 0 deleted every
 # per-service Application manifest, so the source it fixtured does not exist and
 # `promote --to staging|prod` died on "source manifest not found: .../weather.yaml".
-# `tests/test_service_ci_coverage.py::test_argo_directory_holds_only_the_app_of_apps_and_the_set`
-# is the test that proves the deletion, and it is green — the two could not both
-# be describing the same repository.
+# `tests/test_service_ci_coverage.py`'s
+# `test_argo_directory_holds_only_the_app_of_apps_and_the_set` is the test that
+# proves the deletion, and it is green — the two could not both be describing
+# the same repository.
 
 
 def test_promotion_target_is_the_argo_directory_the_repo_actually_has():
@@ -368,9 +376,9 @@ def test_cmd_install_exits_on_sync_timeout():
         patch("argocd_deploy.poll_applications", return_value=False),
         patch("argocd_deploy.discover_services", return_value=["weather"]),
         patch("argocd_deploy.argo_values_file", return_value=Path("values.yaml")),
+        pytest.raises(SystemExit),
     ):
-        with pytest.raises(SystemExit):
-            ad.cmd_install(_make_install_args())
+        ad.cmd_install(_make_install_args())
 
 
 # ── cmd_verify ────────────────────────────────────────────────────────────────
@@ -403,9 +411,11 @@ def test_cmd_verify_exits_when_pods_not_running():
 
 
 def test_cmd_verify_exits_when_kubectl_unreachable():
-    with patch("argocd_deploy.kubectl_capture", return_value=(1, "")):
-        with pytest.raises(SystemExit):
-            ad.cmd_verify(_make_verify_args())
+    with (
+        patch("argocd_deploy.kubectl_capture", return_value=(1, "")),
+        pytest.raises(SystemExit),
+    ):
+        ad.cmd_verify(_make_verify_args())
 
 
 def test_cmd_verify_exits_when_app_not_synced():
@@ -484,9 +494,9 @@ def test_cmd_promote_exits_on_sync_timeout(tmp_path):
         patch("argocd_deploy.GITOPS_ROOT", tmp_path),
         patch("argocd_deploy.git_commit_and_push"),
         patch("argocd_deploy.poll_applications", return_value=False),
+        pytest.raises(SystemExit),
     ):
-        with pytest.raises(SystemExit):
-            ad.cmd_promote(_make_promote_args(from_env="prod", to_env="local"))
+        ad.cmd_promote(_make_promote_args(from_env="prod", to_env="local"))
 
 
 def test_cmd_promote_to_staging_writes_nothing_and_commits_nothing(tmp_path, capsys):
@@ -514,9 +524,11 @@ def test_cmd_promote_to_staging_writes_nothing_and_commits_nothing(tmp_path, cap
 
 
 def test_cmd_promote_exits_when_from_equals_to():
-    with patch("argocd_deploy.git_commit_and_push") as mock_git:
-        with pytest.raises(SystemExit):
-            ad.cmd_promote(_make_promote_args(from_env="prod", to_env="prod"))
+    with (
+        patch("argocd_deploy.git_commit_and_push") as mock_git,
+        pytest.raises(SystemExit),
+    ):
+        ad.cmd_promote(_make_promote_args(from_env="prod", to_env="prod"))
     mock_git.assert_not_called()
 
 
@@ -545,9 +557,9 @@ def test_cmd_watch_exits_nonzero_when_app_not_healthy():
     with (
         patch("subprocess.run", return_value=MagicMock(returncode=0)),
         patch("argocd_deploy.poll_applications", return_value=False),
+        pytest.raises(SystemExit),
     ):
-        with pytest.raises(SystemExit):
-            ad.cmd_watch(_make_watch_args())
+        ad.cmd_watch(_make_watch_args())
 
 
 def test_cmd_watch_polls_application_as_authoritative_gate():

@@ -90,7 +90,9 @@ def argo_values_file(env: str, argo_dir: Path = ARGO_DIR) -> Path:
 def run(cmd: list, cwd: Path | None = None) -> None:
     """Run a subprocess, print the command, exit on non-zero."""
     print(f"\n$ {' '.join(str(c) for c in cmd)}")
-    result = subprocess.run(cmd, cwd=cwd)
+    # check=False: the non-zero exit is handled below, and CalledProcessError's
+    # traceback would bury the command output the caller actually needs.
+    result = subprocess.run(cmd, cwd=cwd, check=False)
     if result.returncode != 0:
         sys.exit(result.returncode)
 
@@ -110,7 +112,8 @@ def kubectl_run(*args: str, context: str | None = None) -> None:
 def kubectl_capture(*args: str, context: str | None = None) -> tuple[int, str]:
     """Run kubectl, return (returncode, stdout). Never exits."""
     cmd = _kubectl_cmd(args, context)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # check=False: the returncode IS the return value — see the docstring.
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     return result.returncode, result.stdout.strip()
 
 
@@ -398,7 +401,8 @@ def cmd_promote(args) -> None:
     ok = poll_applications([service], to_env, ctx, timeout=args.timeout)
     if not ok:
         print(
-            f"Timeout: {app_name(service, to_env)} did not reach Synced+Healthy within {args.timeout}s"
+            f"Timeout: {app_name(service, to_env)} did not reach "
+            f"Synced+Healthy within {args.timeout}s"
         )
         sys.exit(1)
     print(f"\nDone. {service} @ {tag} is live in {to_env}.")
@@ -423,12 +427,14 @@ def cmd_watch(args) -> None:
         ),
         ctx,
     )
-    rollout = subprocess.run(rollout_cmd)
+    # check=False deliberately: a non-zero exit here is informational only —
+    # Argo CD's Application health is the authoritative gate below, and a
+    # transient rollout timeout may still reconcile to Healthy.
+    rollout = subprocess.run(rollout_cmd, check=False)
     if rollout.returncode != 0:
-        # Informational only — Argo CD's Application health is the authoritative
-        # gate below. A transient rollout timeout may still reconcile to Healthy.
         print(
-            f"  (kubectl rollout status exited {rollout.returncode}; checking Argo CD state)"
+            f"  (kubectl rollout status exited {rollout.returncode}; "
+            "checking Argo CD state)"
         )
 
     print("\n--- Application status ---")
@@ -456,7 +462,7 @@ def cmd_ui(args) -> None:
     pwd = argo_password(ctx)
     print(f"\n{'=' * 50}")
     print(f"Argo CD UI:  http://localhost:{port}")
-    print(f"Username:    admin")
+    print("Username:    admin")
     print(f"Password:    {pwd}")
     print("=" * 50)
     print("Press Ctrl+C to stop the port-forward.")
@@ -489,7 +495,10 @@ def cmd_help(args, parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="argocd-deploy",
-        description="Manage the Argo CD lifecycle: install, verify, promote, watch, and access the UI.",
+        description=(
+            "Manage the Argo CD lifecycle: install, verify, promote, watch, "
+            "and access the UI."
+        ),
     )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
     sub.required = True

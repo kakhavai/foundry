@@ -346,7 +346,12 @@ def first_breached_threshold(summary: dict) -> str | None:
 
 def kubectl(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
     print(f"  $ kubectl {' '.join(args)}")
-    result = subprocess.run(["kubectl", *args], capture_output=True, text=True)
+    # `check=False` on subprocess.run, not this function's own `check` — every
+    # caller that tolerates failure reads `result`, and the raising path below
+    # keeps kubectl's stderr in the message.
+    result = subprocess.run(
+        ["kubectl", *args], capture_output=True, text=True, check=False
+    )
     if check and result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip()
         raise RuntimeError(f"kubectl {args[0]} failed: {message}")
@@ -365,19 +370,23 @@ def configmap_up() -> None:
         args += [f"--from-file={path.name}={path}"]
     args += ["--dry-run=client", "-o", "yaml"]
     rendered = kubectl(args)
+    # check=False: the RuntimeError below is the error path, and it names the
+    # ConfigMap rather than reprinting the whole kubectl argv.
     applied = subprocess.run(
-        ["kubectl", "apply", "-f", "-"], input=rendered.stdout, text=True
+        ["kubectl", "apply", "-f", "-"], input=rendered.stdout, text=True, check=False
     )
     if applied.returncode != 0:
         raise RuntimeError("applying the script ConfigMap failed")
 
 
 def apply_job(job: dict) -> None:
+    # check=False: the raise below carries kubectl's stderr.
     result = subprocess.run(
         ["kubectl", "apply", "-f", "-"],
         input=yaml.safe_dump(job),
         capture_output=True,
         text=True,
+        check=False,
     )
     if result.returncode != 0:
         raise RuntimeError(f"applying the Job failed: {result.stderr.strip()}")
@@ -553,7 +562,8 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
             if needs_fallback(proc.returncode, SUMMARY_MARKER in logs):
                 print(
                     f"  follow stream looked incomplete (exit {proc.returncode}, "
-                    f"marker seen: {SUMMARY_MARKER in logs}) -- re-fetching settled logs"
+                    f"marker seen: {SUMMARY_MARKER in logs}) "
+                    "-- re-fetching settled logs"
                 )
                 logs = kubectl(["logs", f"job/{job_name(shape)}"]).stdout
         else:
@@ -564,7 +574,8 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
             # normal path for a quick run, not a failure; go straight to the
             # checked fetch.
             print(
-                "  pod already terminated before follow would have attached -- fetching settled logs directly"
+                "  pod already terminated before follow would have attached "
+                "-- fetching settled logs directly"
             )
             logs = kubectl(["logs", f"job/{job_name(shape)}"]).stdout
 

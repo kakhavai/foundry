@@ -8,6 +8,7 @@ about: a scenario that reports green because it cannot go red.
 
 import importlib.util
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -144,8 +145,6 @@ def test_failed_query_raises():
             {"status": "error", "error": "parse error"}, allow_empty=False
         )
 
-
-import textwrap
 
 # ── load_scenario ─────────────────────────────────────────────────────────────
 

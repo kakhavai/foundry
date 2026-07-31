@@ -270,6 +270,7 @@ def test_the_generated_service_lints_clean(service, command):
     against the generated service's own pyproject.toml config."""
     result = subprocess.run(
         [_uv(), "run", "--no-project", "--with", "ruff", "ruff", *command, "."],
+        check=False,
         cwd=service,
         capture_output=True,
         text=True,
@@ -297,6 +298,7 @@ def test_the_generated_values_lint(root):
             "-f",
             str(root / "helm" / "values" / NAME / "values.yaml"),
         ],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -316,6 +318,7 @@ def test_the_generated_values_render_the_expected_objects(root):
             "-f",
             str(root / "helm" / "values" / NAME / "values.yaml"),
         ],
+        check=False,
         capture_output=True,
         text=True,
     )
