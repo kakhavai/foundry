@@ -186,6 +186,33 @@ def expected_slots() -> tuple[str, ...]:
     )
 
 
+# The matchup scope: the players who determine how our SCOPED players
+# perform. Not "the opposing defence" -- `OL` is OUR OWN line, because pass
+# protection bears on the QB and RB already in the player scope. Every other
+# rule here is an opposing player.
+#
+# Role-matched deliberately: only positions that move a scoped player's
+# projection. Including every defensive starter would add positions no 8D
+# collector asks about, and each one is a fetch we pay for.
+MATCHUP_RULES: tuple[DepthRule, ...] = (
+    DepthRule("cb_matchup_le_4", "CB", 4),  # covers WR
+    DepthRule("s_matchup_le_3", "S", 3),  # covers WR/TE deep
+    DepthRule("lb_matchup_le_3", "LB", 3),  # covers TE/RB
+    DepthRule("dl_matchup_le_4", "DL", 4),  # pressure and run defence
+    DepthRule("ol_matchup_le_5", "OL", 5),  # OUR OWN line, versus that front
+)
+
+
+def expected_matchup_slots() -> int:
+    """Total matchup slots the config demands, across all 32 teams.
+
+    Config-derived and computed before any upstream is contacted, for the
+    same reason `expected_slots()` is: an expectation built from what a fetch
+    returned reports a truncated document as ratio 1.0.
+    """
+    return len(TEAMS) * sum(rule.max_depth for rule in MATCHUP_RULES)
+
+
 def rule_by_id(rule_id: str) -> DepthRule | None:
     for rule in ALL_RULES:
         if rule.rule_id == rule_id:

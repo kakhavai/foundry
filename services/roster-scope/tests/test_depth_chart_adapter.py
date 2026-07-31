@@ -61,26 +61,49 @@ def test_rows_outside_every_rules_demand_are_dropped_at_ingest():
     """A memory decision, not a modelling one -- and gated on rule demand,
     not on recognition.
 
-    Two different paths to the same drop, both pinned here: `LDE` is a label
-    `canonical_position` does not recognise at all (`None`), and `LT` *is*
-    recognised -- it canonicalizes to `OL` -- but `OL` is not in
-    `WANTED_POSITIONS` because no rule here demands it yet. Gating on
-    `position not in WANTED_POSITIONS` rather than on `position is None` is
-    what keeps both dropped even though `canonical_position` now recognises
-    far more labels (CB/S/LB/DL/OL, for the matchup scope) than this rule set
-    asks for. Conflating "recognised" with "wanted" is exactly what silently
-    stopped dropping `OL` rows when the matchup scope's aliases first landed
-    in `POSITION_ALIASES` -- retaining the full two-deep for every unit is
-    what OOM-killed a 256Mi pod in the first place.
+    `LDE` and `ATH` are labels `canonical_position` does not recognise at all
+    (`None`) -- special-teams and gadget-player codes the feed carries that
+    neither rule set has ever wanted. That is currently the *only* way a row
+    is dropped here: the player scope (QB/RB/WR/TE/K/DST) and the matchup
+    scope (CB/S/LB/DL/OL) together happen to cover every canonical group
+    `POSITION_ALIASES` can produce, so "recognised" and "wanted" currently
+    coincide again -- the same coincidence that broke once already (see
+    `WANTED_POSITIONS`'s comment) when only the player scope existed. Gating
+    on `position not in WANTED_POSITIONS` rather than on `position is None`
+    is what keeps this test's assertion correct independent of that
+    coincidence: if a third rule set ever wants a not-yet-covered canonical
+    group, or if a scope's rules shrink, this filter still reflects rule
+    demand rather than silently drifting back to "whatever is recognised".
+    `test_matchup_positions_are_retained_at_ingest` below is the flip side:
+    it pins that a *recognised and wanted* row (`LT` -> `OL`) is retained.
     """
     charts = parse(
         [
             depth_row("KC", "QB", 1, "A Passer"),
             depth_row("KC", "LDE", 1, "An End"),
-            depth_row("KC", "LT", 1, "A Tackle"),
+            depth_row("KC", "ATH", 1, "A Gadget Player"),
         ]
     )
     assert {r.position_raw for r in charts["KC"].rows} == {"QB"}
+
+
+def test_matchup_positions_are_retained_at_ingest():
+    """Task 6 builds the matchup list (CB/S/LB/DL/OL) from this same feed, so
+    those rows must survive Filter 1 even though the player scope's own
+    rules never consult them. `LT` canonicalizes to `OL` -- our own line,
+    per `MATCHUP_RULES` -- so it is retained, not dropped, once
+    `WANTED_POSITIONS` includes the matchup scope. Without this test,
+    someone restoring the pre-matchup-scope filter (gating on the player
+    scope's positions alone) would silently break Task 6's data source, and
+    nothing here would catch it.
+    """
+    charts = parse(
+        [
+            depth_row("KC", "QB", 1, "A Passer"),
+            depth_row("KC", "LT", 1, "A Tackle"),
+        ]
+    )
+    assert {r.position_raw for r in charts["KC"].rows} == {"QB", "LT"}
 
 
 def test_only_the_newest_snapshot_of_a_slot_is_kept():

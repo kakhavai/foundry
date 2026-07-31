@@ -31,18 +31,30 @@ from datetime import UTC, datetime
 
 import httpx
 
-from ..rules import ALL_RULES, canonical_position, canonical_team
+from ..rules import ALL_RULES, MATCHUP_RULES, canonical_position, canonical_team
 
-# The positions any rule actually demands, derived from the rule sets rather
-# than from "canonical_position recognises it". Those two questions were the
-# same question only by accident, while the player scope was the only rule
-# set `canonical_position` served. Widening `POSITION_ALIASES` for the
-# matchup scope broke that coincidence, and the coincidence was load-bearing
-# for memory: this adapter streams a multi-megabyte feed and must retain only
-# what a rule demands, or the OOM this collector was killed by once in CI
-# comes right back. Gating on rule demand instead of on recognition keeps
-# this filter honest regardless of how wide `POSITION_ALIASES` grows.
-WANTED_POSITIONS: frozenset[str] = frozenset(rule.position for rule in ALL_RULES)
+# The positions any rule actually demands -- the player scope's and the
+# matchup scope's together -- derived from the rule sets rather than from
+# "canonical_position recognises it". Those two questions were the same
+# question only by accident, while the player scope was the only rule set
+# `canonical_position` served. Widening `POSITION_ALIASES` for the matchup
+# scope broke that coincidence, and the coincidence was load-bearing for
+# memory: this adapter streams the ~37 MB feed described at the top of this
+# module and must retain only what a rule demands, or the OOM this collector
+# was killed by once already comes right back. Gating on rule demand instead
+# of on recognition keeps this filter honest regardless of how wide
+# `POSITION_ALIASES` grows.
+#
+# The union is safe, not just convenient: Task 6 builds the matchup list from
+# this same feed, so the matchup positions (CB/S/LB/DL/OL) are genuinely
+# needed downstream, not dead weight like the rest of the two-deep this
+# filter still drops. Retention grows from ~416 slots' worth to ~1,024 --
+# nowhere near the ~300k rows that caused the original OOM, so admitting them
+# preserves the property that matters (retain only what a rule demands)
+# rather than the narrower one (retain only what the player scope demands).
+WANTED_POSITIONS: frozenset[str] = frozenset(
+    rule.position for rule in (*ALL_RULES, *MATCHUP_RULES)
+)
 
 # A `{season}` template, mirroring `player-projections`' PROJECTIONS_SNAPSHOT_URL:
 # the feed is published one asset per season, so a URL without the placeholder

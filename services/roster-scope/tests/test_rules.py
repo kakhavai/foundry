@@ -4,9 +4,11 @@ import pytest
 
 from roster_scope.rules import (
     ALL_RULES,
+    MATCHUP_RULES,
     TEAMS,
     canonical_position,
     canonical_team,
+    expected_matchup_slots,
     expected_slots,
     rule_by_id,
     slot_key,
@@ -129,3 +131,24 @@ def test_an_unrecognised_label_is_dropped_not_guessed(raw):
     """Returning None keeps a punter off a CB slot. The slot then reads as
     missing, which is the honest outcome."""
     assert canonical_position(raw) is None
+
+
+def test_matchup_rules_are_role_matched_with_the_agreed_quotas():
+    quotas = {rule.position: rule.max_depth for rule in MATCHUP_RULES}
+    assert quotas == {"CB": 4, "S": 3, "LB": 3, "DL": 4, "OL": 5}, quotas
+    assert len(MATCHUP_RULES) == 5
+
+
+def test_expected_matchup_slots_is_config_derived_not_fetch_derived():
+    """Computed from config alone, BEFORE any upstream is contacted -- which
+    is what stops a truncated depth chart shrinking the denominator and
+    reporting ratio 1.0 on a hole."""
+    assert expected_matchup_slots() == len(TEAMS) * (4 + 3 + 3 + 4 + 5)
+    assert expected_matchup_slots() == 608
+
+
+def test_matchup_rule_ids_are_unique_and_distinct_from_the_player_scope():
+    matchup_ids = [rule.rule_id for rule in MATCHUP_RULES]
+    assert len(matchup_ids) == len(set(matchup_ids))
+    assert not set(matchup_ids) & {rule.rule_id for rule in ALL_RULES}
+    assert len(matchup_ids) == 5
