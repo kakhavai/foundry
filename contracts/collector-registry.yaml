@@ -109,7 +109,16 @@ collectors:
     cadence_class: volatile
     envelope_version: "1"
     signal_types: [roster_transaction]
-    # TYPE-CHECKED ONLY — nothing verifies this is correct. Set it true if this
-    # collector narrows to roster-scope's membership list before it fetches.
+    # TYPE-CHECKED ONLY — nothing verifies this is correct. False deliberately,
+    # and for a reason specific to this collector: the players who matter most
+    # here are the ones NOT yet on the watchlist, since the transaction is the
+    # thing that puts them there. Narrowing to roster-scope's membership before
+    # fetching would filter out exactly the signal.
     scope_aware: false
+    # Conceptual today, not yet a runtime call: the canonical `player_id` on
+    # every row comes from player-identity, but nothing here reaches it over
+    # HTTP — the adapter passes the upstream's id through and the crosswalk is
+    # applied downstream. Declared anyway because the phase doc names the
+    # dependency, and because this is the merge-order gate that keeps this PR
+    # behind player-identity's.
     depends_on: [player-identity]
