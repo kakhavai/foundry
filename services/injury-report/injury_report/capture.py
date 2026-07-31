@@ -59,7 +59,7 @@ from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
 from collector_core.lake import LakeWriter
 from collector_core.publish import publish_capture
-from collector_core.scope import ScopeUnavailable
+from collector_core.scope import fetch_scope_or_fail
 from collector_core.streaming import UpstreamSchemaError
 
 from .adapters.schedule import fetch_scheduled_games
@@ -176,74 +176,40 @@ async def capture_injury_report(
 
     metrics.capture_attempt()
 
+    # Every failure path below writes the same envelope and differs only in how
+    # the failure is named and what it floors `expected` to, so the invariant
+    # arguments are stated once.
+    failure_context = dict(
+        collector=COLLECTOR_NAME,
+        signal_types=SIGNAL_TYPES,
+        adapter=UPSTREAM_ADAPTER,
+        now=now,
+        scope=scope,
+        lake=lake,
+        metrics=metrics,
+        source_ref=source_ref(season, week),
+    )
+
     # BEFORE any upstream call, deliberately: this is the whole of failing
     # closed. A pass that cannot narrow costs zero calls to the schedule or
     # injury feed, not "fetch everything" and not "fetch and filter to
     # nothing". This is also the first `await`, which is what lets uvicorn
     # finish starting before any upstream or lake latency is incurred.
-    try:
-        player_scope = await fetch_scope(lake, season, week)
-    except ScopeUnavailable as exc:
-        # `exc.reason` rather than a literal: `scope_unavailable` and
-        # `scope_empty` have two different fixes, and collapsing them costs
-        # an operator the one thing the envelope could have told them. Never
-        # returns — see `fail_capture`.
-        await fail_capture(
-            exc,
-            collector=COLLECTOR_NAME,
-            signal_types=SIGNAL_TYPES,
-            adapter=UPSTREAM_ADAPTER,
-            now=now,
-            scope=scope,
-            lake=lake,
-            metrics=metrics,
-            reason=exc.reason,
-            expected=floor,
-            source_ref=source_ref(season, week),
-        )
-    except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
-        # The scope read is I/O, and `ScopeUnavailable` is only what
-        # `ScopeClient` raises when the lake answered and had nothing usable.
-        # The lake can also fail outright: botocore errors, a JSON decode
-        # failure, or `ScopeClient._parse_captured_at` raising `ValueError` on
-        # a timestamp it does not recognise. Without this arm every one of
-        # those escapes this coroutine entirely — no `present: 0` envelope, no
-        # `collector_capture_failures_total`, just a log line. No explicit
-        # `reason=`: `fail_capture` falls back to
-        # `CollectorMetrics.reason_for(exc)`, which classifies a decode or
-        # timestamp failure as `malformed` and anything else as `unknown` —
-        # both true, and neither mistakable for `scope_unavailable`.
-        await fail_capture(
-            exc,
-            collector=COLLECTOR_NAME,
-            signal_types=SIGNAL_TYPES,
-            adapter=UPSTREAM_ADAPTER,
-            now=now,
-            scope=scope,
-            lake=lake,
-            metrics=metrics,
-            expected=floor,
-            source_ref=source_ref(season, week),
-        )
+    #
+    # `fetch_scope_or_fail` owns both refusal arms — `ScopeUnavailable`
+    # forwarding `exc.reason`, and the lake failing outright with no reason at
+    # all — see its docstring for why the second one is the load-bearing half
+    # and why it lives in the library rather than in three collectors.
+    player_scope = await fetch_scope_or_fail(
+        lambda: fetch_scope(lake, season, week), expected=floor, **failure_context
+    )
 
     try:
         scheduled = await fetch_scheduled_games(season, week, client=client)
     except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
         # Never returns. Writes a `present: 0` envelope per signal type first,
         # so the gap is explicit in the lake rather than inferred from absence.
-        await fail_capture(
-            exc,
-            collector=COLLECTOR_NAME,
-            signal_types=SIGNAL_TYPES,
-            adapter=UPSTREAM_ADAPTER,
-            now=now,
-            scope=scope,
-            lake=lake,
-            metrics=metrics,
-            reason=_reason(exc),
-            expected=floor,
-            source_ref=source_ref(season, week),
-        )
+        await fail_capture(exc, reason=_reason(exc), expected=floor, **failure_context)
 
     days = practice_days_elapsed(now)
     # The observed denominator, floored. `len(scheduled)` is honest when the
@@ -261,17 +227,7 @@ async def capture_injury_report(
         # one turns a slow upstream into a loss of availability.
         exc = TimeoutError(f"capture deadline passed before {UPSTREAM_ADAPTER}")
         await fail_capture(
-            exc,
-            collector=COLLECTOR_NAME,
-            signal_types=SIGNAL_TYPES,
-            adapter=UPSTREAM_ADAPTER,
-            now=now,
-            scope=scope,
-            lake=lake,
-            metrics=metrics,
-            reason="deadline_exceeded",
-            expected=owed,
-            source_ref=source_ref(season, week),
+            exc, reason="deadline_exceeded", expected=owed, **failure_context
         )
 
     try:
@@ -283,19 +239,7 @@ async def capture_injury_report(
             days=list(days),
         )
     except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
-        await fail_capture(
-            exc,
-            collector=COLLECTOR_NAME,
-            signal_types=SIGNAL_TYPES,
-            adapter=UPSTREAM_ADAPTER,
-            now=now,
-            scope=scope,
-            lake=lake,
-            metrics=metrics,
-            reason=_reason(exc),
-            expected=owed,
-            source_ref=source_ref(season, week),
-        )
+        await fail_capture(exc, reason=_reason(exc), expected=owed, **failure_context)
 
     acc = CoverageAccumulator(floor=floor[TEAM_SIGNAL])
     aggregate = build_rows(scheduled, rows, now=now, acc=acc, metrics=metrics)
@@ -328,30 +272,20 @@ async def capture_injury_report(
         # today. Guarded on `offered_players` so a pass with nothing to
         # narrow in the first place (no player rows at all) does not trip it.
         #
-        # Inserted at the FRONT of `acc._errors`, not appended via
-        # `add_error` — the same reasoning `CoverageAccumulator.errors`
-        # itself applies to `below_expected_floor` ("First, not last, so it
-        # survives capping"). `add_error` only appends, and `errors` caps at
-        # `MAX_ERRORS` (50); a week where half the league's feed breaks can
-        # produce up to ~78 `report_not_published` entries, which would push
-        # this one off the list entirely if it were appended after them.
-        # `CoverageAccumulator` has no public "insert first" API — only
-        # `add_error`, which appends — so this reaches into `_errors`
-        # directly rather than leaving the one entry that makes a total
-        # narrowing drop visible to be silently capped away. Safe because
-        # `errors` recomputes from `_errors` on every access (never cached)
-        # and prepends its own `below_expected_floor` entry ahead of
-        # whatever `_errors` contains, so this still lands second if a floor
-        # shortfall is also present, first otherwise.
-        acc._errors.insert(
-            0,
-            {
-                "reason": "scope_dropped_everything",
-                "detail": (
-                    f"{offered_players} player row(s) resolved, 0 survived "
-                    "the membership/matchup union"
-                ),
-            },
+        # `add_priority_error`, not `add_error` — the same reasoning
+        # `CoverageAccumulator.errors` itself applies to
+        # `below_expected_floor` ("First, not last, so it survives capping").
+        # `add_error` appends, and `errors` caps at `MAX_ERRORS` (50); a week
+        # where half the league's feed breaks can produce up to ~78
+        # `report_not_published` entries, which would push this one off the
+        # list entirely if it were appended after them. This used to reach
+        # into `acc._errors` directly, because the accumulator had no public
+        # "insert first" API; it now does, so the library owns the concern for
+        # collectors exactly as it already did for its own floor shortfall.
+        acc.add_priority_error(
+            "scope_dropped_everything",
+            f"{offered_players} player row(s) resolved, 0 survived "
+            "the membership/matchup union",
         )
         metrics.scope_dropped_everything()
 

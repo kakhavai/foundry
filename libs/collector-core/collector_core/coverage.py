@@ -144,6 +144,32 @@ class CoverageAccumulator:
         """
         self._errors.append({"reason": reason, "detail": detail})
 
+    def add_priority_error(self, reason: str, detail: str = "") -> None:
+        """Record a pass-level problem that must SURVIVE the cap.
+
+        Same entry shape as `add_error`, inserted at the front rather than
+        appended — the identical reasoning `errors` already applies to
+        `below_expected_floor` ("First, not last, so it survives capping").
+        `cap_errors` keeps the first `MAX_ERRORS` entries and drops the tail,
+        so an entry that explains why a whole pass published nothing must not
+        be queued behind a few hundred routine per-key failures. A week where
+        half a league's feed breaks can produce well over the cap in ordinary
+        entries; appending would silently delete the one entry a reader needs.
+
+        Use it sparingly, and only for the entry that explains the pass. It is
+        the public form of an insert `injury-report` previously did by reaching
+        into `_errors` from `services/` — a private attribute of this class,
+        which at twenty-six collectors is exactly the kind of thing that gets
+        copied. The library already owned this concern for
+        `below_expected_floor`; it now owns it for collectors too.
+
+        Ordering against `below_expected_floor`: `errors` prepends the floor
+        shortfall ahead of everything in `_errors`, so a priority error lands
+        second when a shortfall is also present and first otherwise. Both
+        survive the cap, which is the property that matters.
+        """
+        self._errors.insert(0, {"reason": reason, "detail": detail})
+
     @property
     def observed(self) -> int:
         """How many keys this pass actually knows about, before the floor."""
