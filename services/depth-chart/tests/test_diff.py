@@ -143,12 +143,32 @@ def test_a_missing_snapshot_raises_rather_than_returning_an_empty_diff():
 
 
 def test_a_row_identifying_nobody_is_skipped_rather_than_keyed_on_empty():
-    """Two such rows would collide on the empty key and read as one player
-    replacing another."""
+    """Rows with neither a crosswalk id nor a name must be dropped, not keyed
+    on the empty string — two of them would collide there and read as one
+    player replacing another.
+
+    The two anonymous rows deliberately sit at DIFFERENT ranks across the two
+    snapshots. An earlier version of this test used the same row in both, which
+    made it pass whether the rows were skipped or collided: the empty key simply
+    matched itself. A mutation removing the skip survived it.
+    """
     lake = SpyLake()
-    anonymous = {"team": "KC", "position": "QB", "official_rank": 1}
-    write(lake, FIRST, [anonymous, row("KC", "QB", "Real", 2, "00-1")])
-    write(lake, SECOND, [anonymous, row("KC", "QB", "Real", 2, "00-1")])
+    write(
+        lake,
+        FIRST,
+        [
+            {"team": "KC", "position": "QB", "official_rank": 1},
+            row("KC", "QB", "Real", 3, "00-1"),
+        ],
+    )
+    write(
+        lake,
+        SECOND,
+        [
+            {"team": "KC", "position": "QB", "official_rank": 2},
+            row("KC", "QB", "Real", 3, "00-1"),
+        ],
+    )
     assert diff(lake)["count"] == 0
 
 
