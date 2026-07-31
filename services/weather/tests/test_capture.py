@@ -218,12 +218,25 @@ class _ExplodingLakeWriter:
 
 
 @respx.mock
-async def test_a_lake_write_failure_is_recorded_and_still_propagates(metric_value):
-    """FINDING 5: `lake.write` used to sit outside every try/except -- a
-    total lake outage propagated to the caller (logged and swallowed)
-    without incrementing a single counter, one of the two most likely
-    total-outage modes (the other is the schedule feed itself, covered in
-    `test_failure_metrics.py`).
+async def test_a_lake_outage_still_returns_the_capture_and_is_recorded(metric_value):
+    """FINDING 5, and its correction.
+
+    FINDING 5 was that `lake.write` sat outside every try/except, so a total
+    lake outage propagated without incrementing a single counter. Wrapping it
+    fixed the counter and kept the `raise` -- which turned out to be the wrong
+    half to keep. The upstream fetches all succeeded here: the envelopes are
+    built, correct, and in memory, and re-raising discarded them, so
+    `CaptureState` was never updated and `/signals` served the previous
+    capture -- or nothing at all on a first run. An **object-store** outage
+    cost **availability**, which is the exact inversion of the collector
+    contract.
+
+    `collector_core.publish.publish_capture` now owns that tail for the whole
+    fleet: the failure is still counted, and the capture is still served. This
+    is the real-collector counterpart of
+    `libs/collector-core/tests/test_publish.py`, and unlike that one it goes
+    through a real `CollectorMetrics` and a real Prometheus series rather than
+    a spy.
     """
     mock_upstreams(schedule_csv(HOME_GAME))
 
@@ -236,10 +249,9 @@ async def test_a_lake_write_failure_is_recorded_and_still_propagates(metric_valu
         or 0.0
     )
     async with httpx.AsyncClient() as client:
-        with pytest.raises(RuntimeError, match="lake unreachable"):
-            await capture_week(
-                2026, 1, client=client, lake=_ExplodingLakeWriter(), now=NOW
-            )
+        result = await capture_week(
+            2026, 1, client=client, lake=_ExplodingLakeWriter(), now=NOW
+        )
     after = (
         metric_value(
             "collector_capture_failures_total",
@@ -249,7 +261,13 @@ async def test_a_lake_write_failure_is_recorded_and_still_propagates(metric_valu
         or 0.0
     )
 
-    assert after - before == 1.0
+    # Availability: the capture survived the lake being gone.
+    assert set(result) == {"venue_forecast_kickoff", "venue_conditions_current"}
+    assert len(result) == 2
+    assert result["venue_forecast_kickoff"].coverage.present == 1
+    assert result["venue_forecast_kickoff"].signals != []
+    # Visibility: one increment per failed write, so the outage is loud.
+    assert after - before == 2.0
 
 
 @respx.mock

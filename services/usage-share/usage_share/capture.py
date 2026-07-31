@@ -40,7 +40,8 @@ from collector_core.cadence import CadenceClass
 from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
-from collector_core.lake import LakeWriter, awrite
+from collector_core.lake import LakeWriter
+from collector_core.publish import publish_capture
 
 from .adapters.upstream import (
     UPSTREAM_ADAPTER,
@@ -284,7 +285,6 @@ async def capture_usage_share(
             season, week, client=client, now=now, deadline=deadline
         )
     except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
-        metrics.capture_failure(exc)
         # Recorded even on the failure path: an absent Prometheus series and a
         # healthy one are indistinguishable, so the gauges must not simply stop.
         metrics.rows_captured(0)
@@ -368,6 +368,4 @@ async def capture_usage_share(
         errors=acc.errors,
         signals=signals,
     )
-    await awrite(lake, envelope)
-    metrics.coverage(signal_type, envelope.coverage.ratio)
-    return {signal_type: envelope}
+    return await publish_capture({signal_type: envelope}, lake=lake, metrics=metrics)

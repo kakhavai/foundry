@@ -181,10 +181,19 @@ async def test_a_failure_survives_an_unwritable_lake_and_still_re_raises():
 
 
 @respx.mock
-async def test_a_lake_failure_on_a_successful_capture_raises():
+async def test_a_lake_failure_on_a_successful_capture_still_serves_the_capture():
+    """It used to raise, which discarded a capture that had already succeeded
+    and left `/resolve` and `/signals` serving the previous one -- or nothing
+    at all on a first run. The upstream was fine; only the archival copy
+    failed. `collector_core.publish.publish_capture` counts the write failure
+    and returns the envelopes anyway."""
     mock_upstream(_document())
-    with pytest.raises(OSError):
-        await run_capture(lake=SpyLake(fail=True), floor=0)
+
+    envelopes, _, _ = await run_capture(lake=SpyLake(fail=True), floor=0)
+
+    assert set(envelopes) == {"player_identity_crosswalk", "name_resolution_miss"}
+    assert len(envelopes) == 2
+    assert envelopes["player_identity_crosswalk"].signals != []
 
 
 @respx.mock

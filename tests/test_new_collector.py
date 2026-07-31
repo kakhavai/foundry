@@ -609,13 +609,55 @@ def test_a_failed_capture_goes_through_fail_capture(root):
     )
 
 
-def test_the_lake_is_only_reached_off_the_event_loop(root):
-    """`LakeWriter` is synchronous boto3 and the lake handed to a collector
-    raises if called from the loop thread. The generated capture must use
-    `awrite`, never `lake.write(...)` directly."""
+def test_the_capture_tail_is_the_shared_one_not_a_hand_written_write_loop(root):
+    """Two invariants in one, because one mechanism now carries both.
+
+    `LakeWriter` is synchronous boto3 and the lake handed to a collector raises
+    if called from the loop thread, so a generated capture must never reach
+    `lake.write(...)` directly.
+
+    And the write loop must not be hand-written at all. Nine collectors wrote
+    their own, and eight let a failed write escape -- discarding a capture that
+    had already succeeded, so an object-store outage cost `/signals` its
+    availability rather than its freshness.
+    `collector_core.publish.publish_capture` owns the tail: it writes off the
+    loop, records coverage, counts the failure, and returns the envelopes. A
+    scaffolder that emits the old shape re-acquires the defect seventeen more
+    times.
+    """
     text = _read(root / "services" / NAME / PACKAGE / "capture.py")
-    assert "await awrite(lake," in text
+    assert "publish_capture(envelopes, lake=lake, metrics=metrics)" in text
+    assert "from collector_core.publish import publish_capture" in text
     assert "lake.write(" not in text
+    assert "await awrite(lake," not in text, (
+        "the generated capture hand-rolls the write loop the shared tail exists "
+        "to own"
+    )
+
+
+def test_the_generated_capture_does_not_double_count_a_capture_failure(root):
+    """`fail_capture` records `collector_capture_failures_total` itself. A
+    generated call to it immediately before counts the same failure twice, and
+    twenty-four collectors would inherit that.
+
+    Parsed rather than string-matched: the generated file *talks* about the
+    counter in a comment, and the thing under test is whether it calls it.
+    """
+    text = _read(root / "services" / NAME / PACKAGE / "capture.py")
+    assert "await fail_capture(" in text
+
+    tree = ast.parse(text)
+    recorded = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "capture_failure"
+    ]
+    assert recorded == [], (
+        "the generated capture records capture_failure itself; fail_capture "
+        "and publish_capture already own that counter"
+    )
 
 
 def test_the_route_test_polls_after_refresh_rather_than_reading(root):

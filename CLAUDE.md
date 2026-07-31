@@ -403,11 +403,29 @@ Three things that fail *silently* and therefore survive review:
 A collector writes none of its own coverage floor, error cap, failure envelope
 or lake offloading. `collector_core.coverage` supplies `CoverageAccumulator` and
 `cap_errors`; `collector_core.failure.fail_capture` writes the `present: 0`
-envelope and re-raises; `collector_core.lake` supplies `awrite`/`alist_keys`/
+envelope and re-raises; `collector_core.publish.publish_capture` is the
+**success** path's tail — write, record coverage, return the envelopes;
+`collector_core.lake` supplies `awrite`/`alist_keys`/
 `aread`, and the lake you are handed **refuses a synchronous call from the event
 loop thread** — boto3 on the loop gates readiness on object-store latency.
 `collector_core.streaming.stream_csv_dicts` is how a large CSV upstream is read:
 stream and filter as you parse, never hold the response twice.
+
+**An object-store outage costs freshness, not availability — same as an
+upstream one.** `publish_capture` records a failed lake write on
+`collector_capture_failures_total` and returns the envelopes anyway, so a
+capture that succeeded still reaches `/signals`. Nine collectors used to
+hand-roll that tail and eight re-raised, which discarded a good capture over a
+missing archival copy. `fail_capture` keeps the opposite answer for the
+opposite case: there the capture itself failed, and installing `present: 0`
+envelopes over the last good ones destroys good data.
+
+**The library owns `collector_capture_failures_total` for a failure that ends a
+pass.** Both `fail_capture` and `publish_capture` record it. Do not call
+`metrics.capture_failure(exc)` before either — that double-counts. Record it
+yourself only for a failure the library cannot see: one bad row, one item's
+fetch inside a multi-call pass, or a degraded path that builds its own
+envelopes. See [`docs/collectors.md`](docs/collectors.md).
 
 Any route beyond the standard five (weather's `/signals/convergence` is the
 example) is a plain `@app.get`/`@app.post` added to `main.py` after the

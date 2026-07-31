@@ -44,7 +44,8 @@ from collector_core.cadence import CadenceClass
 from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
-from collector_core.lake import LakeWriter, awrite
+from collector_core.lake import LakeWriter
+from collector_core.publish import publish_capture
 from collector_core.streaming import UpstreamSchemaError
 
 from .adapters.schedule import fetch_scheduled_games
@@ -159,7 +160,6 @@ async def capture_injury_report(
         # starting before this pass incurs any upstream or lake latency.
         scheduled = await fetch_scheduled_games(season, week, client=client)
     except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
-        metrics.capture_failure(exc)
         # Never returns. Writes a `present: 0` envelope per signal type first,
         # so the gap is explicit in the lake rather than inferred from absence.
         await fail_capture(
@@ -191,7 +191,6 @@ async def capture_injury_report(
         # survives on `/signals` — a truncated pass installed over a complete
         # one turns a slow upstream into a loss of availability.
         exc = TimeoutError(f"capture deadline passed before {UPSTREAM_ADAPTER}")
-        metrics.capture_failure(exc)
         await fail_capture(
             exc,
             collector=COLLECTOR_NAME,
@@ -215,7 +214,6 @@ async def capture_injury_report(
             days=list(days),
         )
     except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
-        metrics.capture_failure(exc)
         await fail_capture(
             exc,
             collector=COLLECTOR_NAME,
@@ -261,17 +259,10 @@ async def capture_injury_report(
             signals=aggregate.team_rows,
         ),
     }
-    for signal_type, envelope in envelopes.items():
-        try:
-            await awrite(lake, envelope)
-        except Exception as exc:  # noqa: BLE001 — the lake is unreachable
-            # Classified before it propagates. Without this the counter stays
-            # flat through an object-store outage while `/signals` quietly
-            # keeps serving the last good capture — the pass DID fail, and
-            # `collector_capture_failures_total` is what says so. Observed
-            # against a running container whose MinIO endpoint did not
-            # resolve: every other signal looked healthy.
-            metrics.capture_failure(exc)
-            raise
-        metrics.coverage(signal_type, envelope.coverage.ratio)
-    return envelopes
+    # `publish_capture` classifies and counts a failed write rather than
+    # letting it propagate. That counter staying flat through an object-store
+    # outage — while `/signals` quietly kept serving the last good capture —
+    # is what this collector observed against a container whose MinIO endpoint
+    # did not resolve; re-raising then also cost the capture that had just
+    # succeeded.
+    return await publish_capture(envelopes, lake=lake, metrics=metrics)

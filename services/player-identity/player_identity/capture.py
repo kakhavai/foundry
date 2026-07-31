@@ -14,7 +14,8 @@ from collector_core.cadence import CadenceClass
 from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
 from collector_core.failure import fail_capture
-from collector_core.lake import LakeWriter, awrite
+from collector_core.lake import LakeWriter
+from collector_core.publish import publish_capture
 
 from .adapters.sleeper import (
     UpstreamSchemaError,
@@ -250,7 +251,6 @@ async def capture_identities(
         payload, source_ref = await fetch_players(client)
         validate_document(payload, CROSSWALK_KEYS)
     except Exception as exc:  # noqa: BLE001 — total-outage path, classified here
-        metrics.capture_failure(exc)
         reason = (
             "schema"
             if isinstance(exc, UpstreamSchemaError)
@@ -360,14 +360,4 @@ async def capture_identities(
         ),
     }
 
-    for signal_type, envelope in envelopes.items():
-        try:
-            # `awrite`, not `lake.write`: boto3 is synchronous and blocking it
-            # on the event loop gates readiness on object-store latency.
-            await awrite(lake, envelope)
-        except Exception as exc:  # noqa: BLE001 — total-outage path (lake down)
-            metrics.capture_failure(exc)
-            raise
-        metrics.coverage(signal_type, envelope.coverage.ratio)
-
-    return envelopes
+    return await publish_capture(envelopes, lake=lake, metrics=metrics)

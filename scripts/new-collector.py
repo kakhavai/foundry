@@ -549,9 +549,13 @@ gap in the append-only lake *explicit* rather than something a reader has to
 infer from absence, and the re-raise is what stops `CaptureState` installing an
 empty capture over the last good one.
 
-Every lake call goes off the event loop via `awrite` — `LakeWriter` is
-synchronous boto3, and the lake handed to this function raises if it is called
-from the loop thread.
+Every lake call goes off the event loop — `LakeWriter` is synchronous boto3,
+and the lake handed to this function raises if it is called from the loop
+thread. The success path reaches it through `publish_capture`, which also
+decides what a failed write means: the capture worked and only its archival
+copy did not, so the envelopes are returned and the failure is counted rather
+than raised. Anywhere else, use `collector_core.lake`'s `awrite`/`aread`/
+`alist_keys`, or `asyncio.to_thread` around a whole synchronous helper.
 """
 
 from datetime import UTC, datetime
@@ -561,7 +565,8 @@ from collector_core.cadence import CadenceClass
 from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
-from collector_core.lake import LakeWriter, awrite
+from collector_core.lake import LakeWriter
+from collector_core.publish import publish_capture
 
 from .adapters.upstream import UPSTREAM_ADAPTER, fetch_rows, source_ref
 from .metrics import metrics
@@ -638,9 +643,11 @@ async def capture_%%pkg%%(
     try:
         rows = await fetch_rows(season, week, client=client, now=now)
     except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
-        metrics.capture_failure(exc)
-        # Writes a `present: 0` envelope per signal type, then re-raises `exc`.
-        # Never returns — do not add code after this call.
+        # Records `collector_capture_failures_total`, writes a `present: 0`
+        # envelope per signal type, then re-raises `exc`. Never returns — do
+        # not add code after this call, and do NOT call
+        # `metrics.capture_failure(exc)` first: the library owns that counter
+        # for a failure that ends a pass, and calling it here double-counts.
         await fail_capture(
             exc,
             collector=COLLECTOR_NAME,
@@ -689,10 +696,13 @@ async def capture_%%pkg%%(
             signals=signals,
         )
 
-    for signal_type, envelope in envelopes.items():
-        await awrite(lake, envelope)
-        metrics.coverage(signal_type, envelope.coverage.ratio)
-    return envelopes
+    # The shared tail: writes every envelope off the event loop, records each
+    # coverage gauge, and records `collector_capture_failures_total` if a write
+    # fails — then returns the envelopes ANYWAY. The capture succeeded; only
+    # its archival copy did not, and an object-store outage must not cost
+    # `/signals` a capture that is already built and correct. Do not replace
+    # this with a hand-written `awrite` loop.
+    return await publish_capture(envelopes, lake=lake, metrics=metrics)
 '''
 
 CONFTEST_PY = '''\

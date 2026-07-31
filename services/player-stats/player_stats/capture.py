@@ -43,7 +43,8 @@ from collector_core.cadence import CadenceClass
 from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
-from collector_core.lake import LakeWriter, awrite
+from collector_core.lake import LakeWriter
+from collector_core.publish import publish_capture
 
 from .adapters.identity import UnresolvedPlayer, build_id_resolver
 from .adapters.scope import fetch_watchlist
@@ -200,7 +201,6 @@ async def capture_player_stats(
             load_previous_state, lake, COLLECTOR_NAME, BOX_SIGNAL, season, week
         )
     except Exception as exc:  # noqa: BLE001 — written, classified, re-raised
-        metrics.capture_failure(exc)
         # Never returns. Continuing would mint revision 0 over rows already at
         # a higher revision, which breaks the monotonicity guarantee.
         await fail(exc, reason="previous_snapshot_unavailable")
@@ -211,7 +211,6 @@ async def capture_player_stats(
     try:
         rows, row_errors = await fetch_box_rows(season, week, client=client, now=now)
     except Exception as exc:  # noqa: BLE001 — written, classified, re-raised
-        metrics.capture_failure(exc)
         await fail(exc)
 
     acc = CoverageAccumulator(floor=EXPECTED_FLOOR[BOX_SIGNAL])
@@ -298,6 +297,4 @@ async def capture_player_stats(
         errors=acc.errors,
         signals=signals,
     )
-    await awrite(lake, envelope)
-    metrics.coverage(BOX_SIGNAL, envelope.coverage.ratio)
-    return {BOX_SIGNAL: envelope}
+    return await publish_capture({BOX_SIGNAL: envelope}, lake=lake, metrics=metrics)

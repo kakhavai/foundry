@@ -56,7 +56,8 @@ from collector_core.cadence import CadenceClass
 from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
 from collector_core.failure import UNKNOWN_EXPECTED_FLOOR
-from collector_core.lake import LakeWriter, awrite
+from collector_core.lake import LakeWriter
+from collector_core.publish import publish_capture
 
 from .adapters.depth_chart import depth_chart_url, fetch_depth_charts
 from .adapters.identity import build_resolver
@@ -124,15 +125,13 @@ def _envelope(
 async def _persist(
     envelopes: dict[str, Envelope], lake: LakeWriter
 ) -> dict[str, Envelope]:
-    """Write both envelopes, off the event loop — see the module docstring."""
-    for signal_type, envelope in envelopes.items():
-        try:
-            await awrite(lake, envelope)
-        except Exception as exc:  # noqa: BLE001 — total-outage path (lake unreachable)
-            metrics.capture_failure(exc)
-            raise
-        metrics.coverage(signal_type, envelope.coverage.ratio)
-    return envelopes
+    """Write both envelopes, off the event loop — see the module docstring.
+
+    A thin binding of this collector's `metrics` onto the shared tail, which
+    also decides what a failed write means: the capture succeeded, so the
+    envelopes are returned and the failure is counted rather than raised.
+    """
+    return await publish_capture(envelopes, lake=lake, metrics=metrics)
 
 
 async def capture_scope(

@@ -8,8 +8,6 @@ their failure modes.
 
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from roster_transactions.capture import SIGNAL_TYPE, capture_roster_transactions
 from roster_transactions.windows import week_window
 
@@ -142,17 +140,28 @@ async def test_duplicate_signings_are_counted_from_the_captured_rows(monkeypatch
     assert len(envelopes[SIGNAL_TYPE].signals) == 2
 
 
-async def test_a_lake_write_failure_surfaces_rather_than_being_swallowed(monkeypatch):
-    """The lake is the only durable copy. A pass that served an envelope it
-    never managed to write must not report success."""
-    with pytest.raises(RuntimeError, match="lake unreachable"):
-        await capture_with(
-            monkeypatch,
-            rows=[_row(hours=1)],
-            now=NOW,
-            covers_through=NOW,
-            lake=SpyLake(fail_write=True),
-        )
+async def test_a_lake_write_failure_is_counted_rather_than_swallowed_or_fatal(
+    monkeypatch,
+):
+    """The lake is the only durable copy, so a pass that could not write must
+    not look like a clean one -- `collector_core.publish.publish_capture`
+    increments `collector_capture_failures_total` for every failed write.
+
+    It must not be *fatal* either, which is what this used to assert. The
+    upstream fetch succeeded; the envelope is built and correct. Raising here
+    discarded it and left `/signals` on the previous capture, so an
+    object-store outage cost availability rather than freshness.
+    """
+    envelopes = await capture_with(
+        monkeypatch,
+        rows=[_row(hours=1)],
+        now=NOW,
+        covers_through=NOW,
+        lake=SpyLake(fail_write=True),
+    )
+
+    assert set(envelopes) == {SIGNAL_TYPE}
+    assert len(envelopes[SIGNAL_TYPE].signals) == 1
 
 
 async def test_the_envelope_scope_names_the_captured_week(monkeypatch):

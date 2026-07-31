@@ -231,7 +231,6 @@ halves:
 try:
     rows = await fetch_rows(season, week, client=client, now=now)
 except Exception as exc:
-    metrics.capture_failure(exc)
     await fail_capture(                    # writes, then RE-RAISES. Never returns.
         exc,
         collector=COLLECTOR_NAME, signal_types=SIGNAL_TYPES,
@@ -249,6 +248,63 @@ freshness.
 
 Pass `expected=` so each signal type floors to its real number. Without it every
 failure envelope floors to 1, and the coverage ratio reads better than it is.
+
+**Do not call `metrics.capture_failure(exc)` before it.** `fail_capture`
+records `collector_capture_failures_total` itself, once per failed pass. This
+used to be the caller's job, which meant nothing in the library ever touched
+the counter and every collector had to remember it on every failure path —
+`weather` in five places, `roster-scope` in three, `player-identity` in three,
+the library in none. A convention twenty-six authors must each remember is not
+a guarantee.
+
+You still record it yourself for a failure **the library cannot see**: one bad
+row, one item's fetch inside a multi-call pass, or a degraded path that builds
+its own envelopes instead of routing through `fail_capture` (`roster-scope`'s
+`LedgerUnavailable` branch is the fleet's example).
+
+## The success path ends in `publish_capture`, not a write loop
+
+```python
+return await publish_capture(envelopes, lake=lake, metrics=metrics)
+```
+
+[`publish_capture`](../libs/collector-core/collector_core/publish.py) writes
+every envelope off the event loop, records every coverage gauge, records
+`collector_capture_failures_total` if a write fails — and **returns the
+envelopes anyway**. Do not hand-roll the loop it replaces.
+
+That last part is the whole point, and it is the opposite of what
+`fail_capture` does, deliberately. Nine collectors wrote their own tail and
+eight let a failed `awrite` escape:
+
+```python
+for signal_type, envelope in envelopes.items():
+    await awrite(lake, envelope)              # raises -> the envelopes are lost
+    metrics.coverage(signal_type, envelope.coverage.ratio)
+return envelopes
+```
+
+Every upstream fetch has already succeeded at that point. The envelopes are
+built, correct, and in memory; only the durable copy failed. Letting it escape
+means `_run_capture`/`run_capture_loop` catch it, `apply_capture` is never
+reached, and `/signals` serves the previous capture — or nothing at all on a
+first run. **An object-store outage cost availability**, which is exactly the
+inversion the cache exists to prevent.
+
+So: **availability wins over durability, and the durability failure is made
+loud.** The lake is append-only and resolved by recency, so the next successful
+pass writes a superseding object — a missed write is recoverable. Refusing to
+serve data the collector already has is not, for every caller in the meantime.
+
+`fail_capture` keeps the opposite answer because it is the opposite case: there
+the *capture itself* failed, and installing its `present: 0` envelopes over the
+last good ones destroys good data. "The capture failed" and "the capture
+succeeded and only its archival copy failed" are different facts.
+
+One consequence worth knowing: a collector that derives state from its own last
+lake object (`player-stats`'s revision counter) can now serve an in-memory
+envelope whose revision the lake does not have. That was already true — the
+write failed either way — and the alternative is serving nothing.
 
 ---
 

@@ -44,7 +44,8 @@ from collector_core.cadence import CadenceClass
 from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
-from collector_core.lake import LakeWriter, awrite
+from collector_core.lake import LakeWriter
+from collector_core.publish import publish_capture
 
 from .adapters.upstream import (
     UPSTREAM_ADAPTER,
@@ -175,7 +176,6 @@ async def capture_roster_transactions(
     try:
         window = await fetch_manifest(season, week, client=client, now=now)
     except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
-        metrics.capture_failure(exc)
         # Writes a `present: 0` envelope per signal type, then re-raises `exc`.
         # Never returns — do not add code after this call.
         await fail_capture(
@@ -233,7 +233,6 @@ async def capture_roster_transactions(
                 continue
             signals.append(row)
     except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
-        metrics.capture_failure(exc)
         await fail_capture(
             exc,
             collector=COLLECTOR_NAME,
@@ -276,12 +275,7 @@ async def capture_roster_transactions(
         errors=acc.errors,
         signals=signals,
     )
-    envelopes = {SIGNAL_TYPE: envelope}
-
-    for signal_type, built in envelopes.items():
-        await awrite(lake, built)
-        metrics.coverage(signal_type, built.coverage.ratio)
-    return envelopes
+    return await publish_capture({SIGNAL_TYPE: envelope}, lake=lake, metrics=metrics)
 
 
 def _safe_row(raw: dict) -> dict:

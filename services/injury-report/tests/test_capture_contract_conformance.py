@@ -163,15 +163,30 @@ async def test_a_failed_capture_writes_a_present_zero_envelope(
         assert envelope.errors[0]["reason"] == expected_reason
 
 
-async def test_an_unreachable_lake_propagates_rather_than_reporting_success():
+async def test_an_unreachable_lake_is_counted_but_does_not_cost_the_capture():
     """Found against a running container whose MinIO endpoint did not resolve:
-    the pass raised, `/signals` kept serving the last good capture (correct),
-    and every metric looked healthy (not correct). The write failure has to
-    reach `collector_capture_failures_total` and the caller, or an object-store
-    outage is indistinguishable from a quiet cadence."""
+    the pass raised, `/signals` kept serving the last good capture, and every
+    metric looked healthy. Only half of that was right.
+
+    The metric half is fixed in the library --
+    `collector_core.publish.publish_capture` increments
+    `collector_capture_failures_total` per failed write, so an object-store
+    outage is no longer indistinguishable from a quiet cadence.
+
+    The propagation half was the wrong fix. Every upstream fetch succeeded
+    here; the envelopes were built and correct. Re-raising discarded them, so
+    `CaptureState` was never updated and `/signals` fell back to the previous
+    capture -- or to nothing at all on a first run. The contract says an
+    outage costs freshness, not availability, so the capture is returned.
+    """
     lake = SpyLake(fail_write=True)
-    with pytest.raises(RuntimeError, match="lake unreachable"):
-        await capture(lake)
+
+    envelopes = await capture(lake)
+
+    assert set(envelopes) == set(SIGNAL_TYPES)
+    assert len(envelopes) == 2
+    assert all(e.coverage.present > 0 for e in envelopes.values())
+    # Nothing was durably stored -- which is exactly why the counter matters.
     assert lake.writes == []
 
 

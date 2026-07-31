@@ -14,7 +14,8 @@ from collector_core.cadence import CadenceClass
 from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
-from collector_core.lake import LakeWriter, awrite
+from collector_core.lake import LakeWriter
+from collector_core.publish import publish_capture
 from collector_core.routes import CaptureState
 
 from .adapters.forecast import fetch_current_conditions, fetch_forecast_at
@@ -115,7 +116,6 @@ async def capture_week(
     try:
         games = await fetch_schedule(season, week, client)
     except Exception as exc:  # noqa: BLE001 — total-outage path, classified below
-        metrics.capture_failure(exc)
         # Writes `present: 0` with populated `errors` for both signal types,
         # then re-raises. This used to re-raise *without* writing, which left
         # the gap in the lake to be inferred from the absence of an object --
@@ -253,15 +253,8 @@ async def capture_week(
         ),
     }
 
-    for signal_type, envelope in envelopes.items():
-        try:
-            # `awrite`, not `lake.write`: boto3 is synchronous and this is a
-            # coroutine, so a direct call would block the event loop and gate
-            # readiness on object-store latency.
-            await awrite(lake, envelope)
-        except Exception as exc:  # noqa: BLE001 — total-outage path (lake unreachable)
-            metrics.capture_failure(exc)
-            raise
-        metrics.coverage(signal_type, envelope.coverage.ratio)
-
-    return envelopes
+    # The shared tail: writes off the event loop, records every coverage gauge,
+    # records `capture_failure` if a write fails, and returns the envelopes
+    # regardless. This used to re-raise, which cost `/signals` a capture that
+    # had already succeeded whenever the lake was unreachable.
+    return await publish_capture(envelopes, lake=lake, metrics=metrics)

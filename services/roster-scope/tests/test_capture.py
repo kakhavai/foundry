@@ -269,12 +269,21 @@ async def test_a_ledger_failure_does_not_fetch_the_upstream(lake):
 
 
 @respx.mock
-async def test_a_lake_write_failure_propagates(lake):
-    """Parity with `weather`: an unwritable lake is a genuine capture failure,
-    and the shared loop logs it and retries on the next tick."""
+async def test_a_lake_write_failure_does_not_cost_the_resolved_scope(lake):
+    """Parity with `weather`, whose test moved the same way. An unwritable
+    lake used to be treated as a genuine capture failure and re-raised, which
+    is wrong when the depth-chart fetch and the whole resolution succeeded:
+    every other collector fetches this membership list before pulling
+    anything, so dropping it on an object-store outage takes the fleet's
+    denominator with it. `collector_core.publish.publish_capture` counts the
+    failure and returns the envelopes."""
     mock_feed(full_league_csv())
-    with pytest.raises(RuntimeError, match="lake unreachable"):
-        await run_capture(SpyLake(fail_write=True))
+
+    result = await run_capture(SpyLake(fail_write=True))
+
+    assert set(result) == {MEMBERSHIP_SIGNAL, CHANGE_SIGNAL}
+    assert len(result) == 2
+    assert result[MEMBERSHIP_SIGNAL].coverage.present > 0
 
 
 @respx.mock
