@@ -109,7 +109,14 @@ collectors:
     cadence_class: weekly
     envelope_version: "1"
     signal_types: [game_situational_context, team_rest_context]
-    # TYPE-CHECKED ONLY — nothing verifies this is correct. Set it true if this
-    # collector narrows to roster-scope's membership list before it fetches.
+    # TYPE-CHECKED ONLY — nothing verifies this is correct. False here because
+    # the signals are keyed by game and team; there is no player in them for
+    # roster-scope's membership list to narrow.
     scope_aware: false
+    # Empty deliberately. The phase doc's "Depends on" line for this collector
+    # says "nothing directly; joins to `venue` for coordinates and timezones",
+    # and `venue` arrives in 8E. Until it does, that join is served by an
+    # in-process table (schedule_context/venues.py) behind a `Venue` seam, the
+    # same shape as weather's bundled schedule adapter. `depends_on` names
+    # registered collectors, and `venue` is not one yet.
     depends_on: []

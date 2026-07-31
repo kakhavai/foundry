@@ -431,6 +431,72 @@ def test_both_new_york_clubs_share_one_building():
     assert great_circle_miles(home_venue("NYG"), home_venue("NYJ")) == 0.0
 
 
+# Every distinct `stadium` string the real nflverse table carries on a row
+# marked `location: Neutral`, for the seasons that have any (2019 onward),
+# plus the international venues already announced for later ones. Transcribed
+# from the live document rather than imagined: the first run of this collector
+# against 2024 came back with two rows missing because the feed writes
+# "Tottenham Stadium" where this table said "Tottenham Hotspur Stadium".
+FEED_NEUTRAL_STADIUM_NAMES = (
+    "Wembley Stadium",
+    "Tottenham Stadium",
+    "Tottenham Hotspur Stadium",
+    "Twickenham Stadium",
+    "Allianz Arena",
+    "FC Bayern Munich Stadium",
+    "Deutsche Bank Park",
+    "Azteca Stadium",
+    "Estadio Banorte",
+    "Arena Corinthians",
+    "Maracana Stadium",
+    "Stade de France",
+    "Bernabeu",
+    "Melbourne Cricket Ground",
+    "Rogers Centre",
+    "State Farm Stadium",
+    "University of Phoenix Stadium",
+    "Ford Field",
+    "Raymond James Stadium",
+    "Hard Rock Stadium",
+    "Dolphin Stadium",
+    "Lucas Oil Stadium",
+    "Mercedes-Benz Superdome",
+    "MetLife Stadium",
+    "Levi's Stadium",
+    "TIAA Bank Stadium",
+    "SoFi Stadium",
+    "NRG Stadium",
+    "U.S. Bank Stadium",
+    "Mercedes-Benz Stadium",
+    "Allegiant Stadium",
+    "Acrisure Stadium",
+    "FirstEnergy Stadium",
+)
+
+
+@pytest.mark.parametrize("stadium", FEED_NEUTRAL_STADIUM_NAMES)
+def test_every_neutral_site_name_the_feed_uses_resolves(stadium):
+    """An unrecognised name is not a crash — it is two missing situational
+    rows and a `venue_unresolved` error, which is the right behaviour and a
+    poor substitute for having the venue."""
+    assert (
+        resolve_venue(home_team="DET", stadium_name=stadium, is_neutral_site=True)
+        is not None
+    ), stadium
+
+
+def test_a_neutral_game_in_a_league_building_reuses_that_clubs_venue():
+    """A Super Bowl or a hurricane relocation is a neutral row at a building
+    the league already owns. Restating its coordinates would let the alias
+    drift away from the club's own entry."""
+    assert (
+        resolve_venue(
+            home_team="KC", stadium_name="State Farm Stadium", is_neutral_site=True
+        )
+        is TEAM_VENUES["ARI"]
+    )
+
+
 def test_the_venue_table_covers_every_club_the_league_fields():
     assert len(TEAM_VENUES) == 32
     assert len({venue.timezone for venue in TEAM_VENUES.values()}) >= 4

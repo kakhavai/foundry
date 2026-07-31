@@ -119,36 +119,79 @@ _HOME_VENUES: dict[str, tuple[str, float, float, str]] = {
     "WAS": ("northwest", 38.9077, -76.8645, "America/New_York"),
 }
 
-# Venues used for neutral-site games, keyed by the upstream's stadium name.
-# Keyed by name because the `stadium_id` on a neutral row points at the
-# designated home club's building rather than where the game is played.
+# Venues outside the league's own buildings, keyed by the upstream's stadium
+# NAME. Keyed by name because `stadium_id` on a neutral row is unreliable: the
+# feed has spelled Wembley's as both LON00 and JAX00, and Tottenham's as WAS00,
+# because for some rows it carries the DESIGNATED HOME CLUB's building instead
+# of the venue.
+#
+# Several buildings appear under more than one name — the feed writes both
+# "Tottenham Stadium" and "Tottenham Hotspur Stadium", and both "Estadio
+# Azteca" and its sponsored name "Estadio Banorte". Every spelling the feed has
+# actually used is listed, because an unrecognised one costs a whole
+# situational row. `test_every_neutral_site_name_the_feed_uses_resolves` pins
+# the list against the names observed in the real document.
 _NEUTRAL_VENUES: dict[str, tuple[str, float, float, str, str]] = {
     "Wembley Stadium": ("wembley", 51.5560, -0.2795, "Europe/London", "GB"),
-    "Tottenham Hotspur Stadium": (
-        "tottenham",
-        51.6043,
-        -0.0665,
-        "Europe/London",
-        "GB",
-    ),
+    "Twickenham Stadium": ("twickenham", 51.4560, -0.3415, "Europe/London", "GB"),
+    "Tottenham Stadium": ("tottenham", 51.6043, -0.0665, "Europe/London", "GB"),
+    "Tottenham Hotspur Stadium": ("tottenham", 51.6043, -0.0665, "Europe/London", "GB"),
     "Allianz Arena": ("allianz", 48.2188, 11.6247, "Europe/Berlin", "DE"),
-    "Deutsche Bank Park": (
-        "deutsche-bank-park",
-        50.0685,
-        8.6455,
-        "Europe/Berlin",
-        "DE",
-    ),
+    "FC Bayern Munich Stadium": ("allianz", 48.2188, 11.6247, "Europe/Berlin", "DE"),
+    "Deutsche Bank Park": ("frankfurt", 50.0685, 8.6455, "Europe/Berlin", "DE"),
     "Estadio Azteca": ("azteca", 19.3029, -99.1505, "America/Mexico_City", "MX"),
-    "Neo Química Arena": (
-        "neo-quimica",
-        -23.5453,
-        -46.4742,
-        "America/Sao_Paulo",
-        "BR",
-    ),
+    "Azteca Stadium": ("azteca", 19.3029, -99.1505, "America/Mexico_City", "MX"),
+    "Estadio Banorte": ("azteca", 19.3029, -99.1505, "America/Mexico_City", "MX"),
+    "Neo Química Arena": ("neo-quimica", -23.5453, -46.4742, "America/Sao_Paulo", "BR"),
+    "Arena Corinthians": ("neo-quimica", -23.5453, -46.4742, "America/Sao_Paulo", "BR"),
+    "Maracana Stadium": ("maracana", -22.9121, -43.2302, "America/Sao_Paulo", "BR"),
     "Croke Park": ("croke-park", 53.3607, -6.2512, "Europe/Dublin", "IE"),
     "Santiago Bernabéu": ("bernabeu", 40.4531, -3.6883, "Europe/Madrid", "ES"),
+    "Bernabeu": ("bernabeu", 40.4531, -3.6883, "Europe/Madrid", "ES"),
+    "Stade de France": ("stade-de-france", 48.9245, 2.3601, "Europe/Paris", "FR"),
+    "Melbourne Cricket Ground": (
+        "mcg",
+        -37.8200,
+        144.9834,
+        "Australia/Melbourne",
+        "AU",
+    ),
+    "Rogers Centre": ("rogers-centre", 43.6414, -79.3894, "America/Toronto", "CA"),
+}
+
+# League buildings that also host neutral-site games — a Super Bowl, a
+# hurricane relocation, an international game moved home. These reuse the home
+# venue's coordinates rather than restating them, so a correction to a club's
+# location cannot leave its neutral alias behind. Keyed by the feed's stadium
+# name; several are former names of a building the club still plays in, which
+# is exactly the drift a name lookup has to survive.
+_NEUTRAL_ALIASES: dict[str, str] = {
+    "State Farm Stadium": "ARI",
+    "University of Phoenix Stadium": "ARI",
+    "Mercedes-Benz Stadium": "ATL",
+    "Huntington Bank Field": "CLE",
+    "FirstEnergy Stadium": "CLE",
+    "AT&T Stadium": "DAL",
+    "Cowboys Stadium": "DAL",
+    "Ford Field": "DET",
+    "NRG Stadium": "HOU",
+    "Reliant Stadium": "HOU",
+    "Lucas Oil Stadium": "IND",
+    "EverBank Stadium": "JAX",
+    "TIAA Bank Stadium": "JAX",
+    "Alltel Stadium": "JAX",
+    "SoFi Stadium": "LA",
+    "Allegiant Stadium": "LV",
+    "Hard Rock Stadium": "MIA",
+    "Dolphin Stadium": "MIA",
+    "U.S. Bank Stadium": "MIN",
+    "Caesars Superdome": "NO",
+    "Mercedes-Benz Superdome": "NO",
+    "Louisiana Superdome": "NO",
+    "MetLife Stadium": "NYG",
+    "Acrisure Stadium": "PIT",
+    "Levi's Stadium": "SF",
+    "Raymond James Stadium": "TB",
 }
 
 _NON_ALPHANUMERIC = re.compile(r"[^a-z0-9]+")
@@ -174,7 +217,14 @@ TEAM_VENUES: dict[str, Venue] = {
 }
 
 NEUTRAL_VENUES: dict[str, Venue] = {
-    normalize_stadium(name): Venue(*fields) for name, fields in _NEUTRAL_VENUES.items()
+    **{
+        normalize_stadium(name): Venue(*fields)
+        for name, fields in _NEUTRAL_VENUES.items()
+    },
+    **{
+        normalize_stadium(name): TEAM_VENUES[team]
+        for name, team in _NEUTRAL_ALIASES.items()
+    },
 }
 
 
