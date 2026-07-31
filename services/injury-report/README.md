@@ -9,7 +9,7 @@ A Foundry signal collector. Scaffolded by `scripts/new-collector.py`; see
 | Gateway path | `/collectors/injury-report` |
 | Cadence class | `volatile` |
 | Signal types | `player_injury_status`, `team_injury_report` |
-| Scope-aware | **no**, on purpose — see below |
+| Scope-aware | **partially** — `player_injury_status` narrows to membership ∪ matchup; `team_injury_report` does not, see below |
 | Status | **Stub upstreams** — `INJURY_REPORT_URL` and `SCHEDULE_URL` ship empty |
 
 ## What it captures
@@ -26,18 +26,30 @@ It is the only collector that distinguishes **"no designation was published"**
 filed a report listing nobody from a club that filed nothing at all. Those two
 distinctions are the collector; everything else here is in service of them.
 
-### It deliberately ignores the roster scope
+### `player_injury_status` narrows to membership UNION matchup
 
-Every other signal collector narrows to `roster-scope`'s membership list before
-it fetches. This one does not, and `scope_aware: false` in
-`contracts/collector-registry.yaml` is a decision rather than a default falling
-through. An opposing cornerback ruled out moves a receiver's projection as much
-as the receiver's own hamstring does, and defenders never appear on an
-offence-oriented watchlist at all. Narrowing here would silently discard the
-half of the signal that is hardest to get anywhere else.
+Every other signal collector narrows to `roster-scope`'s membership list
+before it fetches. This one narrows too, but to the **union** of membership
+and matchup: an opposing cornerback ruled out moves a receiver's projection as
+much as the receiver's own hamstring does, and defenders never appear on the
+offence-oriented membership list at all. `roster-scope` publishes a
+separately-bounded ~608-slot CB/S/LB/DL/OL matchup list for exactly this
+reason, and `adapters/scope.py` reads both lists from the lake and narrows to
+their union (`ScopeClient.fetch_union`, which is all-or-nothing: a present
+membership list with an absent matchup list fails the whole pass closed
+rather than silently narrowing to offence alone). No usable union means ZERO
+calls to either upstream and a `present: 0` envelope for both signal types —
+there is no unnarrowed fallback.
 
-`GET /signals?team=…` is still available as a convenience. It is not a
-boundary, and a consumer that uses it has thrown away the opponent side.
+**`team_injury_report` is not narrowed.** It is keyed by team, not by player,
+and answers "did this club file a report" for every scheduled club regardless
+of which of its players happen to be in scope; narrowing it by player
+membership would silently drop a club's filing (and the coverage tracking
+built on it) whenever every player it listed was out of scope.
+
+`GET /signals?team=…` is still available as a convenience on both signal
+types. It is not a boundary, and a consumer filtering `player_injury_status`
+to its own club has thrown away the opponent side.
 
 ## The two upstreams, and why there are two
 
@@ -53,6 +65,20 @@ because they are two documents.
 ships empty and ids are minted deterministically from the upstream's own stable
 player key; a row with no such key is dropped and counted rather than hashed
 from a display name.
+
+**Known gap: the stub ids do not join with `roster-scope`'s real ones.**
+`roster-scope` (and `usage-share`, `player-stats`) resolve through the real
+`player-identity` deployment, so their published ids are canonical
+`player-identity` ids. This collector's stub mints `fdy-<sha256(external_id)>`
+locally instead — a different id space entirely. Until `adapters/identity.py`
+grows an HTTP crosswalk like `player-stats`' `HttpIdCrosswalk` (unlike that
+collector, this one's `PLAYER_IDENTITY_URL` path is not built; it deliberately
+raises `identity_resolver_unavailable` rather than silently minting stub ids
+against a cluster expecting real ones), `player_injury_status` narrows against
+a scope it can never actually match in a real deployment — every row is
+dropped, silently, because none of its stub ids are ever in `roster-scope`'s
+real membership or matchup lists. `team_injury_report` is unaffected, since it
+does not narrow by player id at all.
 
 ## Empty report vs. no report
 

@@ -25,16 +25,29 @@ owns that distinction. A club that filed nothing is `coverage.missing` with
 reason `report_not_published`. The two must never converge, which is why the
 capture never infers "healthy" from an absence.
 
+**This collector narrows `player_injury_status` to `roster-scope`'s
+membership UNION matchup list, fetched from the lake before anything else is
+touched.** `adapters/scope.py` is the seam; see its docstring for why the
+union rather than membership alone. No scope means ZERO upstream calls —
+neither the schedule feed nor the injury feed — and a `present: 0` envelope
+for both signal types, never an unnarrowed fallback. `team_injury_report` is
+deliberately **not** narrowed: it is keyed by team, not by player, and answers
+"did this club file a report" for every scheduled club regardless of which of
+its players are in scope — narrowing it by player membership would silently
+drop a club's filing (and the coverage tracking built on it) whenever every
+player it listed was out of scope.
+
 **A failed capture still writes an envelope.** `fail_capture` writes one
 `present: 0` envelope per signal type with a populated `errors` array, then
 re-raises: the write makes the gap in the append-only lake explicit rather than
 something a reader infers from absence, and the re-raise stops `CaptureState`
 installing an empty capture over the last good one.
 
-Every lake call goes off the event loop via `awrite` — `LakeWriter` is
-synchronous boto3, and the lake handed to this function raises if it is called
-from the loop thread. The first `await` is the schedule fetch, early on
-purpose, so uvicorn finishes starting before any upstream latency is incurred.
+Every lake call goes off the event loop via `awrite`/`aread`/`alist_keys` —
+`LakeWriter` is synchronous boto3, and the lake handed to this function raises
+if it is called from the loop thread. The first `await` is the scope fetch,
+early on purpose: it is both the narrowing seam's own fail-closed check AND
+what lets uvicorn finish starting before any upstream latency is incurred.
 """
 
 from datetime import UTC, datetime
@@ -46,9 +59,11 @@ from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
 from collector_core.lake import LakeWriter
 from collector_core.publish import publish_capture
+from collector_core.scope import ScopeUnavailable
 from collector_core.streaming import UpstreamSchemaError
 
 from .adapters.schedule import fetch_scheduled_games
+from .adapters.scope import fetch_scope
 from .adapters.upstream import UPSTREAM_ADAPTER, fetch_report_rows, source_ref
 from .metrics import metrics
 from .report import build_rows, practice_days_elapsed
@@ -155,9 +170,58 @@ async def capture_injury_report(
     )
 
     metrics.capture_attempt()
+
+    # BEFORE any upstream call, deliberately: this is the whole of failing
+    # closed. A pass that cannot narrow costs zero calls to the schedule or
+    # injury feed, not "fetch everything" and not "fetch and filter to
+    # nothing". This is also the first `await`, which is what lets uvicorn
+    # finish starting before any upstream or lake latency is incurred.
     try:
-        # The first `await`, deliberately: it is what lets uvicorn finish
-        # starting before this pass incurs any upstream or lake latency.
+        player_scope = await fetch_scope(lake, season, week)
+    except ScopeUnavailable as exc:
+        # `exc.reason` rather than a literal: `scope_unavailable` and
+        # `scope_empty` have two different fixes, and collapsing them costs
+        # an operator the one thing the envelope could have told them. Never
+        # returns — see `fail_capture`.
+        await fail_capture(
+            exc,
+            collector=COLLECTOR_NAME,
+            signal_types=SIGNAL_TYPES,
+            adapter=UPSTREAM_ADAPTER,
+            now=now,
+            scope=scope,
+            lake=lake,
+            metrics=metrics,
+            reason=exc.reason,
+            expected=floor,
+            source_ref=source_ref(season, week),
+        )
+    except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
+        # The scope read is I/O, and `ScopeUnavailable` is only what
+        # `ScopeClient` raises when the lake answered and had nothing usable.
+        # The lake can also fail outright: botocore errors, a JSON decode
+        # failure, or `ScopeClient._parse_captured_at` raising `ValueError` on
+        # a timestamp it does not recognise. Without this arm every one of
+        # those escapes this coroutine entirely — no `present: 0` envelope, no
+        # `collector_capture_failures_total`, just a log line. No explicit
+        # `reason=`: `fail_capture` falls back to
+        # `CollectorMetrics.reason_for(exc)`, which classifies a decode or
+        # timestamp failure as `malformed` and anything else as `unknown` —
+        # both true, and neither mistakable for `scope_unavailable`.
+        await fail_capture(
+            exc,
+            collector=COLLECTOR_NAME,
+            signal_types=SIGNAL_TYPES,
+            adapter=UPSTREAM_ADAPTER,
+            now=now,
+            scope=scope,
+            lake=lake,
+            metrics=metrics,
+            expected=floor,
+            source_ref=source_ref(season, week),
+        )
+
+    try:
         scheduled = await fetch_scheduled_games(season, week, client=client)
     except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
         # Never returns. Writes a `present: 0` envelope per signal type first,
@@ -230,6 +294,17 @@ async def capture_injury_report(
 
     acc = CoverageAccumulator(floor=floor[TEAM_SIGNAL])
     aggregate = build_rows(scheduled, rows, now=now, acc=acc, metrics=metrics)
+
+    # Narrowing's actual filter. Deliberately AFTER `build_rows` and against
+    # its own coverage — `acc` above tracks one thing, "did this club file",
+    # which is unaffected by which of its players are in scope, so a player
+    # dropped here is neither `coverage.missing` nor an `errors` entry: the
+    # scope excluded it, which is not this collector's own gap. Never applied
+    # to `aggregate.team_rows` — see `adapters/scope.py` and this module's own
+    # docstring for why the team-level signal does not narrow.
+    aggregate.player_rows = [
+        row for row in aggregate.player_rows if row["player_id"] in player_scope.members
+    ]
 
     for day in days:
         # Every elapsed day, every pass, including the days on which nothing

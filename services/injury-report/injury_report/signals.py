@@ -9,11 +9,15 @@ rejected with 422 rather than silently ignored: a client bug should surface as
 a loud error, not look like a quiet week.
 
 **`team` is a convenience, not a boundary, and that matters more here than
-anywhere else in the fleet.** `injury-report` deliberately carries every club's
-report rather than narrowing to `roster-scope`'s membership list, because an
-opposing cornerback being ruled out changes a receiver's projection as much as
-the receiver's own hamstring does. A caller that filters to its own club has
-thrown away the half of this signal that is hardest to get elsewhere.
+anywhere else in the fleet.** `team_injury_report` carries every scheduled
+club's filing regardless of the roster scope — it is keyed by team, not by
+player, and answers "did this club file" for all of them. A caller that
+filters `team_injury_report` to its own club has thrown away the rest of the
+league's filings, and one filtering `player_injury_status` to its own club has
+thrown away the opponent-side rows: `capture.py` narrows that signal to
+`roster-scope`'s membership UNION matchup list, not to any one team, because
+an opposing cornerback being ruled out changes a receiver's projection as much
+as the receiver's own hamstring does.
 """
 
 from collections.abc import Mapping

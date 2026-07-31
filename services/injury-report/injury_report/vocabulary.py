@@ -97,8 +97,9 @@ BODY_PARTS: tuple[str, ...] = (
 )
 
 # Position code -> side of the ball. The spec wants `side_of_ball` so the
-# generator can find *opponent-side* entries, which is the whole reason this
-# collector ignores the roster scope; deriving it from `position` rather than
+# generator can find *opponent-side* entries -- the reason `capture.py`
+# narrows `player_injury_status` to roster-scope's membership UNION matchup
+# list rather than membership alone. Deriving it from `position` rather than
 # requiring an upstream column keeps that working against feeds that only
 # publish a position.
 _POSITION_SIDES: dict[str, str] = {
