@@ -91,6 +91,28 @@ async def test_a_bye_week_and_an_outage_do_not_look_alike():
         assert envelope.coverage.ratio == 0.0
 
 
+async def test_a_missing_earlier_week_costs_rest_coverage_and_says_so():
+    """The spec defines a complete capture as "`days_rest` non-null for every
+    team past Week 1", so a null there is a coverage hole and not a legitimate
+    value. A feed that lost week 1 still describes week 2 perfectly well —
+    every club's *situational* row is intact — but nothing in it can say how
+    rested anyone is, and a rest envelope full of nulls reporting 1.0 would be
+    the exact silent-hole failure the coverage block exists to prevent.
+    """
+    week_two_only = [row for row in season_rows(weeks=2) if row["week"] == "2"]
+    envelopes = await run_capture(SpyLake(), csv=to_csv(week_two_only), week=2)
+
+    rest = envelopes[REST]
+    assert rest.coverage.present == 0
+    assert rest.coverage.ratio == 0.0
+    assert len(rest.errors) == 32
+    assert {error["reason"] for error in rest.errors} == {"rest_unresolved"}
+
+    # Travel needs no history, so it is unaffected.
+    assert envelopes[SITUATIONAL].coverage.present == 32
+    assert envelopes[SITUATIONAL].errors == []
+
+
 async def test_expansion_past_the_floor_still_reports_honestly():
     """The floor must not CAP a genuine count, only raise a short one.
 
