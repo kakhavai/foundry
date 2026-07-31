@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/injury-report.json",
+  "title": "injury-report collector signal fields",
+  "signal_types": {
+    "player_injury_status": {
+      "type": "object",
+      "required": ["key", "observed_at", "value"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "value": { "type": "number" }
+      }
+    },
+    "team_injury_report": {
+      "type": "object",
+      "required": ["key", "observed_at", "value"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "value": { "type": "number" }
+      }
+    }
+  }
+}
