@@ -24,6 +24,7 @@ from roster_transactions.capture import (
 from roster_transactions.windows import (
     INTERVALS_PER_WEEK,
     elapsed_interval_keys,
+    interval_key,
     week_window,
 )
 
@@ -153,8 +154,18 @@ async def test_an_unmappable_row_poisons_its_interval(monkeypatch):
     envelope = envelopes[SIGNAL_TYPE]
     assert len(envelope.signals) == 1
     coverage = envelope.coverage
-    assert coverage.present < coverage.expected
-    assert coverage.ratio < 1.0
+
+    # Named explicitly rather than inferred from a lower ratio. The bad row
+    # ALSO contributes a `row:` key of its own, so `ratio < 1.0` holds whether
+    # or not the interval was poisoned — a mutation that stopped poisoning
+    # intervals survived that weaker assertion.
+    poisoned = interval_key(WEEK_START + timedelta(hours=5))
+    assert poisoned in coverage.missing, coverage.missing
+
+    elapsed = elapsed_interval_keys(SEASON, WEEK, now)
+    assert coverage.present == len(elapsed) - 1, (
+        "exactly one interval must be withheld: the one whose row would not map"
+    )
     reasons = {error["reason"] for error in envelope.errors}
     assert reasons, "a poisoned interval with no error explains nothing"
     assert "malformed" in reasons, reasons
