@@ -195,13 +195,18 @@ async def test_more_than_the_batch_limit_is_chunked():
 @respx.mock
 @pytest.mark.asyncio
 async def test_the_bearer_token_is_sent():
+    # The result list has one entry matching the single query sent -- this
+    # test's purpose is the Authorization header, not the result contents,
+    # but `resolve_many` now zips results against queries with strict=True
+    # (see test_a_short_response_raises_rather_than_silently_dropping_the_tail),
+    # so a mismatched-length mock would raise before the header is ever read.
     route = respx.post(f"{BASE}/resolve/batch").mock(
         return_value=httpx.Response(
             200,
             json={
-                "results": [],
-                "count": 0,
-                "resolved_count": 0,
+                "results": [_result("X", True, "fdy-x")],
+                "count": 1,
+                "resolved_count": 1,
                 "unresolved_count": 0,
             },
         )
@@ -216,6 +221,39 @@ async def test_the_bearer_token_is_sent():
         )
 
     assert route.calls[0].request.headers["Authorization"] == "Bearer secret"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_short_response_raises_rather_than_silently_dropping_the_tail():
+    """A batch response carrying fewer results than queries sent must raise,
+    not silently drop the tail.
+
+    Without `strict=True` on the zip, a short response reads as if the
+    missing players were simply unresolved: they land in `coverage.missing`
+    like any other miss, and nothing anywhere flags that the reply itself
+    was malformed. That is the same failure shape as a truncated upstream
+    response elsewhere in this project -- a partial answer must be loud, not
+    indistinguishable from a normal miss.
+    """
+    respx.post(f"{BASE}/resolve/batch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [_result("A", True, "fdy-a")],
+                "count": 1,
+                "resolved_count": 1,
+                "unresolved_count": 0,
+            },
+        )
+    )
+    queries = [
+        ResolveQuery(name="A", team=None, position=None, source=None, source_id=None),
+        ResolveQuery(name="B", team=None, position=None, source=None, source_id=None),
+    ]
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(ValueError):
+            await IdentityClient(BASE, client, token="t").resolve_many(queries)
 
 
 @respx.mock

@@ -49,7 +49,7 @@ class IdentityClient:
                 headers=self._headers(),
             )
             response.raise_for_status()
-            for query, result in zip(chunk, response.json()["results"]):
+            for query, result in zip(chunk, response.json()["results"], strict=True):
                 # `is True`, not truthiness: a missing field must not be
                 # permission, and neither must a non-empty candidate list.
                 if result.get("resolved") is True and result.get("player_id"):
