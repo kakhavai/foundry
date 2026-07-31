@@ -98,6 +98,14 @@ async def run_capture_loop(
     job on failure is to not die and to leave `state` exactly as it was
     before the attempt.
 
+    That last clause is only correct for a *capture* failure. A pass that
+    captured fine and merely failed to persist must still land in `state` --
+    an object-store outage costing `/signals` its availability inverts the
+    whole contract. Neither this loop nor `_run_capture` can tell the two
+    apart, because an exception arriving here carries no envelopes, so the
+    distinction is drawn where the envelopes still exist:
+    `collector_core.publish.publish_capture`. One fix, both paths.
+
     `capture_deadline` bounds each pass the same way it bounds a dispatched
     `/refresh`: total upstream failure costs at most one deadline's worth of
     wall-clock time rather than `games x per-call timeout`, so an overrun

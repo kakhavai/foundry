@@ -61,9 +61,17 @@ class _SpyLake:
 class _SpyMetrics:
     def __init__(self) -> None:
         self.coverage_calls: list[tuple[str, float]] = []
+        self.failures: list[BaseException] = []
 
     def coverage(self, signal_type: str, ratio: float) -> None:
         self.coverage_calls.append((signal_type, ratio))
+
+    def capture_failure(self, exc: BaseException) -> None:
+        """`fail_capture` records this itself now. It used to be the caller's
+        job, which meant nothing in the library ever touched
+        `collector_capture_failures_total` and every collector had to remember
+        it on every failure path. `tests/test_publish.py` pins the count."""
+        self.failures.append(exc)
 
 
 async def _fail(exc, lake, metrics, **overrides):

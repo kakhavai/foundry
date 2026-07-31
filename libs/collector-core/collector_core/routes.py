@@ -168,6 +168,15 @@ async def _run_capture(
     only a backstop for anything that escapes that, e.g. a bug in `capture`
     itself.
 
+    The `except` below is the *last* line of defence, not the first, and it
+    cannot be made smarter: by the time an exception reaches here the
+    envelopes a capture built are unreachable, because `capture` returns them
+    only on its success path. That is why a failed lake write must not escape
+    `capture` in the first place -- it would cost `/signals` a capture that
+    succeeded. `collector_core.publish.publish_capture` owns that, and
+    `run_capture_loop` (identical body, same reasoning) is fixed by the same
+    thing rather than separately.
+
     The lock is taken *before* the clock is read: `now` (and the `deadline`
     derived from it) must describe when this capture actually started
     running, not when it was merely dispatched. Reading the clock first would

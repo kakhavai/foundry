@@ -18,6 +18,12 @@ capture — turning an upstream outage into a loss of *availability* on
 `/signals`, when the whole point of capturing into a cache is that an outage
 costs only freshness.
 
+It also **records `collector_capture_failures_total` itself**, rather than
+trusting each collector to remember it on every failure path. See
+`publish.py`'s docstring for the other half of that decision, and for why the
+*success* path answers the availability-vs-durability question the opposite
+way: there the capture worked and only its archival copy did not.
+
 Note what this deliberately does not do: it does not let the failure envelope's
 coverage read as healthy. `Coverage.ratio` returns `1.0` when `expected` is 0 —
 correct for a bye week that genuinely expects nothing, catastrophic for a
@@ -120,7 +126,17 @@ async def fail_capture(
     A lake write that itself fails is logged and swallowed: the original
     upstream failure is the one the caller must see, and shadowing it with a
     secondary S3 error would lose the fact that actually explains the pass.
+
+    **This records `collector_capture_failures_total` itself.** Do not call
+    `metrics.capture_failure(exc)` before calling this — that was the
+    convention, every collector duplicated it, and a convention twenty-six
+    authors must each remember is not a guarantee. A collector still records
+    the counter for failures the library cannot see: a single bad row, one
+    item's fetch inside a multi-call pass, a degraded path that builds its own
+    envelopes rather than routing through here.
     """
+    metrics.capture_failure(exc)
+
     envelopes = failure_envelopes(
         exc,
         collector=collector,
