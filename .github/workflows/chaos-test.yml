@@ -105,7 +105,15 @@ jobs:
       # injected fault.
       - name: Deploy services
         run: |
-          uv run --no-project --with pyyaml==6.0.3 python3 scripts/deploy-local.py weather
+          # Derived, not listed. The ApplicationSet globs helm/values/*, so
+          # Argo manages an Application for EVERY collector -- and the "Wait
+          # for workloads" step below blocks until they are all Synced+Healthy.
+          # A hardcoded two-service list meant the other seven had no image in
+          # Kind, never went Healthy, and timed out the wait. Same registry
+          # derivation integration-test.yml uses.
+          for svc in $(uv run --no-project --with pyyaml==6.0.3 python3 scripts/collectors.py --names); do
+            uv run --no-project --with pyyaml==6.0.3 python3 scripts/deploy-local.py "$svc"
+          done
           uv run --no-project --with pyyaml==6.0.3 python3 scripts/deploy-local.py player-projections
 
       - name: Install Argo CD
