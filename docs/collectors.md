@@ -408,6 +408,21 @@ The scaffolder leaves five TODOs, and they are the whole job:
    `tests/test_capture_contract_conformance.py` validates the **real** output of
    that function against the schema, so a renamed field fails there rather than
    in the generator six weeks later.
+
+   **This is the one TODO with a gate behind it.** The scaffolded schema and
+   the scaffolded `build_signal` are written to agree with each other, so that
+   conformance test proves the two *match* — not that either is *right*. Skip
+   this step and you ship a schema validating nothing meaningful, and every
+   test stays green. So each generated signal type carries a
+   `"$comment": "TODO(new-collector): ..."`, and
+   `tests/test_placeholder_schemas.py` (in `platform-tests`) fails on any
+   committed collector that still has it — or that has had the marker deleted
+   while keeping the placeholder's `key`/`observed_at`/`value` field set.
+
+   It is a marker rather than a generated failing test on purpose: a scaffold
+   that is red the moment you run `uv run pytest -v` teaches you that red is
+   normal. Rewriting the schema is also what drags `build_signal` along, since
+   the conformance test validates one against the other.
 4. **`metrics.py`** — your own series, or delete the subclass and use
    `CollectorMetrics(COLLECTOR)` directly, as `weather` does.
 5. **`helm/values/<name>/values.yaml`'s `CAPTURE_ENABLED`** — scaffolded

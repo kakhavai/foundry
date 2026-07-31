@@ -32,6 +32,7 @@ GENERATED_ENVS = ("local",)
 
 # ── pure helpers ──────────────────────────────────────────────────────────────
 
+
 def discover_services(env: str, gitops_root: Path = GITOPS_ROOT) -> list[str]:
     """List service names found under infra/gitops/envs/<env>/."""
     env_dir = gitops_root / "envs" / env
@@ -56,7 +57,7 @@ def write_tag(values_file: Path, tag: str) -> None:
     """
     if values_file.exists():
         text = values_file.read_text()
-        patched = re.sub(r'(tag:\s*")[^"]*(")', rf'\g<1>{tag}\2', text)
+        patched = re.sub(r'(tag:\s*")[^"]*(")', rf"\g<1>{tag}\2", text)
         if patched != text:
             values_file.write_text(patched)
             return
@@ -85,10 +86,13 @@ def argo_values_file(env: str, argo_dir: Path = ARGO_DIR) -> Path:
 
 # ── subprocess helpers ────────────────────────────────────────────────────────
 
+
 def run(cmd: list, cwd: Path | None = None) -> None:
     """Run a subprocess, print the command, exit on non-zero."""
     print(f"\n$ {' '.join(str(c) for c in cmd)}")
-    result = subprocess.run(cmd, cwd=cwd)
+    # check=False: the non-zero exit is handled below, and CalledProcessError's
+    # traceback would bury the command output the caller actually needs.
+    result = subprocess.run(cmd, cwd=cwd, check=False)
     if result.returncode != 0:
         sys.exit(result.returncode)
 
@@ -108,11 +112,14 @@ def kubectl_run(*args: str, context: str | None = None) -> None:
 def kubectl_capture(*args: str, context: str | None = None) -> tuple[int, str]:
     """Run kubectl, return (returncode, stdout). Never exits."""
     cmd = _kubectl_cmd(args, context)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # check=False: the returncode IS the return value — see the docstring.
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     return result.returncode, result.stdout.strip()
 
 
-def helmfile_run(*args: str, context: str | None = None, cwd: Path | None = None) -> None:
+def helmfile_run(
+    *args: str, context: str | None = None, cwd: Path | None = None
+) -> None:
     """Run helmfile, passing --kube-context if provided."""
     cmd = ["helmfile"]
     if context:
@@ -123,9 +130,13 @@ def helmfile_run(*args: str, context: str | None = None, cwd: Path | None = None
 def argo_password(context: str | None = None) -> str:
     """Decode the ArgoCD initial admin password from the cluster secret."""
     _, out = kubectl_capture(
-        "get", "secret", "argocd-initial-admin-secret",
-        "-n", "argocd",
-        "-o", "jsonpath={.data.password}",
+        "get",
+        "secret",
+        "argocd-initial-admin-secret",
+        "-n",
+        "argocd",
+        "-o",
+        "jsonpath={.data.password}",
         context=context,
     )
     if not out:
@@ -134,6 +145,7 @@ def argo_password(context: str | None = None) -> str:
 
 
 # ── polling ───────────────────────────────────────────────────────────────────
+
 
 def poll_applications(
     services: list[str],
@@ -149,9 +161,13 @@ def poll_applications(
         all_healthy = True
         for name in names:
             _, out = kubectl_capture(
-                "get", "application", name,
-                "-n", "argocd",
-                "-o", "jsonpath={.status.sync.status},{.status.health.status}",
+                "get",
+                "application",
+                name,
+                "-n",
+                "argocd",
+                "-o",
+                "jsonpath={.status.sync.status},{.status.health.status}",
                 context=context,
             )
             sync, _, health = out.partition(",")
@@ -165,6 +181,7 @@ def poll_applications(
 
 
 # ── git + manifest helpers ────────────────────────────────────────────────────
+
 
 def git_commit_and_push(files: list[Path], message: str) -> None:
     """Stage the given files, commit with message, and push."""
@@ -241,6 +258,7 @@ def require_promotion_target(service: str, env: str) -> None:
 
 # ── sub-commands ──────────────────────────────────────────────────────────────
 
+
 def cmd_install(args) -> None:
     ctx = args.context
     env = args.env
@@ -252,16 +270,20 @@ def cmd_install(args) -> None:
 
     print("\nWaiting for argocd-server to be ready...")
     kubectl_run(
-        "wait", "--for=condition=available",
+        "wait",
+        "--for=condition=available",
         "deployment/argocd-server",
-        "-n", "argocd",
+        "-n",
+        "argocd",
         "--timeout=180s",
         context=ctx,
     )
 
     print("\nApplying app-of-apps...")
     kubectl_run(
-        "apply", "-f", str(ROOT / "infra/gitops/argo/app-of-apps.yaml"),
+        "apply",
+        "-f",
+        str(ROOT / "infra/gitops/argo/app-of-apps.yaml"),
         context=ctx,
     )
 
@@ -278,7 +300,9 @@ def cmd_install(args) -> None:
     pwd = argo_password(ctx)
     print(f"\n{'=' * 50}")
     print(f"Argo CD installed. Admin password: {pwd}")
-    print("Run 'python scripts/argocd-deploy.py ui' to access the UI at http://localhost:8080")
+    print(
+        "Run 'python scripts/argocd-deploy.py ui' to access the UI at http://localhost:8080"
+    )
     print("=" * 50)
 
 
@@ -288,7 +312,9 @@ def cmd_verify(args) -> None:
 
     print(f"\nVerifying Argo CD ({env})...")
 
-    rc, out = kubectl_capture("get", "pods", "-n", "argocd", "--no-headers", context=ctx)
+    rc, out = kubectl_capture(
+        "get", "pods", "-n", "argocd", "--no-headers", context=ctx
+    )
     if rc != 0:
         print("Error: could not list argocd pods — is the cluster reachable?")
         sys.exit(1)
@@ -313,16 +339,23 @@ def cmd_verify(args) -> None:
     for svc in services:
         name = app_name(svc, env)
         kubectl_capture(
-            "annotate", "application", name,
-            "-n", "argocd",
+            "annotate",
+            "application",
+            name,
+            "-n",
+            "argocd",
             "argocd.argoproj.io/refresh=normal",
             "--overwrite",
             context=ctx,
         )
         _, status_out = kubectl_capture(
-            "get", "application", name,
-            "-n", "argocd",
-            "-o", "jsonpath={.status.sync.status},{.status.health.status},{.status.operationState.finishedAt}",
+            "get",
+            "application",
+            name,
+            "-n",
+            "argocd",
+            "-o",
+            "jsonpath={.status.sync.status},{.status.health.status},{.status.operationState.finishedAt}",
             context=ctx,
         )
         parts = (status_out + ",,").split(",")
@@ -367,7 +400,10 @@ def cmd_promote(args) -> None:
     print(f"\nWaiting for {app_name(service, to_env)} to sync in {to_env}...")
     ok = poll_applications([service], to_env, ctx, timeout=args.timeout)
     if not ok:
-        print(f"Timeout: {app_name(service, to_env)} did not reach Synced+Healthy within {args.timeout}s")
+        print(
+            f"Timeout: {app_name(service, to_env)} did not reach "
+            f"Synced+Healthy within {args.timeout}s"
+        )
         sys.exit(1)
     print(f"\nDone. {service} @ {tag} is live in {to_env}.")
 
@@ -381,14 +417,25 @@ def cmd_watch(args) -> None:
 
     print("\n--- kubectl rollout status ---")
     rollout_cmd = _kubectl_cmd(
-        ("rollout", "status", f"deployment/{service}", "-n", "default", f"--timeout={args.timeout}s"),
+        (
+            "rollout",
+            "status",
+            f"deployment/{service}",
+            "-n",
+            "default",
+            f"--timeout={args.timeout}s",
+        ),
         ctx,
     )
-    rollout = subprocess.run(rollout_cmd)
+    # check=False deliberately: a non-zero exit here is informational only —
+    # Argo CD's Application health is the authoritative gate below, and a
+    # transient rollout timeout may still reconcile to Healthy.
+    rollout = subprocess.run(rollout_cmd, check=False)
     if rollout.returncode != 0:
-        # Informational only — Argo CD's Application health is the authoritative
-        # gate below. A transient rollout timeout may still reconcile to Healthy.
-        print(f"  (kubectl rollout status exited {rollout.returncode}; checking Argo CD state)")
+        print(
+            f"  (kubectl rollout status exited {rollout.returncode}; "
+            "checking Argo CD state)"
+        )
 
     print("\n--- Application status ---")
     name = app_name(service, env)
@@ -407,13 +454,15 @@ def cmd_ui(args) -> None:
         ("port-forward", "svc/argocd-server", "-n", "argocd", f"{port}:80"),
         ctx,
     )
-    proc = subprocess.Popen(pf_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(
+        pf_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
     time.sleep(1)
 
     pwd = argo_password(ctx)
     print(f"\n{'=' * 50}")
     print(f"Argo CD UI:  http://localhost:{port}")
-    print(f"Username:    admin")
+    print("Username:    admin")
     print(f"Password:    {pwd}")
     print("=" * 50)
     print("Press Ctrl+C to stop the port-forward.")
@@ -429,10 +478,14 @@ def cmd_ui(args) -> None:
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+
 def cmd_help(args, parser: argparse.ArgumentParser) -> None:
     if args.topic:
         for action in parser._subparsers._actions:
-            if hasattr(action, "_name_parser_map") and args.topic in action._name_parser_map:
+            if (
+                hasattr(action, "_name_parser_map")
+                and args.topic in action._name_parser_map
+            ):
                 action._name_parser_map[args.topic].print_help()
                 return
         print(f"Unknown command: {args.topic}")
@@ -442,23 +495,40 @@ def cmd_help(args, parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="argocd-deploy",
-        description="Manage the Argo CD lifecycle: install, verify, promote, watch, and access the UI.",
+        description=(
+            "Manage the Argo CD lifecycle: install, verify, promote, watch, "
+            "and access the UI."
+        ),
     )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
     sub.required = True
 
     # install
     p = sub.add_parser("install", help="Install Argo CD and bootstrap app-of-apps")
-    p.add_argument("--env", default="local", choices=["local", "staging", "prod"],
-                   help="Target environment (default: local)")
-    p.add_argument("--context", default=None, help="kubectl context (default: active context)")
+    p.add_argument(
+        "--env",
+        default="local",
+        choices=["local", "staging", "prod"],
+        help="Target environment (default: local)",
+    )
+    p.add_argument(
+        "--context", default=None, help="kubectl context (default: active context)"
+    )
     p.set_defaults(func=cmd_install)
 
     # verify
-    p = sub.add_parser("verify", help="Read-only health check: pods, sync status, repo reachability")
-    p.add_argument("--env", default="local", choices=["local", "staging", "prod"],
-                   help="Target environment (default: local)")
-    p.add_argument("--context", default=None, help="kubectl context (default: active context)")
+    p = sub.add_parser(
+        "verify", help="Read-only health check: pods, sync status, repo reachability"
+    )
+    p.add_argument(
+        "--env",
+        default="local",
+        choices=["local", "staging", "prod"],
+        help="Target environment (default: local)",
+    )
+    p.add_argument(
+        "--context", default=None, help="kubectl context (default: active context)"
+    )
     p.set_defaults(func=cmd_verify)
 
     # promote
@@ -475,27 +545,57 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("service", help="Service name (e.g. weather)")
-    p.add_argument("--from", dest="from_env", required=True,
-                   choices=["local", "staging", "prod"], help="Source environment")
-    p.add_argument("--to", dest="to_env", required=True,
-                   choices=["local", "staging", "prod"], help="Target environment")
-    p.add_argument("--context", default=None,
-                   help="kubectl context for watching target env sync (default: active context)")
-    p.add_argument("--timeout", type=int, default=300, help="Seconds to wait for sync (default: 300)")
+    p.add_argument(
+        "--from",
+        dest="from_env",
+        required=True,
+        choices=["local", "staging", "prod"],
+        help="Source environment",
+    )
+    p.add_argument(
+        "--to",
+        dest="to_env",
+        required=True,
+        choices=["local", "staging", "prod"],
+        help="Target environment",
+    )
+    p.add_argument(
+        "--context",
+        default=None,
+        help="kubectl context for watching target env sync (default: active context)",
+    )
+    p.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="Seconds to wait for sync (default: 300)",
+    )
     p.set_defaults(func=cmd_promote)
 
     # watch
-    p = sub.add_parser("watch", help="Stream rollout status and confirm Application is Synced+Healthy")
+    p = sub.add_parser(
+        "watch", help="Stream rollout status and confirm Application is Synced+Healthy"
+    )
     p.add_argument("service", help="Service name (e.g. weather)")
-    p.add_argument("--env", default="local", choices=["local", "staging", "prod"],
-                   help="Target environment (default: local)")
-    p.add_argument("--context", default=None, help="kubectl context (default: active context)")
-    p.add_argument("--timeout", type=int, default=180, help="Seconds to wait (default: 180)")
+    p.add_argument(
+        "--env",
+        default="local",
+        choices=["local", "staging", "prod"],
+        help="Target environment (default: local)",
+    )
+    p.add_argument(
+        "--context", default=None, help="kubectl context (default: active context)"
+    )
+    p.add_argument(
+        "--timeout", type=int, default=180, help="Seconds to wait (default: 180)"
+    )
     p.set_defaults(func=cmd_watch)
 
     # ui
     p = sub.add_parser("ui", help="Port-forward the Argo CD UI and print credentials")
-    p.add_argument("--context", default=None, help="kubectl context (default: active context)")
+    p.add_argument(
+        "--context", default=None, help="kubectl context (default: active context)"
+    )
     p.add_argument("--port", type=int, default=8080, help="Local port (default: 8080)")
     p.set_defaults(func=cmd_ui)
 

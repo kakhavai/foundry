@@ -31,3 +31,22 @@ exclude = [
 # this says the same thing for the repo-level code.
 [tool.ruff]
 target-version = "py312"
+line-length = 88
+
+# `E`, `F`, `I` is what every service and `libs/collector-core` already select,
+# so repo-level Python is held to the same bar as packaged code rather than a
+# looser one.
+#
+# `SIM` and `PLW` are the two additions, and they are here because of what
+# these particular directories are. `scripts/` is a pile of `subprocess.run`
+# calls driving kubectl, helm and docker — `PLW1510` (subprocess-run-without-check)
+# forces each of those to say out loud whether a non-zero exit is fatal, which
+# is exactly the decision that gets made by omission otherwise. `SIM` catches
+# the nested-`with` pyramids that accumulate in tests full of `mock.patch`.
+#
+# Deliberately NOT `PL` in full: `PLR2004` (magic-value-comparison) fires 31
+# times on assertions like `assert result.returncode == 0`, where the magic
+# value is the point of the test, and `PLR09xx` complains about the length of
+# functions whose length is not a defect.
+[tool.ruff.lint]
+select = ["E", "F", "I", "SIM", "PLW"]

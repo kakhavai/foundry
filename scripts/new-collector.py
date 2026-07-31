@@ -297,7 +297,7 @@ INIT_PY = '''\
 '''
 
 MAIN_PY = '''\
-"""%%name%%'s process wiring: the descriptor, and nothing else yet.
+"""Process wiring: the descriptor, and nothing else yet.
 
 Everything else — environment parsing, `CaptureState`, the capture loop, bearer
 auth, the OTel guard and the standard five routes — lives in
@@ -533,7 +533,7 @@ async def fetch_rows(
 '''
 
 CAPTURE_PY = '''\
-"""%%name%%'s capture pass: fetch -> coverage -> envelopes -> lake.
+"""The capture pass: fetch -> coverage -> envelopes -> lake.
 
 `/signals` serves from the cache this fills, never from an upstream, so an
 upstream outage costs **freshness, not availability**. A collector that reaches
@@ -622,6 +622,13 @@ def build_signal(signal_type: str, row: dict, *, now: datetime) -> dict:
     tests/test_capture_contract_conformance.py validates the REAL output of
     this function against that schema, so a renamed field fails there rather
     than in the generator six weeks later.
+
+    The `key`/`observed_at`/`value` below and the schema that accepts them are
+    placeholders that agree with each other by construction, which is why that
+    conformance test currently proves only that two placeholders match. The
+    schema carries a `$comment` marker so a collector reaching the repo with it
+    still in place fails `tests/test_placeholder_schemas.py` — and rewriting
+    the schema is what forces this function to follow.
     """
     return {
         "key": _row_key(row),
@@ -974,7 +981,7 @@ from .conftest import NOW, SpyLake
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts" / "signal-envelope"
 ENVELOPE_SCHEMA = json.loads((CONTRACTS / "envelope.v1.schema.json").read_text())
 FIELD_SCHEMAS = json.loads(
-    (CONTRACTS / "collectors" / "%%name%%.json").read_text()
+    (CONTRACTS / "collectors" / "%%name%%.json").read_text(),
 )["signal_types"]
 
 
@@ -992,7 +999,12 @@ def validate(envelopes: dict) -> None:
 async def capture(lake, **kwargs):
     async with httpx.AsyncClient() as client:
         return await capture_%%pkg%%(
-            2026, 1, client=client, lake=lake, now=NOW, **kwargs
+            2026,
+            1,
+            client=client,
+            lake=lake,
+            now=NOW,
+            **kwargs,
         )
 
 
@@ -1080,7 +1092,11 @@ async def _capture(rows, monkeypatch, lake):
     monkeypatch.setattr("%%pkg%%.capture.fetch_rows", fake)
     async with httpx.AsyncClient() as client:
         return await capture_%%pkg%%(
-            2026, 1, client=client, lake=lake, now=NOW
+            2026,
+            1,
+            client=client,
+            lake=lake,
+            now=NOW,
         )
 
 
@@ -1121,7 +1137,7 @@ def test_every_signal_type_declares_a_floor():
     assert all(floor >= 1 for floor in EXPECTED_FLOOR.values())
 '''
 
-PYPROJECT_TOML = '''\
+PYPROJECT_TOML = """\
 [project]
 name = "%%name%%"
 version = "0.1.0"
@@ -1175,9 +1191,9 @@ show_missing = true
 
 [tool.uv.sources]
 collector-core = { workspace = true }
-'''
+"""
 
-DOCKERFILE = '''\
+DOCKERFILE = """\
 # Stage 1 — workspace-manifests. Verbatim in every collector; the write-up
 # lives in services/weather/Dockerfile, and tests/test_dockerfile_workspace.py
 # enforces that they agree.
@@ -1247,9 +1263,9 @@ ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE %%port%%
 
 CMD ["uvicorn", "%%pkg%%.main:app", "--host", "0.0.0.0", "--port", "%%port%%"]
-'''
+"""
 
-HELM_VALUES = '''\
+HELM_VALUES = """\
 service:
   name: %%name%%
   port: %%port%%
@@ -1337,27 +1353,58 @@ extraEnv:
         optional: true
   - name: AWS_DEFAULT_REGION
     value: "us-east-1"
-'''
+"""
 
-GITOPS_VALUES = '''\
+GITOPS_VALUES = """\
 # The image tag ArgoCD deploys. Overwritten on every push to main by
 # .github/actions/update-gitops-tag with the Git SHA that built the image —
 # 0.1.0 is only the placeholder that makes the generated Application render
 # before the first build lands.
 image:
   tag: "0.1.0"
-'''
+"""
 
-FIELD_SCHEMA_HEAD = '''\
+FIELD_SCHEMA_HEAD = """\
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://foundry.internal/signal-envelope/collectors/%%name%%.json",
   "title": "%%name%% collector signal fields",
   "signal_types": {
-'''
+"""
 
-FIELD_SCHEMA_TYPE = '''\
+# The `$comment` is a load-bearing sentinel, not documentation, and
+# PLACEHOLDER_SCHEMA_MARKER below is the string both ends agree on.
+#
+# The problem it solves (issue #85): this schema and the generated
+# `build_signal` are placeholders that agree with each other BY CONSTRUCTION,
+# so `tests/test_capture_contract_conformance.py` proves they agree — not that
+# either is right. A collector author who never revisits them ships a schema
+# validating nothing meaningful, and nothing anywhere notices.
+#
+# It is a sentinel rather than a generated failing test on purpose. The
+# scaffolder's promise, asserted all over tests/test_new_collector.py, is that
+# a fresh collector is correct *unmodified*: it lints, renders, and its own
+# suite passes. `cd services/<name> && uv run pytest -v` is the first thing
+# CLAUDE.md tells an author to run, and a scaffold that is red on arrival
+# teaches people to ignore red — which costs more than this gate is worth.
+#
+# So the marker is inert where the output is still a scaffold, and fatal where
+# it is not: `tests/test_placeholder_schemas.py` fails when a schema carrying
+# it reaches the repo. Gating the schema alone is enough to reach both halves
+# — once the schema changes, the conformance test drags `build_signal` along
+# with it, because it validates that function's real output.
+#
+# `$comment` is a JSON Schema 2020-12 keyword that every validator ignores, so
+# nothing at runtime behaves differently for its presence.
+PLACEHOLDER_SCHEMA_MARKER = "TODO(new-collector)"
+
+FIELD_SCHEMA_TYPE = (
+    """\
     "%%signal_type%%": {
+      "$comment": "%%marker%%: placeholder fields. Replace these with this \
+collector's real signal shape, then delete this $comment. Kept deliberately \
+meaningless -- the generated build_signal agrees with them by construction, so \
+leaving both in place would prove only that two placeholders match.",
       "type": "object",
       "required": ["key", "observed_at", "value"],
       "properties": {
@@ -1365,9 +1412,10 @@ FIELD_SCHEMA_TYPE = '''\
         "observed_at": { "type": "string", "format": "date-time" },
         "value": { "type": "number" }
       }
-    }'''
+    }"""
+).replace("%%marker%%", PLACEHOLDER_SCHEMA_MARKER)
 
-README_MD = '''\
+README_MD = """\
 # %%name%%
 
 A Foundry signal collector. Scaffolded by `scripts/new-collector.py`; see
@@ -1402,7 +1450,14 @@ background task; poll `/signals` rather than reading it on the next line.
 2. Set `EXPECTED_FLOOR` in `capture.py` to the size this collector's universe
    is actually known to have. It must not be derived from a fetch.
 3. Rewrite `build_signal` and mirror its output in
-   `contracts/signal-envelope/collectors/%%name%%.json`.
+   `contracts/signal-envelope/collectors/%%name%%.json`. **This one is
+   enforced.** The generated schema and the generated `build_signal` agree
+   with each other by construction, so the conformance test proves they match
+   rather than that either is right. Each signal type therefore carries a
+   `$comment` marker, and `tests/test_placeholder_schemas.py` fails on any
+   collector that reaches the repo still carrying it — or still carrying the
+   placeholder's `key`/`observed_at`/`value` field set with the marker
+   deleted.
 4. Replace the placeholder series in `metrics.py`, or drop the subclass.
 5. Decide `CAPTURE_ENABLED` in `helm/values/%%name%%/values.yaml`.
 
@@ -1412,9 +1467,9 @@ background task; poll `/signals` rather than reading it on the next line.
 cd services/%%name%%
 uv run pytest -v
 ```
-'''
+"""
 
-SMOKE_SH = '''\
+SMOKE_SH = """\
 #!/usr/bin/env bash
 #
 # %%name%%'s own smoke assertions — the routes beyond the standard five.
@@ -1437,9 +1492,9 @@ AUTH="Authorization: Bearer $SMOKE_TOKEN"
 # required check would pass over an unprotected path.
 curl -sf -H "$AUTH" "$SMOKE_GATEWAY_URL/catalog" >/dev/null
 echo "%%name%%: extra-route smoke OK"
-'''
+"""
 
-REGISTRY_ENTRY = '''\
+REGISTRY_ENTRY = """\
 
   - name: %%name%%
     path: %%path%%
@@ -1451,7 +1506,7 @@ REGISTRY_ENTRY = '''\
     # collector narrows to roster-scope's membership list before it fetches.
     scope_aware: %%scope_aware%%
     depends_on: [%%depends_on_inline%%]
-'''
+"""
 
 
 # ── writing ───────────────────────────────────────────────────────────────────
@@ -1508,9 +1563,7 @@ def build_files(collector: Collector, *, capture_enabled: bool) -> dict[str, str
         f"{service}/tests/__init__.py": "",
         f"{service}/tests/conftest.py": r(CONFTEST_PY),
         f"{service}/tests/test_routes.py": r(TEST_ROUTES_PY),
-        f"{service}/tests/test_capture_contract_conformance.py": r(
-            TEST_CONFORMANCE_PY
-        ),
+        f"{service}/tests/test_capture_contract_conformance.py": r(TEST_CONFORMANCE_PY),
         f"{service}/tests/test_coverage_floor.py": r(TEST_COVERAGE_PY),
         f"{service}/Dockerfile": r(DOCKERFILE),
         f"{service}/pyproject.toml": r(PYPROJECT_TOML),

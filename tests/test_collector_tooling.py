@@ -425,7 +425,7 @@ def _bash_works() -> bool:
     where these files execute.
     """
     try:
-        return subprocess.run(["bash", "-c", "true"]).returncode == 0
+        return subprocess.run(["bash", "-c", "true"], check=False).returncode == 0
     except OSError:
         return False
 
@@ -444,14 +444,19 @@ def test_any_smoke_hook_is_valid_bash(entry):
     hook = SERVICES_DIR / entry["name"] / "smoke.sh"
     if not hook.exists():
         pytest.skip(f"{entry['name']} has no extra routes to assert")
-    result = subprocess.run(["bash", "-n", str(hook)], capture_output=True, text=True)
+    result = subprocess.run(
+        ["bash", "-n", str(hook)], check=False, capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
 
 
 @needs_bash
 def test_smoke_test_itself_is_valid_bash():
     result = subprocess.run(
-        ["bash", "-n", str(SMOKE_TEST_PATH)], capture_output=True, text=True
+        ["bash", "-n", str(SMOKE_TEST_PATH)],
+        check=False,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, result.stderr
 

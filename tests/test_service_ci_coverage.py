@@ -15,7 +15,8 @@ protects a specific way that could stop being true:
   * a per-service workflow reappearing               (test_no_per_service_*)
   * the matrix quietly becoming "run everything"     (test_*_derived, test_guard_*)
   * the workflow-level `paths:` trigger drifting out of step with the
-    generated filters, which silently stops a service's CI                (test_workflow_trigger_covers_*)
+    generated filters, which silently stops a service's CI
+                                                       (test_workflow_trigger_covers_*)
   * the four jobs, their order, or the push-to-main gate being lost in a
     rewrite                                          (test_job_*)
 
