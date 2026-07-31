@@ -30,7 +30,7 @@ def test_fixture_conforms_to_the_envelope_contract(fixture):
 
 
 def test_every_fixture_declares_a_known_collector():
-    known = {"weather", "player-identity", "roster-scope"}
+    known = {"weather", "player-identity", "roster-scope", "player-stats"}
     for fixture in FIXTURES:
         body = json.loads(fixture.read_text())
         assert body["collector"] in known, fixture.name

@@ -109,7 +109,17 @@ collectors:
     cadence_class: weekly
     envelope_version: "1"
     signal_types: [player_box_weekly]
-    # TYPE-CHECKED ONLY — nothing verifies this is correct. Set it true if this
-    # collector narrows to roster-scope's membership list before it fetches.
+    # TYPE-CHECKED ONLY — nothing verifies this is correct. True because the
+    # collector's coverage.expected is defined against roster-scope's
+    # watchlist and its EXPECTED_FLOOR is derived from roster-scope's config
+    # (416 slots minus the 32 team defenses, which have no box score = 384).
+    # The runtime narrowing ships OFF: `ROSTER_SCOPE_URL` is empty in the
+    # values file because roster-scope and this collector currently mint
+    # player_ids from two different stub resolvers, so the id spaces do not
+    # intersect. See services/player-stats/player_stats/adapters/scope.py.
     scope_aware: true
+    # roster-scope for the watchlist, player-identity for the GSIS ->
+    # canonical id crosswalk. Both are seams today (see scope_aware above);
+    # declared anyway because the phase doc names them and this is the
+    # merge-order gate that keeps this PR behind both of theirs.
     depends_on: [player-identity, roster-scope]
