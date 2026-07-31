@@ -2,23 +2,133 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://foundry.internal/signal-envelope/collectors/depth-chart.json",
   "title": "depth-chart collector signal fields",
+  "description": "Two grains. `team_depth_chart` is one row per charted player: who is ahead of whom. `depth_chart_stability` is one row per (team, position) group: whether that ordering can be believed. Fields that are `null` on every row today are contracted as nullable rather than omitted, because the generator must be able to tell 'this collector does not know' from 'this field does not exist' — see services/depth-chart/depth_chart/capture.py for why each one is unknown and what would make it knowable.",
   "signal_types": {
     "team_depth_chart": {
       "type": "object",
-      "required": ["key", "observed_at", "value"],
+      "additionalProperties": false,
+      "required": [
+        "team",
+        "position",
+        "player_id",
+        "gsis_id",
+        "player_name",
+        "official_rank",
+        "functional_rank",
+        "rank_source",
+        "disagreement",
+        "role_label",
+        "is_starter",
+        "roster_status",
+        "weeks_at_rank",
+        "chart_published_at",
+        "chart_hash"
+      ],
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "observed_at": { "type": "string", "format": "date-time" },
-        "value": { "type": "number" }
+        "team": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "position": { "type": "string", "enum": ["QB", "RB", "WR", "TE", "K"] },
+        "player_id": {
+          "type": ["string", "null"],
+          "pattern": "^fdy-[0-9a-f]{12}$",
+          "description": "Canonical id from player-identity. Null until a shared player-identity client lands in collector-core; join on `gsis_id` meanwhile."
+        },
+        "gsis_id": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "The feed's published crosswalk id, which player-identity adopts as a Tier-1 link. Null when the chart row carried none."
+        },
+        "player_name": { "type": "string", "minLength": 1 },
+        "official_rank": { "type": "integer", "minimum": 1 },
+        "functional_rank": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "Computed in-repo from usage-share, which is not built. Null until it is."
+        },
+        "rank_source": {
+          "type": "string",
+          "enum": ["official", "inferred", "blended"]
+        },
+        "disagreement": {
+          "type": ["integer", "null"],
+          "description": "official_rank - functional_rank. Null while either is missing."
+        },
+        "role_label": {
+          "type": ["string", "null"],
+          "enum": ["qb1", "qb2", null],
+          "description": "Only the labels this upstream determines. Alignment- and usage-derived labels stay null rather than being guessed."
+        },
+        "is_starter": {
+          "type": ["boolean", "null"],
+          "description": "Opened the most recent game at the position — a participation fact this feed does not carry. Not the same claim as official_rank == 1."
+        },
+        "roster_status": {
+          "type": ["string", "null"],
+          "enum": [
+            "active",
+            "practice_squad",
+            "ir",
+            "pup",
+            "nfi",
+            "suspended",
+            null
+          ],
+          "description": "Reconciled against roster-transactions, which is not registered yet."
+        },
+        "weeks_at_rank": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Consecutive publication weeks at this rank. A lower bound, capped by the adapter's retained history."
+        },
+        "chart_published_at": { "type": "string", "format": "date-time" },
+        "chart_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$",
+          "description": "Hash of the canonically sorted (rank, player) ordering — never of the response bytes."
+        }
       }
     },
     "depth_chart_stability": {
       "type": "object",
-      "required": ["key", "observed_at", "value"],
+      "additionalProperties": false,
+      "required": [
+        "team",
+        "position",
+        "chart_published_at",
+        "chart_hash",
+        "charted_players",
+        "weeks_observed",
+        "window_weeks",
+        "comparisons",
+        "rank_changes_4w",
+        "stability_score",
+        "chart_age_days",
+        "is_stale"
+      ],
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "observed_at": { "type": "string", "format": "date-time" },
-        "value": { "type": "number" }
+        "team": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "position": { "type": "string", "enum": ["QB", "RB", "WR", "TE", "K"] },
+        "chart_published_at": { "type": "string", "format": "date-time" },
+        "chart_hash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "charted_players": { "type": "integer", "minimum": 1 },
+        "weeks_observed": { "type": "integer", "minimum": 1 },
+        "window_weeks": { "type": "integer", "minimum": 1 },
+        "comparisons": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Week-to-week comparisons the retained history supported — stability_score's denominator, carried so a consumer can tell a confident 1.0 from an unevidenced one."
+        },
+        "rank_changes_4w": { "type": "integer", "minimum": 0 },
+        "stability_score": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "1 - rank_changes/comparisons. Null when comparisons is 0: a single observed week is no evidence of stability, and 0/0 must not read as perfect."
+        },
+        "chart_age_days": {
+          "type": "number",
+          "description": "now - chart_published_at. The independent axis a high stability_score must be cross-checked against, because a frozen chart drives that score to 1.0."
+        },
+        "is_stale": { "type": "boolean" }
       }
     }
   }
