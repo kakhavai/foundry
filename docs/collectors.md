@@ -164,14 +164,16 @@ and each service's `tests/test_metrics.py` pins its own series the same way.
 
 ## Narrowing to a scope: `ScopeClient` and `IdentityClient`
 
-`--scope-aware` on the scaffolder records the flag on your registry entry
-today; it does not yet generate the wiring below. That retrofit is deferred
-work (this repo's scope-narrowing plan calls it out explicitly as future
-work), but the two seams it will retrofit onto already exist in
-`libs/collector-core` and are unit-tested on their own, independent of any
+Three collectors narrow today — `usage-share` and `player-stats` against
+`roster-scope`'s membership list, `injury-report` against membership ∪ matchup —
+so this is a pattern to follow rather than a plan. `--scope-aware` on the
+scaffolder still only records the flag on your registry entry; it does not
+generate the wiring below, so you write that yourself, out of three pieces that
+all live in `libs/collector-core` and are unit-tested independently of any
 collector that calls them:
 [`collector_core/scope.py`](../libs/collector-core/collector_core/scope.py)
-and [`collector_core/identity.py`](../libs/collector-core/collector_core/identity.py).
+(`ScopeClient`, and `fetch_scope_or_fail`, the fail-closed call site) and
+[`collector_core/identity.py`](../libs/collector-core/collector_core/identity.py).
 
 **`ScopeClient` reads the published scope from the lake, never from
 `roster-scope` over HTTP.** `roster-scope`'s `GET /scope/players` and
@@ -211,6 +213,61 @@ later in this doc): write a
 next pass's alert be `collector_coverage_ratio` reading zero rather than a
 vendor 429 that took the rest of the fleet down with it.
 
+**`fetch_scope_or_fail` is that response, and you should not hand-roll it.**
+
+```python
+from collector_core.scope import fetch_scope_or_fail
+
+failure_context = dict(
+    collector=COLLECTOR_NAME, signal_types=SIGNAL_TYPES,
+    adapter=UPSTREAM_ADAPTER, now=now, scope=scope, lake=lake,
+    metrics=metrics, expected=EXPECTED_FLOOR,
+    source_ref=source_ref(season, week),
+)
+
+# BEFORE the first upstream request. That ordering IS failing closed.
+scope_members = await fetch_scope_or_fail(
+    lambda: fetch_watchlist(lake, season, week), **failure_context
+)
+```
+
+It takes a zero-argument callable, not an awaitable, so a *synchronous* raise
+counts too — `usage-share` builds its `IdentityClient` inside the callable
+because a missing `PLAYER_IDENTITY_URL` narrows to nothing just as completely as
+a missing scope does. It returns whatever the callable returned (a `Scope`, a
+`frozenset`, a tuple), and on failure it writes and re-raises rather than
+returning. Do not pass `reason=` in `failure_context`; the helper supplies its
+own.
+
+**It has two `except` arms, and the second one is the one that gets dropped.**
+
+* `ScopeUnavailable` → `reason=exc.reason` is forwarded rather than flattened
+  to a literal. `scope_unavailable`, `scope_empty` and a collector's own
+  `identity_unavailable` have three different fixes, and collapsing them costs
+  an operator the only thing the envelope could have told them.
+* **Everything else** → `fail_capture` with no `reason`, letting the shared
+  classifier label it `malformed` or `unknown`. `ScopeUnavailable` is only what
+  `ScopeClient` raises when the lake **answered** and held nothing usable; the
+  lake can also fail *outright*, and `S3LakeWriter.list_keys`/`read` propagate
+  botocore and JSON-decode errors untouched while `_parse_captured_at` raises
+  `ValueError` on a timestamp it does not recognise. Omit this arm and every one
+  of those escapes the capture coroutine: **no `present: 0` envelope, no
+  `collector_capture_failures_total`, just a log line.** The failure is silent,
+  which is why the arms live in the library instead of in a comment block each
+  collector copies.
+
+Whichever reason ends up on the envelope also becomes the
+`collector_capture_failures_total` label, so a fail-closed pass is alertable as
+`scope_unavailable` rather than landing in `unknown` beside genuine crashes.
+
+**What a dropped row is, and is not.** An out-of-scope player is not a hole —
+it was never owed, so it does not belong in `coverage.missing`, and recording
+one would make narrowing read as a permanent coverage regression that buries the
+rows that genuinely failed. `coverage.expected` stays the declared floor. It
+must **never** derive from the scope size: `Coverage.ratio` returns 1.0 when
+`expected` is 0, so a truncated scope naming two players would otherwise read as
+a perfect week.
+
 **`IdentityClient` resolves upstream rows to canonical `fdy-` ids, and never
 adopts a refusal.** `player-identity`'s `POST /resolve/batch` is the
 authoritative answer for "who is this" across the fleet, chunked at
@@ -231,6 +288,27 @@ for the full history of why that used to be a real bug. Treat every id
 resolver refusal: a slot recorded in `coverage.missing` with the reason
 attached, never a skipped row — a skipped row shrinks the numerator and the
 denominator together and reads as perfect coverage.
+
+**A request that fails is not the same fact as a refusal, and `resolve_many`
+will not tell you which you got unless you ask.** A chunk `player-identity`
+could not be reached for (a 401, a connection refusal, a timeout) is caught per
+chunk and recorded on `IdentityClient.failures` as `query -> reason`, and the
+loop moves on — one dead chunk must not discard the chunks that already
+resolved. Those queries are simply **absent from the returned dict**, exactly
+like a genuine `resolved: false`. A caller that reads only the dict therefore
+reports a full `player-identity` outage as an ordinary short week, whose
+`errors` array says nothing but `below_expected_floor` — indistinguishable from
+a two-member scope or a truncated feed. Read `failures` after each call (it is
+reset at the top of the next one) and file **one summarised** entry per pass:
+
+```python
+if failures.rows:
+    acc.add_error("identity_upstream_error", failures.detail())
+```
+
+Summarised, not per row: a ~1,700-row feed against a dead seam would otherwise
+fill `CoverageAccumulator`'s 50-entry cap by itself and push every other reason
+off the list. `usage_share/adapters/scope.py`'s `IdentityFailures` is the model.
 
 Successful resolutions are cached **per `IdentityClient` instance**, keyed on
 the query alone — **build one per collector process and reuse it across every
@@ -336,6 +414,12 @@ for row in rows:
   applied in one place. The array is capped at 50 with an explicit
   `errors_truncated` marker — a silently truncated error list looks like a
   short list of problems.
+- Use `acc.add_priority_error(...)` — sparingly — for the one entry that
+  *explains* the pass, such as "every row was resolved and then dropped by the
+  scope". It inserts at the front so the cap cannot delete it, the same reason
+  `errors` already prepends `below_expected_floor`. Do not reach into
+  `acc._errors` to do this by hand; that is a private attribute of a library
+  class, and at twenty-six collectors what gets copied is the workaround.
 
 `0/0` reads as ratio **1.0**, which is correct for a bye week and catastrophic
 for a pass that captured nothing. That is why the floor is not optional.

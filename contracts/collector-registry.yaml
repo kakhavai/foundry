@@ -66,6 +66,17 @@
 #                    A collector could still import the seam and call it
 #                    wrongly; that residual gap is human-reviewed, same as
 #                    before, just smaller than "the whole claim."
+#                    NOTE the flag means "uses the scope", which covers two
+#                    genuinely different behaviours and does not distinguish
+#                    them: NARROWING WHAT IT PUBLISHES (usage-share drops
+#                    out-of-scope rows; injury-report drops them from
+#                    player_injury_status, though team_injury_report is
+#                    deliberately not narrowed) versus USING THE SCOPE AS ITS
+#                    COVERAGE DENOMINATOR ONLY (player-stats feeds the
+#                    watchlist to acc.expect and publishes every row the feed
+#                    returns). Both are true narrowing; only the first changes
+#                    the signal set a consumer receives. Read the collector's
+#                    own module docstring before assuming which it is.
 #   depends_on       other collectors in THIS file. Self-dependency and cycles
 #                    are rejected.
 
@@ -146,11 +157,19 @@ collectors:
     # actually survive the join is a known follow-up, tracked separately from
     # this flag.
     scope_aware: true
-    # Every emitted row carries a canonical player_id, and player-identity is
-    # the collector that decides what one is. The seam is
+    # `player-identity` because every emitted row carries a canonical
+    # player_id and that collector is what decides what one is (the seam is
     # `injury_report/adapters/identity.py`; PLAYER_IDENTITY_URL ships empty and
-    # ids are minted deterministically until it does not.
-    depends_on: [player-identity]
+    # ids are minted deterministically until it does not).
+    #
+    # `roster-scope` because the whole capture now fails CLOSED unless it
+    # published BOTH scope signal types for the week (or the prior one) —
+    # stronger than `usage-share`'s or `player-stats`', which fail closed on
+    # membership alone and already declare both. This edge was missing while
+    # the narrowing was being built, which made it a wrong edge in a graph two
+    # machines read: `tests/test_collector_registry.py`'s merge-order gate and
+    # the out-of-repo generator.
+    depends_on: [player-identity, roster-scope]
   - name: usage-share
     path: /collectors/usage-share
     stage: 8B

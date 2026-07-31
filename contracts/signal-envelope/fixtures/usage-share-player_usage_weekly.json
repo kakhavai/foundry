@@ -40,8 +40,8 @@
         "carries": null,
         "targets": null
       },
-      "player_id": "00-KC-QB1",
-      "player_id_source": "upstream_gsis",
+      "player_id": "fdy-kcqb1",
+      "player_id_source": "player_identity",
       "redzone": {
         "carries": null,
         "snap_share": null,
@@ -79,8 +79,8 @@
         "carries": null,
         "targets": null
       },
-      "player_id": "00-KC-WR1",
-      "player_id_source": "upstream_gsis",
+      "player_id": "fdy-kcwr1",
+      "player_id_source": "player_identity",
       "redzone": {
         "carries": null,
         "snap_share": null,
@@ -118,8 +118,8 @@
         "carries": null,
         "targets": null
       },
-      "player_id": "00-KC-WR2",
-      "player_id_source": "upstream_gsis",
+      "player_id": "fdy-kcwr2",
+      "player_id_source": "player_identity",
       "redzone": {
         "carries": null,
         "snap_share": null,
@@ -157,8 +157,8 @@
         "carries": null,
         "targets": null
       },
-      "player_id": "00-KC-TE1",
-      "player_id_source": "upstream_gsis",
+      "player_id": "fdy-kcte1",
+      "player_id_source": "player_identity",
       "redzone": {
         "carries": null,
         "snap_share": null,
@@ -196,8 +196,8 @@
         "carries": null,
         "targets": null
       },
-      "player_id": "00-KC-RB1",
-      "player_id_source": "upstream_gsis",
+      "player_id": "fdy-kcrb1",
+      "player_id_source": "player_identity",
       "redzone": {
         "carries": null,
         "snap_share": null,
@@ -235,8 +235,8 @@
         "carries": null,
         "targets": null
       },
-      "player_id": "00-BUF-QB1",
-      "player_id_source": "upstream_gsis",
+      "player_id": "fdy-bufqb1",
+      "player_id_source": "player_identity",
       "redzone": {
         "carries": null,
         "snap_share": null,
@@ -274,8 +274,8 @@
         "carries": null,
         "targets": null
       },
-      "player_id": "00-BUF-WR1",
-      "player_id_source": "upstream_gsis",
+      "player_id": "fdy-bufwr1",
+      "player_id_source": "player_identity",
       "redzone": {
         "carries": null,
         "snap_share": null,
@@ -313,8 +313,8 @@
         "carries": null,
         "targets": null
       },
-      "player_id": "00-BUF-RB1",
-      "player_id_source": "upstream_gsis",
+      "player_id": "fdy-bufrb1",
+      "player_id_source": "player_identity",
       "redzone": {
         "carries": null,
         "snap_share": null,
