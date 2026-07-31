@@ -11,6 +11,7 @@ import respx
 from collector_core.coverage import ERRORS_TRUNCATED, MAX_ERRORS
 
 from roster_scope.capture import capture_scope
+from roster_scope.matchups import MATCHUP_SIGNAL
 from roster_scope.scope import CHANGE_SIGNAL, MEMBERSHIP_SIGNAL
 
 from .conftest import NOW, SpyLake, depth_csv, depth_row, full_league_csv
@@ -91,30 +92,51 @@ async def test_capture_never_blocks_the_event_loop_on_the_lake():
         with contextlib.suppress(asyncio.CancelledError):
             await beat
 
-    # Three blocking calls at 0.4s each (one list_keys, two writes) = ~1.2s of
-    # blocking work. On the event loop the heartbeat would be starved through
-    # all of it; off it, the loop keeps ticking throughout.
+    # Four blocking calls at 0.4s each (one list_keys, three writes) = ~1.6s
+    # of blocking work. On the event loop the heartbeat would be starved
+    # through all of it; off it, the loop keeps ticking throughout.
     assert ticks > 10, (
         f"the event loop only ticked {ticks} times during a capture against a "
         f"slow lake — the lake I/O is running on the event loop and will "
         f"freeze /health, exactly as it did on the first deploy"
     )
-    assert len(slow.writes) == 2, "the capture must still have written"
+    assert len(slow.writes) == 3, "the capture must still have written"
 
 
 @respx.mock
-async def test_a_complete_capture_writes_both_envelopes(lake):
+async def test_a_complete_capture_writes_all_three_envelopes(lake):
     mock_feed(full_league_csv())
     result = await run_capture(lake)
 
-    assert set(result) == {MEMBERSHIP_SIGNAL, CHANGE_SIGNAL}
+    assert set(result) == {MEMBERSHIP_SIGNAL, CHANGE_SIGNAL, MATCHUP_SIGNAL}
     membership = result[MEMBERSHIP_SIGNAL]
     assert membership.coverage.expected == 416
     assert membership.coverage.present == 416
     assert membership.coverage.ratio == 1.0
     assert membership.errors == []
     assert membership.scope == {"season": 2026, "week": 1, "scope_version": 1}
-    assert len(lake.writes) == 2
+    assert len(lake.writes) == 3
+
+
+@respx.mock
+async def test_a_matchup_outage_does_not_mask_healthy_membership_coverage(lake):
+    """M22: sharing one accumulator between the two envelopes would blend
+    their coverage into a single number. `full_league_csv` fills every human
+    and team-defense slot but carries none of the matchup positions
+    (CB/S/LB/DL/OL) at all, so a correct implementation reports membership at
+    100% while matchup — genuinely missing every one of its own 608 slots —
+    reports far below it. If the two shared an accumulator, both numbers
+    would move together instead."""
+    mock_feed(full_league_csv())
+    result = await run_capture(lake)
+
+    membership = result[MEMBERSHIP_SIGNAL]
+    matchup = result[MATCHUP_SIGNAL]
+    assert membership.coverage.expected == 416
+    assert membership.coverage.ratio == 1.0
+    assert matchup.coverage.expected == 608
+    assert matchup.coverage.present == 0
+    assert matchup.coverage.ratio < 0.01
 
 
 @respx.mock
@@ -212,12 +234,20 @@ async def test_a_total_upstream_outage_still_writes_an_envelope(lake):
     assert membership.coverage.expected == 416
     assert membership.coverage.present == 32
     assert round(membership.coverage.ratio, 3) == 0.077
-    assert len(lake.writes) == 2
+    assert len(lake.writes) == 3
 
     reasons = {e["reason"] for e in membership.errors}
     assert "http_status" in reasons, "the fetch failure itself is classified"
     assert "depth_chart_unavailable" in reasons
     assert any(e.get("detail") == "depth_chart_fetch" for e in membership.errors)
+
+    # The same fetch feeds both envelopes, so its failure is recorded
+    # independently in the matchup envelope's own errors too -- not by
+    # sharing membership's accumulator, but via its own `add_error` call.
+    matchup = result[MATCHUP_SIGNAL]
+    assert matchup.coverage.expected == 608
+    assert matchup.coverage.present == 0
+    assert any(e.get("detail") == "depth_chart_fetch" for e in matchup.errors)
 
 
 @respx.mock
@@ -254,9 +284,15 @@ async def test_a_ledger_read_failure_mints_no_version(lake):
     assert membership.coverage.expected == 416
     assert membership.coverage.present == 0
     assert len(membership.coverage.missing) == 416
+
+    matchup = result[MATCHUP_SIGNAL]
+    assert matchup.coverage.expected == 608
+    assert matchup.coverage.present == 0
+    assert len(matchup.coverage.missing) == 608
+
     # It still writes: the failure is recorded in the lake, not inferred from
     # a hole in it.
-    assert len(broken.writes) == 2
+    assert len(broken.writes) == 3
 
 
 @respx.mock
@@ -281,8 +317,8 @@ async def test_a_lake_write_failure_does_not_cost_the_resolved_scope(lake):
 
     result = await run_capture(SpyLake(fail_write=True))
 
-    assert set(result) == {MEMBERSHIP_SIGNAL, CHANGE_SIGNAL}
-    assert len(result) == 2
+    assert set(result) == {MEMBERSHIP_SIGNAL, CHANGE_SIGNAL, MATCHUP_SIGNAL}
+    assert len(result) == 3
     assert result[MEMBERSHIP_SIGNAL].coverage.present > 0
 
 
@@ -309,7 +345,7 @@ async def test_a_deadline_truncates_the_pass_rather_than_discarding_it(lake):
     assert membership.errors[-1]["reason"] == ERRORS_TRUNCATED
     assert membership.errors[-1]["total"] == 416
     assert len(membership.coverage.missing) == 416
-    assert len(lake.writes) == 2
+    assert len(lake.writes) == 3
 
 
 @respx.mock

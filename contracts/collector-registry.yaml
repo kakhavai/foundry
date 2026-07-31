@@ -92,7 +92,7 @@ collectors:
     stage: 8A
     cadence_class: weekly
     envelope_version: "1"
-    signal_types: [scope_membership_weekly, scope_change_event]
+    signal_types: [scope_membership_weekly, scope_change_event, scope_matchup_weekly]
     # It defines the scope rather than consuming it.
     scope_aware: false
     # Conceptual today, not yet a runtime call: `PLAYER_IDENTITY_URL` ships

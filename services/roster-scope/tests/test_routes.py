@@ -4,6 +4,7 @@ Route tests pre-populate the cache directly, per the repo's convention — the
 routes never call an upstream.
 """
 
+from roster_scope.matchups import MATCHUP_SIGNAL
 from roster_scope.scope import CHANGE_SIGNAL, MEMBERSHIP_SIGNAL
 
 
@@ -22,7 +23,11 @@ def test_catalog_describes_the_collector(client, seeded_state):
     assert body["collector"] == "roster-scope"
     assert body["envelope_version"] == "1"
     assert body["cadence_class"] == "weekly"
-    assert set(body["signal_types"]) == {MEMBERSHIP_SIGNAL, CHANGE_SIGNAL}
+    assert set(body["signal_types"]) == {
+        MEMBERSHIP_SIGNAL,
+        CHANGE_SIGNAL,
+        MATCHUP_SIGNAL,
+    }
     assert "player_id" in body["filters"]
     assert body["last_capture_at"] == "2026-09-15T12:00:00Z"
     assert body["coverage"][MEMBERSHIP_SIGNAL]["expected"] == 3
