@@ -180,11 +180,12 @@ collectors:
     cadence_class: volatile
     envelope_version: "1"
     signal_types: [roster_transaction]
-    # TYPE-CHECKED ONLY — nothing verifies this is correct. False deliberately,
-    # and for a reason specific to this collector: the players who matter most
-    # here are the ones NOT yet on the watchlist, since the transaction is the
-    # thing that puts them there. Narrowing to roster-scope's membership before
-    # fetching would filter out exactly the signal.
+    # Checked structurally by tests/test_scope_aware_gate.py; nothing verifies
+    # the reasoning below. False deliberately, and for a reason specific to
+    # this collector: the players who matter most here are the ones NOT yet on
+    # the watchlist, since the transaction is the thing that puts them there.
+    # Narrowing to roster-scope's membership before fetching would filter out
+    # exactly the signal.
     scope_aware: false
     # Conceptual today, not yet a runtime call: the canonical `player_id` on
     # every row comes from player-identity, but nothing here reaches it over
@@ -199,10 +200,11 @@ collectors:
     cadence_class: weekly
     envelope_version: "1"
     signal_types: [player_box_weekly]
-    # TYPE-CHECKED ONLY — nothing verifies this is correct. True because the
-    # collector's coverage.expected is defined against roster-scope's
-    # watchlist and its EXPECTED_FLOOR is derived from roster-scope's config
-    # (416 slots minus the 32 team defenses, which have no box score = 384).
+    # Checked structurally by tests/test_scope_aware_gate.py; nothing verifies
+    # the reasoning below. True because the collector's coverage.expected is
+    # defined against roster-scope's watchlist and its EXPECTED_FLOOR is
+    # derived from roster-scope's config (416 slots minus the 32 team
+    # defenses, which have no box score = 384).
     # The watchlist itself is read from the lake unconditionally — there is no
     # env var that turns narrowing off. See
     # services/player-stats/player_stats/adapters/scope.py.
@@ -218,9 +220,10 @@ collectors:
     cadence_class: weekly
     envelope_version: "1"
     signal_types: [game_situational_context, team_rest_context]
-    # TYPE-CHECKED ONLY — nothing verifies this is correct. False here because
-    # the signals are keyed by game and team; there is no player in them for
-    # roster-scope's membership list to narrow.
+    # Checked structurally by tests/test_scope_aware_gate.py; nothing verifies
+    # the reasoning below. False here because the signals are keyed by game
+    # and team; there is no player in them for roster-scope's membership list
+    # to narrow.
     scope_aware: false
     # Empty deliberately. The phase doc's "Depends on" line for this collector
     # says "nothing directly; joins to `venue` for coordinates and timezones",
@@ -235,11 +238,11 @@ collectors:
     cadence_class: volatile
     envelope_version: "1"
     signal_types: [team_depth_chart, depth_chart_stability]
-    # TYPE-CHECKED ONLY — nothing verifies this is correct. False deliberately,
-    # and the spec gives the reason: the chart is a team-level structure, and
-    # ranking only watchlist players would hide the backup who is one move away
-    # from entering it. Every charted player at the configured positions is
-    # published, however deep.
+    # Checked structurally by tests/test_scope_aware_gate.py; nothing verifies
+    # the reasoning below. False deliberately, and the spec gives the reason:
+    # the chart is a team-level structure, and ranking only watchlist players
+    # would hide the backup who is one move away from entering it. Every
+    # charted player at the configured positions is published, however deep.
     scope_aware: false
     # NOT roster-scope, and the direction is the point: roster-scope CONSUMES a
     # depth chart to decide who is in scope, while this collector PUBLISHES the

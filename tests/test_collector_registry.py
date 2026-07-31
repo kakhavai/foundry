@@ -40,9 +40,16 @@ three things. Where each one runs, and why:
   3. Every `depends_on` names a collector that exists.
      -> HERE. Purely a property of this file, plus self-dependency and cycles.
 
-Not covered, stated rather than implied: `scope_aware` has no representation
-in code today, so it is type-checked as a bool and its correctness is
-human-reviewed. A green run says nothing about whether it is right.
+`scope_aware` is not covered by this file: `tests/test_scope_aware_gate.py`
+is where it is checked, structurally and by the same AST approach — a
+collector declaring `scope_aware: true` must import
+`collector_core.scope.ScopeClient`, the fleet's one narrowing seam. That
+proves the narrowing code path exists, not that it behaves correctly;
+whether a capture actually fails closed and drops out-of-scope rows is
+proven behaviourally by each collector's own test suite. This file's own
+test below, `test_scope_aware_is_a_bool_and_nothing_more_is_claimed`, is
+what it says: a type check, nothing more, kept here because it is a property
+of the registry's shape rather than of any one collector's source.
 """
 
 import ast
@@ -551,7 +558,8 @@ def test_depends_on_has_no_cycles():
 
 @pytest.mark.parametrize("entry", ENTRIES, ids=IDS)
 def test_scope_aware_is_a_bool_and_nothing_more_is_claimed(entry):
-    """There is no representation of scope-awareness in code today, so this
-    is the whole of the automated check. Whether the value is CORRECT is
-    human-reviewed at PR time — do not read a green run as confirming it."""
+    """This file's contribution to `scope_aware` is a type check and nothing
+    more — whether `true`/`false` is the CORRECT value is checked structurally
+    by `tests/test_scope_aware_gate.py`, not here. See this module's
+    docstring for what that gate proves and does not."""
     assert isinstance(entry["scope_aware"], bool)

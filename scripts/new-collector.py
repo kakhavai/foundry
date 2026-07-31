@@ -1502,8 +1502,15 @@ REGISTRY_ENTRY = """\
     cadence_class: %%cadence%%
     envelope_version: "%%envelope_version%%"
     signal_types: [%%signal_types_inline%%]
-    # TYPE-CHECKED ONLY — nothing verifies this is correct. Set it true if this
-    # collector narrows to roster-scope's membership list before it fetches.
+    # Set true if this collector narrows to roster-scope's membership list
+    # before it fetches. Checked structurally by
+    # tests/test_scope_aware_gate.py: declaring true requires importing
+    # collector_core.scope.ScopeClient (`from collector_core.scope import
+    # ScopeClient`) somewhere in this collector's source — that test is by
+    # AST, so an `import collector_core.scope` plus attribute access will
+    # not satisfy it. That check proves the narrowing seam is wired in, not
+    # that it behaves correctly; write this collector's own fail-closed test
+    # for that.
     scope_aware: %%scope_aware%%
     depends_on: [%%depends_on_inline%%]
 """

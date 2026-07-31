@@ -635,9 +635,16 @@ as a plain append.
 `envelope_version` is the **string** `"1"`, quoted. Both gates compare exactly;
 `1` against `"1"` is drift.
 
-`scope_aware` is type-checked as a bool and nothing else. No code representation
-of it exists, so its correctness is human-reviewed — a green run says nothing
-about whether it is right.
+`scope_aware` is checked structurally by `tests/test_scope_aware_gate.py`:
+declaring `true` requires importing `collector_core.scope.ScopeClient`
+somewhere in the collector's source, read by AST like the rest of the
+registry gate — the check is `ast.ImportFrom` only, so `import
+collector_core.scope` followed by attribute access (`collector_core.scope.
+ScopeClient(...)`) will not satisfy it; use `from collector_core.scope import
+ScopeClient`. That proves the narrowing seam is wired in, not that it behaves
+correctly — whether a capture actually fails closed and drops out-of-scope
+rows is proven behaviourally by the collector's own test suite, the same way
+every other behavioural claim in this guide is.
 
 Before opening a PR:
 
