@@ -314,6 +314,22 @@ async def capture_usage_share(
 
     metrics.capture_attempt()
 
+    # Every failure path below writes the same envelope and differs only in how
+    # the failure is named, so the arguments are stated once. `expected=` is the
+    # load-bearing one: it floors a failure envelope to 384 rather than 1, so a
+    # total outage reads ratio 0.00 instead of 0/1.
+    failure_context = dict(
+        collector=COLLECTOR_NAME,
+        signal_types=SIGNAL_TYPES,
+        adapter=UPSTREAM_ADAPTER,
+        now=now,
+        scope=scope,
+        lake=lake,
+        metrics=metrics,
+        expected=EXPECTED_FLOOR,
+        source_ref=source_ref(season, week),
+    )
+
     # BEFORE the upstream fetch, deliberately, and this ordering is the whole
     # of failing closed. Both seams narrowing needs are resolved first — the
     # membership list out of the lake, and the `player-identity` client the
@@ -331,19 +347,29 @@ async def capture_usage_share(
         # `scope_empty` and `identity_unavailable` have three different fixes,
         # and collapsing them costs an operator the one thing the envelope
         # could have told them. Never returns — see below.
-        await fail_capture(
-            exc,
-            collector=COLLECTOR_NAME,
-            signal_types=SIGNAL_TYPES,
-            adapter=UPSTREAM_ADAPTER,
-            now=now,
-            scope=scope,
-            lake=lake,
-            metrics=metrics,
-            reason=exc.reason,
-            expected=EXPECTED_FLOOR,
-            source_ref=source_ref(season, week),
-        )
+        await fail_capture(exc, reason=exc.reason, **failure_context)
+    except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
+        # The scope read is I/O, and `ScopeUnavailable` is only what
+        # `ScopeClient` raises when the lake answered and had nothing usable.
+        # The lake can also fail *outright*: `S3LakeWriter.list_keys`/`read`
+        # propagate botocore errors and `json` decode errors untouched, and
+        # `ScopeClient._parse_captured_at` raises `ValueError` on a timestamp
+        # it does not recognise. Without this arm every one of those escapes
+        # `capture_usage_share` entirely — no `present: 0` envelope, no
+        # `collector_capture_failures_total`, just a log line from whoever
+        # dispatched the pass. That is precisely the "we failed" vs "we never
+        # tried" distinction `collector_core.failure` exists to record, and
+        # this collector is the first in the fleet to read the lake mid-capture
+        # at all, so the gap arrived with the narrowing.
+        #
+        # No explicit `reason=`: `fail_capture` falls back to
+        # `CollectorMetrics.reason_for(exc)`, which classifies a decode or
+        # timestamp failure as `malformed` and anything else as `unknown` —
+        # both of which are true statements, and neither of which can be
+        # mistaken for `scope_unavailable`.
+        metrics.rows_captured(0)
+        metrics.team_sum_drift(0.0)
+        await fail_capture(exc, **failure_context)
 
     try:
         usage = await fetch_week_usage(
@@ -355,20 +381,8 @@ async def capture_usage_share(
         metrics.rows_captured(0)
         metrics.team_sum_drift(0.0)
         # Writes a `present: 0` envelope per signal type, then re-raises `exc`.
-        # Never returns — do not add code after this call. `expected=` is what
-        # floors it to 384 rather than 1, so a total outage reads ratio 0.00.
-        await fail_capture(
-            exc,
-            collector=COLLECTOR_NAME,
-            signal_types=SIGNAL_TYPES,
-            adapter=UPSTREAM_ADAPTER,
-            now=now,
-            scope=scope,
-            lake=lake,
-            metrics=metrics,
-            expected=EXPECTED_FLOOR,
-            source_ref=source_ref(season, week),
-        )
+        # Never returns — do not add code after this call.
+        await fail_capture(exc, **failure_context)
 
     acc = CoverageAccumulator(floor=EXPECTED_FLOOR[signal_type])
     if usage.truncated:

@@ -35,11 +35,14 @@ matched by name anyway is how two Josh Allens become one player". A miss stays
 a miss, the row is dropped, and the shortfall shows up against
 `EXPECTED_FLOOR`.
 
-**Batched, and bounded.** `IdentityClient.resolve_many` chunks at `BATCH_LIMIT`
-(500, pinned to `player-identity`'s own `MAX_BATCH_QUERIES` by the repo-root
+**Batched.** `IdentityClient.resolve_many` chunks at `BATCH_LIMIT` (500, pinned
+to `player-identity`'s own `MAX_BATCH_QUERIES` by the repo-root
 `tests/test_identity_batch_limit.py`). Rows are buffered to at most one batch
-before being resolved and filtered, so peak additional memory is one batch of
-queries plus the rows actually kept — never a query per row of the feed.
+before being resolved and filtered, so no single query list is ever longer than
+that. Note this bounds the *working set*, not the whole pass:
+`IdentityClient._cache` retains every query it resolved for the life of the
+client, which is one capture pass, so cache growth is O(feed) — a few hundred
+KB at ~1,700 rows, nowhere near the 256Mi limit, but not "one batch" either.
 """
 
 import os

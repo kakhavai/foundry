@@ -133,9 +133,8 @@ def test_a_player_id_filter_narrows_to_one_row(client, upstream):
     assert rows[0]["player_id"] == wanted
 
     stale = client.get("/signals?player_id=00-KC-WR1").json()
-    assert stale["envelopes"] == [] or not [
-        row for envelope in stale["envelopes"] for row in envelope["signals"]
-    ]
+    stale_rows = [row for envelope in stale["envelopes"] for row in envelope["signals"]]
+    assert stale_rows == []
 
 
 def test_a_data_route_without_a_token_is_401(client):

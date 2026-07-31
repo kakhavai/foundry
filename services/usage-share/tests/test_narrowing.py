@@ -164,6 +164,85 @@ async def test_no_identity_deployment_also_means_zero_upstream_calls(lake, monke
     assert any(reason == IDENTITY_UNAVAILABLE for reason in reasons), reasons
 
 
+def _explodes_on_list(lake, monkeypatch):
+    """A lake that fails outright, the way botocore does on a dead endpoint."""
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("list_objects_v2: endpoint is unreachable")
+
+    monkeypatch.setattr(lake, "list_keys", boom)
+
+
+def _returns_an_unparseable_captured_at(lake, monkeypatch):
+    """A lake that answers, with an object `ScopeClient` cannot parse.
+
+    `_parse_captured_at` uses `strptime` with one exact format, so a scope
+    envelope written by some future version raises `ValueError` from inside
+    `ScopeClient.fetch` — a different code path from a listing that fails, and
+    one that only shows up after the read has already succeeded.
+    """
+    seed_scope(lake, {canonical_id("00-KC-WR1")})
+    monkeypatch.setattr(
+        lake,
+        "read",
+        lambda key: {
+            "captured_at": "2026-09-15T12:00:00.000000+00:00",
+            "signals": [{"player_id": canonical_id("00-KC-WR1")}],
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("break_lake", "expected_reason"),
+    [
+        pytest.param(_explodes_on_list, "unknown", id="the listing fails outright"),
+        pytest.param(
+            _returns_an_unparseable_captured_at,
+            "malformed",
+            id="the object cannot be parsed",
+        ),
+    ],
+)
+async def test_a_lake_that_fails_outright_still_writes_a_present_zero_envelope(
+    lake, monkeypatch, break_lake, expected_reason
+):
+    """`ScopeUnavailable` is not the only way the scope read can fail.
+
+    It is what `ScopeClient` raises when the lake ANSWERED and held nothing
+    usable. The lake can also fail outright — botocore on a dead endpoint, a
+    decode error, a timestamp in a format `_parse_captured_at` does not know.
+    Those must still leave a `present: 0` envelope behind, because a gap in an
+    append-only lake has to be explicit rather than inferred from absence, and
+    they must still cost zero upstream calls.
+
+    This collector is the fleet's first to read the lake mid-capture, so the
+    failure mode arrived with the narrowing and the guard has to arrive with it.
+    """
+    calls: list[str] = []
+    break_lake(lake, monkeypatch)
+
+    with respx.mock(assert_all_called=False) as router:
+        _refusing_upstream(router, calls)
+        mock_identity(router)
+        with pytest.raises(Exception) as caught:
+            await _capture(lake)
+
+    assert not isinstance(caught.value, ScopeUnavailable), (
+        "a lake that failed outright must not be reported as an absent scope — "
+        "'roster-scope published nothing' and 'the object store is down' have "
+        "different fixes"
+    )
+    assert calls == []
+
+    envelope = _written(lake)
+    assert envelope.coverage.present == 0
+    assert envelope.coverage.expected == FLOOR
+    assert envelope.coverage.ratio == 0.0
+    reasons = [error["reason"] for error in envelope.errors]
+    assert len(reasons) >= 1, "a failure envelope with no errors explains nothing"
+    assert expected_reason in reasons, reasons
+
+
 async def test_an_unresolved_row_is_dropped_not_adopted(lake):
     """`player-identity` refusing is the answer, not the start of a negotiation.
 
