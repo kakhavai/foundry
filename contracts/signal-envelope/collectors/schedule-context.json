@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/schedule-context.json",
+  "title": "schedule-context collector signal fields",
+  "signal_types": {
+    "game_situational_context": {
+      "type": "object",
+      "required": ["key", "observed_at", "value"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "value": { "type": "number" }
+      }
+    },
+    "team_rest_context": {
+      "type": "object",
+      "required": ["key", "observed_at", "value"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "value": { "type": "number" }
+      }
+    }
+  }
+}
