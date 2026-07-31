@@ -299,6 +299,8 @@ async def capture_scope(
         week=week,
         now=now,
         resolver=resolver,
+        deadline=deadline,
+        clock=_wall_clock,
     )
     if fetch_error is not None:
         # Both envelopes are built from the same fetch, so a fetch failure

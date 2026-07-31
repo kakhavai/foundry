@@ -1,0 +1,64 @@
+{
+  "captured_at": "2026-09-15T12:00:00Z",
+  "collector": "roster-scope",
+  "coverage": {
+    "expected": 5,
+    "missing": [],
+    "present": 5
+  },
+  "envelope_version": "1",
+  "errors": [],
+  "scope": {
+    "scope_version": 1,
+    "season": 2026,
+    "week": 1
+  },
+  "signal_type": "scope_matchup_weekly",
+  "signals": [
+    {
+      "depth_rank": 1,
+      "player_id": "fdy-46639558183e",
+      "position": "CB",
+      "rule_id": "cb_matchup_le_4",
+      "slot_key": "KC:cb_matchup_le_4:1",
+      "team": "KC"
+    },
+    {
+      "depth_rank": 1,
+      "player_id": "fdy-5f4c66d2aa1a",
+      "position": "S",
+      "rule_id": "s_matchup_le_3",
+      "slot_key": "KC:s_matchup_le_3:1",
+      "team": "KC"
+    },
+    {
+      "depth_rank": 1,
+      "player_id": "fdy-149d8eea20d9",
+      "position": "LB",
+      "rule_id": "lb_matchup_le_3",
+      "slot_key": "KC:lb_matchup_le_3:1",
+      "team": "KC"
+    },
+    {
+      "depth_rank": 1,
+      "player_id": "fdy-ff4350fb352a",
+      "position": "DL",
+      "rule_id": "dl_matchup_le_4",
+      "slot_key": "KC:dl_matchup_le_4:1",
+      "team": "KC"
+    },
+    {
+      "depth_rank": 1,
+      "player_id": "fdy-4e6b88fab2b9",
+      "position": "OL",
+      "rule_id": "ol_matchup_le_5",
+      "slot_key": "KC:ol_matchup_le_5:1",
+      "team": "KC"
+    }
+  ],
+  "upstream": {
+    "adapter": "nflverse-depth-charts",
+    "fetched_at": "2026-09-15T12:00:00Z",
+    "source_ref": "https://feed.test/2026.csv"
+  }
+}

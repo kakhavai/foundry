@@ -349,6 +349,23 @@ async def test_a_deadline_truncates_the_pass_rather_than_discarding_it(lake):
 
 
 @respx.mock
+async def test_a_deadline_truncates_the_matchup_pass_too(lake):
+    """`capture.py` wires the same `deadline`/real wall-clock into matchup
+    resolution as it does into membership's -- this pins the wiring itself,
+    not just `resolve_matchup_slots`'s own deadline behaviour (covered at
+    the unit level in test_matchups.py). Without it, 608 sequential awaits
+    against the real `player-identity` HTTP resolver would have no
+    wall-clock escape valve once that resolver replaces the instant stub."""
+    mock_feed(full_league_csv() + depth_row("KC", "CB", 1, "Alpha Corner") + "\n")
+    result = await run_capture(
+        lake, deadline=datetime.now(tz=UTC) - timedelta(seconds=1)
+    )
+    matchup = result[MATCHUP_SIGNAL]
+    assert matchup.coverage.present == 0
+    assert any(e["reason"] == "deadline_exceeded" for e in matchup.errors)
+
+
+@respx.mock
 async def test_a_short_chart_is_visible_in_the_envelope(lake):
     mock_feed(
         depth_csv(

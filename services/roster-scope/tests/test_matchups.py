@@ -1,7 +1,7 @@
 """Matchup-scope resolution: coverage seeded from config, never from the
 fetch, and the drop-never-guess rule for team/position/rank."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -126,3 +126,74 @@ async def test_a_rank_below_one_is_dropped(bad_rank):
     )
     assert signals == []
     assert acc.result().present == 0
+
+
+async def test_a_co_listed_row_resolves_the_ordered_first_candidate():
+    """`"Zeta Corner OR Alpha Corner"` is two real players on the chart, and
+    resolving the raw, unsplit string would mint one identity that matches
+    neither -- the exact fabrication the reviewer demonstrated
+    (`fdy-f428ca5d5ff6` for a row backed by no real player). The fix reuses
+    `scope.py`'s own `split_co_listed`, so the ordered-first name (by
+    normalized-name sort -- "alpha" before "zeta") fills the row's own
+    declared rank, and the second name is dropped for this pass rather than
+    fabricating a second slot for it."""
+    rows = [_row("KC", "CB", 1, "Zeta Corner OR Alpha Corner")]
+    signals, acc = await resolve_matchup_slots(
+        rows, season=2026, week=1, now=NOW, resolver=StubResolver()
+    )
+    assert len(signals) == 1, "the co-listing must not mint two rows for one rank"
+    assert signals[0]["player_id"] == "fdy-alpha-corner"
+    assert signals[0]["slot_key"] == "KC:cb_matchup_le_4:1"
+    assert acc.result().present == 1
+
+
+async def test_a_co_listed_row_with_a_single_name_is_unaffected():
+    """`split_co_listed` is a no-op for a name that was never co-listed --
+    this pins that the fix does not change ordinary rows."""
+    rows = [_row("KC", "CB", 1, "A Corner")]
+    signals, _ = await resolve_matchup_slots(
+        rows, season=2026, week=1, now=NOW, resolver=StubResolver()
+    )
+    assert signals[0]["player_id"] == "fdy-a-corner"
+
+
+async def test_a_deadline_truncates_remaining_rows_rather_than_discarding_them():
+    """Checked once per row -- the natural unit for a row-driven loop, where
+    `resolve_membership` checks once per team. Cancelling the coroutine
+    instead would discard everything already resolved; this preserves it and
+    accounts for the rest as `deadline_exceeded`."""
+    rows = [
+        _row("KC", "CB", 1, "Corner One"),
+        _row("KC", "CB", 2, "Corner Two"),
+        _row("KC", "CB", 3, "Corner Three"),
+    ]
+    ticks = iter([NOW, NOW, NOW + timedelta(hours=1)])
+    signals, acc = await resolve_matchup_slots(
+        rows,
+        season=2026,
+        week=1,
+        now=NOW,
+        resolver=StubResolver(),
+        deadline=NOW + timedelta(minutes=5),
+        clock=lambda: next(ticks),
+    )
+    assert len(signals) == 2, "the first two rows resolve before the deadline fires"
+    coverage = acc.result()
+    assert coverage.present == 2
+    assert "KC:cb_matchup_le_4:3" in coverage.missing
+    assert any(
+        e["reason"] == "deadline_exceeded" and e["detail"] == "KC:cb_matchup_le_4:3"
+        for e in acc.errors
+    )
+
+
+async def test_no_deadline_means_no_truncation():
+    """The default (`deadline=None`) must not truncate anything -- pins that
+    adding the parameter did not change behaviour for every existing caller
+    that never passes it."""
+    rows = [_row("KC", "CB", rank, f"Corner {rank}") for rank in range(1, 5)]
+    signals, acc = await resolve_matchup_slots(
+        rows, season=2026, week=1, now=NOW, resolver=StubResolver()
+    )
+    assert len(signals) == 4
+    assert acc.result().present == 4

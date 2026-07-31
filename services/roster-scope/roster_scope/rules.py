@@ -213,6 +213,28 @@ def expected_matchup_slots() -> int:
     return len(TEAMS) * sum(rule.max_depth for rule in MATCHUP_RULES)
 
 
+def expected_matchup_keys() -> tuple[str, ...]:
+    """Every matchup slot the config demands, derived from `MATCHUP_RULES`
+    alone -- the matchup analogue of `expected_slots()`.
+
+    `expected_matchup_slots()` gives the *count* (608); this gives the
+    actual keys, because a `CoverageAccumulator` needs the keys themselves
+    to seed `missing` correctly on a total outage -- the same reason
+    `expected_slots()` exists alongside a collector that could otherwise
+    get away with just a number. Lives here, not in `matchups.py`, for the
+    same reason `expected_slots()` lives here and not in `scope.py`: this
+    module is config and nothing else, and keeping the derived-key builder
+    beside the rules it is derived from is what stops the two from ever
+    seeing a different `MATCHUP_RULES`.
+    """
+    return tuple(
+        slot_key(team, rule.rule_id, rank)
+        for team in TEAMS
+        for rule in MATCHUP_RULES
+        for rank in range(1, rule.max_depth + 1)
+    )
+
+
 def rule_by_id(rule_id: str) -> DepthRule | None:
     for rule in ALL_RULES:
         if rule.rule_id == rule_id:

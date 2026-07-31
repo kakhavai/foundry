@@ -22,38 +22,53 @@ This envelope carries its **own** `CoverageAccumulator`, never `scope.py`'s.
 A matchup resolution failure must not mask a healthy player scope, and vice
 versa -- sharing one accumulator between the two envelopes would blend two
 independent facts into one misleading number.
+
+**Co-listed names reuse `scope.py`'s `split_co_listed`, not a second
+implementation of it.** `"Corner A OR Corner B"` is two real players, and
+resolving the raw, unsplit string would mint one fabricated identity that
+matches neither -- an append-only-lake mistake, not a recoverable one. But
+this module's rank model is not `scope.py`'s: `resolve_membership` discards
+the upstream's own rank entirely and recomputes it from a candidate's
+position in a per-position, co-listing-expanded, re-sorted list (so a
+co-listing at chart-rank 1 consumes ranks 1 *and* 2 of the resolved output,
+shifting everyone below down by one). This module is row-driven -- a row's
+own reported `depth_rank` is the slot it fills, full stop -- and
+reimplementing that renumbering here would mean no longer trusting the
+upstream's own rank for every *other* row too, a much bigger behavioural
+change than fixing the fabrication bug calls for. So a co-listed row takes
+the **ordered-first** split name (the same normalized-name tie-break
+`scope.py` uses when the chart declines to order two players) for its own
+declared rank, and the second name is dropped for this pass -- not
+reassigned to the next rank, and not marked missing under its own key,
+because this module has no key for "the second name in a co-listing that
+already has one." That is a real, stated gap (a co-listed player's
+opposite-number counterpart simply does not appear in a given pass), traded
+deliberately against never fabricating an identity and against not
+reinventing `scope.py`'s rank-shifting for a module whose rank source is
+different by design.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from collector_core.coverage import CoverageAccumulator
 
 from .adapters.identity import PlayerIdentityResolver, PlayerRef, UnresolvablePlayer
-from .rules import MATCHUP_RULES, TEAMS, canonical_position, canonical_team, slot_key
+from .rules import (
+    MATCHUP_RULES,
+    canonical_position,
+    canonical_team,
+    expected_matchup_keys,
+    slot_key,
+)
+from .scope import split_co_listed
 
 MATCHUP_SIGNAL = "scope_matchup_weekly"
 
 _RULES_BY_POSITION = {rule.position: rule for rule in MATCHUP_RULES}
 
 
-def expected_matchup_keys() -> tuple[str, ...]:
-    """Every matchup slot the config demands, derived from `MATCHUP_RULES`
-    alone -- the matchup analogue of `rules.expected_slots()`.
-
-    Built before any row is looked at, for the same reason `expected_slots()`
-    is: an expectation built from what the upstream returned reports a
-    truncated document as ratio 1.0. Its length always agrees with
-    `rules.expected_matchup_slots()` (608 = 32 teams x 19 slots); that
-    function gives the count alone; this one gives the actual keys a
-    `CoverageAccumulator` needs to seed `missing` correctly on a total
-    outage.
-    """
-    return tuple(
-        slot_key(team, rule.rule_id, rank)
-        for team in TEAMS
-        for rule in MATCHUP_RULES
-        for rank in range(1, rule.max_depth + 1)
-    )
+def _utc_now() -> datetime:
+    return datetime.now(tz=UTC)
 
 
 async def resolve_matchup_slots(
@@ -63,6 +78,8 @@ async def resolve_matchup_slots(
     week: int,
     now: datetime,
     resolver: PlayerIdentityResolver,
+    deadline: datetime | None = None,
+    clock=_utc_now,
 ) -> tuple[list[dict], CoverageAccumulator]:
     """Fill every matchup slot the config demands from a flat list of chart
     rows.
@@ -82,11 +99,24 @@ async def resolve_matchup_slots(
     `now` is accepted for the same reason `capture.py`'s other resolvers
     take a frozen instant, even though today's row shape has no per-row
     timestamp to stamp with it.
+
+    `deadline`/`clock` mirror `resolve_membership`'s: today's stub identity
+    resolver is instant, so this is inert, but once the HTTP resolver is
+    wired in, up to 608 sequential awaits need the same wall-clock escape
+    valve membership's 416 already have. Checked once per row (the natural
+    unit here, where membership checks once per team) rather than wrapping
+    the pass in a timeout, for the same reason: cancelling the coroutine
+    would discard everything already resolved, where this preserves the
+    partial capture and accounts for the rest as `deadline_exceeded`.
     """
     acc = CoverageAccumulator(expected_matchup_keys())
     signals: list[dict] = []
+    truncated = False
 
     for row in rows:
+        if deadline is not None and not truncated and clock() >= deadline:
+            truncated = True
+
         team = canonical_team(row.get("team"))
         if team is None:
             continue
@@ -107,7 +137,23 @@ async def resolve_matchup_slots(
             continue
 
         key = slot_key(team, rule.rule_id, rank)
-        ref = PlayerRef(row.get("name", ""), team, position)
+
+        if truncated:
+            acc.fail(key, "deadline_exceeded")
+            continue
+
+        # `split_co_listed` always returns at least one name (or an empty
+        # list for a blank raw string) -- see the module docstring for why
+        # only the ordered-first candidate is taken here rather than
+        # reassigning the rest to later ranks the way `scope.py` does.
+        # `split_co_listed` always returns at least one name (or an empty
+        # list for a blank raw string) -- see the module docstring for why
+        # only the ordered-first candidate is taken here rather than
+        # reassigning the rest to later ranks the way `scope.py` does.
+        names = split_co_listed(row.get("name", ""))
+        name = names[0] if names else ""
+
+        ref = PlayerRef(name, team, position)
         try:
             player_id = await resolver.resolve(ref)
         except UnresolvablePlayer as exc:

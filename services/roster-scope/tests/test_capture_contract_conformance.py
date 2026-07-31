@@ -20,9 +20,17 @@ import respx
 from jsonschema import Draft202012Validator, FormatChecker
 
 from roster_scope.capture import capture_scope
+from roster_scope.matchups import MATCHUP_SIGNAL
 from roster_scope.scope import CHANGE_SIGNAL, MEMBERSHIP_SIGNAL
 
-from .conftest import NOW, SpyLake, full_league_csv, membership_row
+from .conftest import (
+    NOW,
+    SpyLake,
+    depth_csv,
+    depth_row,
+    full_league_csv,
+    membership_row,
+)
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts" / "signal-envelope"
 ENVELOPE_SCHEMA = json.loads((CONTRACTS / "envelope.v1.schema.json").read_text())
@@ -101,6 +109,37 @@ async def test_grace_and_excluded_rows_conform():
     )
     statuses = {r["membership_status"] for r in result[MEMBERSHIP_SIGNAL].signals}
     assert {"grace", "excluded"} <= statuses
+    validate(result)
+
+
+@respx.mock
+async def test_matchup_rows_conform():
+    """`scope_matchup_weekly` rows had never actually been validated against
+    the schema by this suite: `full_league_csv()` (used by every other test
+    here) carries zero CB/S/LB/DL/OL rows, so `validate()`'s
+    `for row in body["signals"]` loop silently executed zero times for this
+    signal type -- it looked covered and was not. A purpose-built CSV here,
+    deliberately not a change to `full_league_csv()` itself, which ~30 other
+    tests pin the exact shape of."""
+    respx.get(FEED_2026).mock(
+        return_value=httpx.Response(
+            200,
+            text=depth_csv(
+                [
+                    depth_row("KC", "CB", 1, "Alpha Corner"),
+                    depth_row("KC", "CB", 2, "Beta Corner"),
+                    depth_row("KC", "S", 1, "Gamma Safety"),
+                    depth_row("KC", "LB", 1, "Delta Backer"),
+                    depth_row("KC", "DL", 1, "Epsilon Lineman"),
+                    depth_row("KC", "OL", 1, "Zeta Guard"),
+                ]
+            ),
+        )
+    )
+    result = await capture(SpyLake())
+    matchup = result[MATCHUP_SIGNAL]
+    assert matchup.signals, "no matchup rows captured to validate"
+    assert len(matchup.signals) == 6
     validate(result)
 
 
