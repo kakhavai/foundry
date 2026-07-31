@@ -297,7 +297,7 @@ INIT_PY = '''\
 '''
 
 MAIN_PY = '''\
-"""%%name%%'s process wiring: the descriptor, and nothing else yet.
+"""Process wiring: the descriptor, and nothing else yet.
 
 Everything else — environment parsing, `CaptureState`, the capture loop, bearer
 auth, the OTel guard and the standard five routes — lives in
@@ -533,7 +533,7 @@ async def fetch_rows(
 '''
 
 CAPTURE_PY = '''\
-"""%%name%%'s capture pass: fetch -> coverage -> envelopes -> lake.
+"""The capture pass: fetch -> coverage -> envelopes -> lake.
 
 `/signals` serves from the cache this fills, never from an upstream, so an
 upstream outage costs **freshness, not availability**. A collector that reaches
@@ -622,6 +622,13 @@ def build_signal(signal_type: str, row: dict, *, now: datetime) -> dict:
     tests/test_capture_contract_conformance.py validates the REAL output of
     this function against that schema, so a renamed field fails there rather
     than in the generator six weeks later.
+
+    The `key`/`observed_at`/`value` below and the schema that accepts them are
+    placeholders that agree with each other by construction, which is why that
+    conformance test currently proves only that two placeholders match. The
+    schema carries a `$comment` marker so a collector reaching the repo with it
+    still in place fails `tests/test_placeholder_schemas.py` — and rewriting
+    the schema is what forces this function to follow.
     """
     return {
         "key": _row_key(row),
@@ -974,7 +981,7 @@ from .conftest import NOW, SpyLake
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts" / "signal-envelope"
 ENVELOPE_SCHEMA = json.loads((CONTRACTS / "envelope.v1.schema.json").read_text())
 FIELD_SCHEMAS = json.loads(
-    (CONTRACTS / "collectors" / "%%name%%.json").read_text()
+    (CONTRACTS / "collectors" / "%%name%%.json").read_text(),
 )["signal_types"]
 
 
@@ -992,7 +999,12 @@ def validate(envelopes: dict) -> None:
 async def capture(lake, **kwargs):
     async with httpx.AsyncClient() as client:
         return await capture_%%pkg%%(
-            2026, 1, client=client, lake=lake, now=NOW, **kwargs
+            2026,
+            1,
+            client=client,
+            lake=lake,
+            now=NOW,
+            **kwargs,
         )
 
 
@@ -1080,7 +1092,11 @@ async def _capture(rows, monkeypatch, lake):
     monkeypatch.setattr("%%pkg%%.capture.fetch_rows", fake)
     async with httpx.AsyncClient() as client:
         return await capture_%%pkg%%(
-            2026, 1, client=client, lake=lake, now=NOW
+            2026,
+            1,
+            client=client,
+            lake=lake,
+            now=NOW,
         )
 
 
@@ -1356,8 +1372,39 @@ FIELD_SCHEMA_HEAD = """\
   "signal_types": {
 """
 
-FIELD_SCHEMA_TYPE = """\
+# The `$comment` is a load-bearing sentinel, not documentation, and
+# PLACEHOLDER_SCHEMA_MARKER below is the string both ends agree on.
+#
+# The problem it solves (issue #85): this schema and the generated
+# `build_signal` are placeholders that agree with each other BY CONSTRUCTION,
+# so `tests/test_capture_contract_conformance.py` proves they agree — not that
+# either is right. A collector author who never revisits them ships a schema
+# validating nothing meaningful, and nothing anywhere notices.
+#
+# It is a sentinel rather than a generated failing test on purpose. The
+# scaffolder's promise, asserted all over tests/test_new_collector.py, is that
+# a fresh collector is correct *unmodified*: it lints, renders, and its own
+# suite passes. `cd services/<name> && uv run pytest -v` is the first thing
+# CLAUDE.md tells an author to run, and a scaffold that is red on arrival
+# teaches people to ignore red — which costs more than this gate is worth.
+#
+# So the marker is inert where the output is still a scaffold, and fatal where
+# it is not: `tests/test_placeholder_schemas.py` fails when a schema carrying
+# it reaches the repo. Gating the schema alone is enough to reach both halves
+# — once the schema changes, the conformance test drags `build_signal` along
+# with it, because it validates that function's real output.
+#
+# `$comment` is a JSON Schema 2020-12 keyword that every validator ignores, so
+# nothing at runtime behaves differently for its presence.
+PLACEHOLDER_SCHEMA_MARKER = "TODO(new-collector)"
+
+FIELD_SCHEMA_TYPE = (
+    """\
     "%%signal_type%%": {
+      "$comment": "%%marker%%: placeholder fields. Replace these with this \
+collector's real signal shape, then delete this $comment. Kept deliberately \
+meaningless -- the generated build_signal agrees with them by construction, so \
+leaving both in place would prove only that two placeholders match.",
       "type": "object",
       "required": ["key", "observed_at", "value"],
       "properties": {
@@ -1366,6 +1413,7 @@ FIELD_SCHEMA_TYPE = """\
         "value": { "type": "number" }
       }
     }"""
+).replace("%%marker%%", PLACEHOLDER_SCHEMA_MARKER)
 
 README_MD = """\
 # %%name%%
@@ -1402,7 +1450,14 @@ background task; poll `/signals` rather than reading it on the next line.
 2. Set `EXPECTED_FLOOR` in `capture.py` to the size this collector's universe
    is actually known to have. It must not be derived from a fetch.
 3. Rewrite `build_signal` and mirror its output in
-   `contracts/signal-envelope/collectors/%%name%%.json`.
+   `contracts/signal-envelope/collectors/%%name%%.json`. **This one is
+   enforced.** The generated schema and the generated `build_signal` agree
+   with each other by construction, so the conformance test proves they match
+   rather than that either is right. Each signal type therefore carries a
+   `$comment` marker, and `tests/test_placeholder_schemas.py` fails on any
+   collector that reaches the repo still carrying it — or still carrying the
+   placeholder's `key`/`observed_at`/`value` field set with the marker
+   deleted.
 4. Replace the placeholder series in `metrics.py`, or drop the subclass.
 5. Decide `CAPTURE_ENABLED` in `helm/values/%%name%%/values.yaml`.
 

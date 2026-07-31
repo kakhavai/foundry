@@ -45,6 +45,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import jsonschema
@@ -66,6 +67,14 @@ _spec = importlib.util.spec_from_file_location(
 new_collector = importlib.util.module_from_spec(_spec)
 sys.modules["new_collector"] = new_collector
 _spec.loader.exec_module(new_collector)
+
+# The other end of the placeholder gate, loaded the same explicit way rather
+# than by a bare `import` that depends on pytest's sys.path insertion.
+_gate_spec = importlib.util.spec_from_file_location(
+    "placeholder_gate", Path(__file__).with_name("test_placeholder_schemas.py")
+)
+placeholder_gate = importlib.util.module_from_spec(_gate_spec)
+_gate_spec.loader.exec_module(placeholder_gate)
 
 
 # ── the synthetic repository ──────────────────────────────────────────────────
@@ -99,6 +108,30 @@ def _inventory(root: Path) -> set[str]:
         for path in root.rglob("*")
         if path.is_file() and "__pycache__" not in path.parts
     }
+
+
+def _scaffold_into(directory: Path, name: str, *, adapter=None) -> tuple[Path, Path]:
+    """Seed a synthetic repo in `directory` and scaffold `name` into it.
+
+    Returns (root, service_dir). Split out of the `scaffolded` fixture so the
+    name-length sweep below can scaffold names other than NAME without
+    duplicating the seeding.
+    """
+    root = _seed(directory)
+    collector = new_collector.plan(
+        root,
+        name=name,
+        port=PORT,
+        cadence=CADENCE,
+        signal_types=[f"{name.replace('-', '_')}_snapshot"],
+        stage="8Z",
+        depends_on=[],
+        scope_aware=False,
+        adapter=adapter,
+        smoke_hook=False,
+    )
+    new_collector.scaffold(root, collector)
+    return root, root / "services" / name
 
 
 @pytest.fixture(scope="module")
@@ -263,19 +296,102 @@ def test_the_toolchain_the_lint_and_helm_checks_need_is_present_in_ci():
     assert _helm(), "helm is not on PATH — the chart render gate would skip"
 
 
-@pytest.mark.skipif(_uv() is None, reason="uv not on PATH; CI's platform-tests has it")
-@pytest.mark.parametrize("command", [["check"], ["format", "--check"]], ids=str)
-def test_the_generated_service_lints_clean(service, command):
-    """`ruff check` and `ruff format --check`, run exactly as CI runs them and
-    against the generated service's own pyproject.toml config."""
-    result = subprocess.run(
-        [_uv(), "run", "--no-project", "--with", "ruff", "ruff", *command, "."],
+def _ruff_pin() -> str:
+    """The ruff the rest of the repo actually runs.
+
+    Read from the lockfile rather than written here, because the failure this
+    whole section exists to catch — `ruff format` disagreeing with a template —
+    is version-sensitive. An unpinned `--with ruff` means this gate silently
+    answers a different question after every ruff release, and the answer it
+    gives stops matching the one CI's per-service `lint` legs get from
+    `uv sync --frozen`.
+    """
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    versions = {p["version"] for p in lock["package"] if p["name"] == "ruff"}
+    assert len(versions) == 1, f"expected one ruff in uv.lock, found {sorted(versions)}"
+    return versions.pop()
+
+
+def _ruff(service: Path, command: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            _uv(),
+            "run",
+            "--no-project",
+            "--with",
+            f"ruff=={_ruff_pin()}",
+            "ruff",
+            *command,
+            ".",
+        ],
         check=False,
         cwd=service,
         capture_output=True,
         text=True,
     )
+
+
+@pytest.mark.skipif(_uv() is None, reason="uv not on PATH; CI's platform-tests has it")
+@pytest.mark.parametrize("command", [["check"], ["format", "--check"]], ids=str)
+def test_the_generated_service_lints_clean(service, command):
+    """`ruff check` and `ruff format --check`, run exactly as CI runs them and
+    against the generated service's own pyproject.toml config."""
+    result = _ruff(service, command)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# `NAME` is 26 characters, and the module docstring says that is deliberate:
+# every E501 the scaffolder ever produced came from a long name overflowing a
+# line. It turned out to be only half the story. Issue #85 arrived from
+# `betting-lines` — 13 characters — where the generated
+# `tests/test_coverage_floor.py` was one line off `ruff format`, and a sweep of
+# every name length from 3 to 30 then showed the scaffolder produced
+# unformatted output for **every name shorter than 16 characters** and for
+# names of 30. Almost the whole fleet sits in that band; NAME happened to fall
+# outside it, which is precisely why one long name proved nothing.
+#
+# The direction matters. A long name overflows and ruff wants to SPLIT a line;
+# a short name underflows and ruff wants to JOIN one the template had already
+# split. Only the first is an E501, so `test_no_generated_line_exceeds_the_line_length`
+# above cannot see the second at all — it needs the formatter.
+#
+# The fix was to stop letting the name decide: the affected calls carry a magic
+# trailing comma, which pins them exploded at every length, and two module
+# docstrings no longer interpolate the name into their summary line. These
+# three names bracket the band rather than sampling it — the shortest a
+# collector could plausibly be, one in the middle, and one longer than any
+# name in the twenty-six-collector plan.
+LENGTH_SWEEP = ("odds", "betting-lines", "injury-designation-report-feeds")
+
+
+@pytest.mark.skipif(_uv() is None, reason="uv not on PATH; CI's platform-tests has it")
+@pytest.mark.parametrize("name", LENGTH_SWEEP, ids=lambda n: f"{n}({len(n)})")
+@pytest.mark.parametrize("command", [["check"], ["format", "--check"]], ids=str)
+def test_the_generated_service_lints_clean_at_any_name_length(
+    tmp_path_factory, name, command
+):
+    _, service = _scaffold_into(
+        tmp_path_factory.mktemp(f"len{len(name)}"), name, adapter="upstream"
+    )
+    result = _ruff(service, command)
+    assert result.returncode == 0, (
+        f"a {len(name)}-character collector name produces output that fails "
+        f"`ruff {' '.join(command)}`:\n" + result.stdout + result.stderr
+    )
+
+
+def test_the_length_sweep_actually_brackets_the_band():
+    """Guards the sweep above from being quietly narrowed to one length.
+
+    `betting-lines` is the reproducer from issue #85 and must stay; the other
+    two exist to hold both ends, and a sweep that lost them would pass while
+    testing a single point again.
+    """
+    assert len(LENGTH_SWEEP) >= 3, LENGTH_SWEEP
+    assert "betting-lines" in LENGTH_SWEEP, LENGTH_SWEEP
+    lengths = sorted(len(n) for n in LENGTH_SWEEP)
+    assert lengths[0] <= 5, f"no short name in the sweep: {LENGTH_SWEEP}"
+    assert lengths[-1] >= 30, f"no over-long name in the sweep: {LENGTH_SWEEP}"
 
 
 # ── it renders through the real Helm chart ────────────────────────────────────
@@ -467,13 +583,70 @@ def test_the_ci_matrix_picks_it_up(root):
     assert entries[NAME]["context"] == "."
 
 
-def test_the_generated_field_schema_covers_exactly_the_signal_types(root):
-    schema = json.loads(
+def _generated_field_schema(root: Path) -> dict:
+    return json.loads(
         _read(root / "contracts" / "signal-envelope" / "collectors" / f"{NAME}.json")
     )
+
+
+def test_the_generated_field_schema_covers_exactly_the_signal_types(root):
+    schema = _generated_field_schema(root)
     assert set(schema["signal_types"]) == set(SIGNAL_TYPES)
     for signal_type, field_schema in schema["signal_types"].items():
         jsonschema.Draft202012Validator.check_schema(field_schema), signal_type
+
+
+def test_every_generated_signal_type_carries_the_placeholder_marker(root):
+    """Issue #85's other half, from the scaffolder's side.
+
+    The generated schema and the generated `build_signal` agree by
+    construction, so the generated conformance test proves they match rather
+    than that either is right. `tests/test_placeholder_schemas.py` fails when a
+    schema carrying this marker reaches the repo; this asserts the scaffolder
+    still puts one there, because a gate looking for a string nothing emits
+    fails open and says nothing.
+    """
+    signal_types = _generated_field_schema(root)["signal_types"]
+    assert len(signal_types) == len(SIGNAL_TYPES), signal_types
+    for name, field_schema in signal_types.items():
+        assert new_collector.PLACEHOLDER_SCHEMA_MARKER in field_schema.get(
+            "$comment", ""
+        ), f"`{name}` has no placeholder marker: {field_schema.get('$comment')!r}"
+
+
+def test_a_freshly_scaffolded_schema_would_fail_the_repo_gate(root):
+    """The two ends, connected.
+
+    Both halves of `tests/test_placeholder_schemas.py` must fire on scaffolder
+    output — otherwise that file is a gate nobody has ever seen trigger, and
+    the first time it matters is the first time it is exercised. The predicates
+    are imported from it rather than restated here, so the gate cannot be
+    loosened on one side and still pass on the other.
+    """
+    path = root / "contracts" / "signal-envelope" / "collectors" / f"{NAME}.json"
+    text = _read(path)
+    assert placeholder_gate.carries_marker(text), (
+        "a scaffolded schema does not trip the marker half of the repo gate"
+    )
+    assert placeholder_gate.has_placeholder_field_set(json.loads(text)), (
+        "a scaffolded schema does not trip the field-set half of the repo gate, "
+        "so deleting the $comment would be enough to ship the placeholder"
+    )
+
+
+def test_the_marker_is_inert_for_validation(root):
+    """`$comment` is a 2020-12 keyword every validator ignores.
+
+    Stated as a test because the marker is being added to a schema that is
+    used for real validation: if it ever became something a validator acted
+    on, the generated conformance test would start failing on the shape of the
+    marker rather than the shape of the data.
+    """
+    signal_types = _generated_field_schema(root)["signal_types"]
+    assert signal_types, "nothing to validate against"
+    row = {"key": "k", "observed_at": "2026-01-01T00:00:00Z", "value": 1.0}
+    for name, field_schema in signal_types.items():
+        jsonschema.Draft202012Validator(field_schema).validate(row), name
 
 
 # ── the Dockerfile keeps the shared stage ─────────────────────────────────────
