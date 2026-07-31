@@ -228,44 +228,81 @@ def test_git_commit_and_push_exits_on_commit_failure(tmp_path):
             ad.git_commit_and_push([f], "chore: update tag")
 
 
-# ── ensure_application_manifest ───────────────────────────────────────────────
+# ── require_promotion_target ──────────────────────────────────────────────────
+#
+# These replace a `ensure_application_manifest` block that PASSED against a tree
+# it no longer described. It fixtured `infra/gitops/argo/weather.yaml` into a
+# tmpdir and asserted the copy-and-rewrite worked — but Wave 0 deleted every
+# per-service Application manifest, so the source it fixtured does not exist and
+# `promote --to staging|prod` died on "source manifest not found: .../weather.yaml".
+# `tests/test_service_ci_coverage.py::test_argo_directory_holds_only_the_app_of_apps_and_the_set`
+# is the test that proves the deletion, and it is green — the two could not both
+# be describing the same repository.
 
-def test_ensure_application_manifest_local_returns_none(tmp_path):
-    result = ad.ensure_application_manifest("weather", "local", argo_manifests_dir=tmp_path)
-    assert result is None
-
-
-def test_ensure_application_manifest_existing_returns_none(tmp_path):
-    (tmp_path / "weather-staging.yaml").write_text("existing")
-    result = ad.ensure_application_manifest("weather", "staging", argo_manifests_dir=tmp_path)
-    assert result is None
-    assert (tmp_path / "weather-staging.yaml").read_text() == "existing"
-
-
-def test_ensure_application_manifest_creates_env_manifest(tmp_path):
-    (tmp_path / "weather.yaml").write_text(
-        "apiVersion: argoproj.io/v1alpha1\n"
-        "kind: Application\n"
-        "metadata:\n"
-        "  name: weather\n"
-        "  namespace: argocd\n"
-        "spec:\n"
-        "  source:\n"
-        "    helm:\n"
-        "      valueFiles:\n"
-        "        - /infra/gitops/envs/local/weather/values.yaml\n"
-    )
-    result = ad.ensure_application_manifest("weather", "staging", argo_manifests_dir=tmp_path)
-    assert result == tmp_path / "weather-staging.yaml"
-    content = result.read_text()
-    assert "name: weather-staging" in content
-    assert "/infra/gitops/envs/staging/weather/values.yaml" in content
-    assert "/infra/gitops/envs/local/" not in content
+def test_promotion_target_is_the_argo_directory_the_repo_actually_has():
+    """The tree fact the old tests contradicted, asserted here so this file
+    cannot drift from it again: there is no per-service source manifest to copy,
+    and the ApplicationSet that replaced them is present."""
+    argo_dir = Path(ad.__file__).parent.parent / "infra" / "gitops" / "argo"
+    found = sorted(p.name for p in argo_dir.glob("*.yaml"))
+    assert found == ["app-of-apps.yaml", "applicationset.yaml"], found
+    assert ad.APPLICATIONSET.exists()
 
 
-def test_ensure_application_manifest_missing_source_exits(tmp_path):
+def test_require_promotion_target_allows_local():
+    assert ad.require_promotion_target("weather", "local") is None
+
+
+def test_require_promotion_target_refuses_staging_and_says_why(capsys):
+    with pytest.raises(SystemExit) as exc:
+        ad.require_promotion_target("weather", "staging")
+    assert exc.value.code == 1
+
+    out = capsys.readouterr().out
+    # The message has to name the thing that replaced the manifests, or the
+    # next reader repeats the "someone forgot a file" diagnosis this fixes.
+    assert "applicationset.yaml" in out
+    assert "deleted deliberately" in out
+    assert "Nothing was written and nothing was committed." in out
+    assert "weather" in out and "staging" in out
+    # And it must NOT claim a file is missing.
+    assert "source manifest not found" not in out
+
+
+def test_require_promotion_target_refuses_prod(capsys):
     with pytest.raises(SystemExit):
-        ad.ensure_application_manifest("unknown-svc", "staging", argo_manifests_dir=tmp_path)
+        ad.require_promotion_target("player-projections", "prod")
+    assert "applicationset.yaml" in capsys.readouterr().out
+
+
+def test_require_promotion_target_refuses_every_non_generated_env(capsys):
+    """`all(...)` over an empty collection is True, so the count is asserted
+    alongside it."""
+    envs = ["staging", "prod"]
+    assert len(envs) == 2
+    refused = []
+    for env in envs:
+        with pytest.raises(SystemExit):
+            ad.require_promotion_target("weather", env)
+        refused.append(env)
+    capsys.readouterr()
+    assert len(refused) == len(envs)
+    assert all(env not in ad.GENERATED_ENVS for env in refused)
+
+
+def test_generated_envs_matches_the_applicationset_template():
+    """The refusal is only honest while the ApplicationSet really is local-only.
+    If somebody makes it env-aware and forgets this constant, this fails rather
+    than leaving `promote` refusing a target that now exists."""
+    text = ad.APPLICATIONSET.read_text()
+    assert "/infra/gitops/envs/local/{{.path.basename}}/values.yaml" in text
+    assert list(ad.GENERATED_ENVS) == ["local"]
+
+
+def test_ensure_application_manifest_is_gone():
+    """It wrote per-service Application manifests. Wave 0 made those a
+    regression; a caller reintroducing the helper should not compile."""
+    assert not hasattr(ad, "ensure_application_manifest")
 
 
 # ── cmd_install ───────────────────────────────────────────────────────────────
@@ -352,41 +389,69 @@ def _make_promote_args(service="weather", from_env="local", to_env="staging", co
     })()
 
 
+def _seeded_gitops(tmp_path, env="local", service="weather", tag="sha123"):
+    """A gitops root holding one env's values file for one service."""
+    values = tmp_path / "envs" / env / service / "values.yaml"
+    values.parent.mkdir(parents=True)
+    values.write_text(f'image:\n  tag: "{tag}"\n')
+    return values
+
+
 def test_cmd_promote_copies_tag_and_commits(tmp_path):
-    from_file = tmp_path / "envs" / "local" / "weather" / "values.yaml"
-    from_file.parent.mkdir(parents=True)
-    from_file.write_text('image:\n  tag: "sha123"\n')
+    """The only promotion with a generated Application behind it: into `local`.
+    Every other env refuses — see the require_promotion_target tests."""
+    _seeded_gitops(tmp_path, env="prod")
 
     with patch("argocd_deploy.GITOPS_ROOT", tmp_path), \
-         patch("argocd_deploy.ARGO_MANIFESTS_DIR", tmp_path / "argo"), \
          patch("argocd_deploy.git_commit_and_push") as mock_git, \
-         patch("argocd_deploy.poll_applications", return_value=True), \
-         patch("argocd_deploy.ensure_application_manifest", return_value=None):
-        ad.cmd_promote(_make_promote_args())
+         patch("argocd_deploy.poll_applications", return_value=True):
+        ad.cmd_promote(_make_promote_args(from_env="prod", to_env="local"))
 
     mock_git.assert_called_once()
     committed_files = mock_git.call_args[0][0]
     msg = mock_git.call_args[0][1]
-    assert any("staging" in str(f) for f in committed_files)
+    assert len(committed_files) == 1, (
+        "a promotion commits the image tag and nothing else — the Application "
+        "is generated by the ApplicationSet, never written here"
+    )
+    assert "envs" in str(committed_files[0]) and "local" in str(committed_files[0])
     assert "sha123" in msg
 
-    to_file = tmp_path / "envs" / "staging" / "weather" / "values.yaml"
+    to_file = tmp_path / "envs" / "local" / "weather" / "values.yaml"
     assert to_file.exists()
     assert 'tag: "sha123"' in to_file.read_text()
 
 
 def test_cmd_promote_exits_on_sync_timeout(tmp_path):
-    from_file = tmp_path / "envs" / "local" / "weather" / "values.yaml"
-    from_file.parent.mkdir(parents=True)
-    from_file.write_text('image:\n  tag: "sha123"\n')
+    _seeded_gitops(tmp_path, env="prod")
 
     with patch("argocd_deploy.GITOPS_ROOT", tmp_path), \
-         patch("argocd_deploy.ARGO_MANIFESTS_DIR", tmp_path / "argo"), \
          patch("argocd_deploy.git_commit_and_push"), \
-         patch("argocd_deploy.poll_applications", return_value=False), \
-         patch("argocd_deploy.ensure_application_manifest", return_value=None):
+         patch("argocd_deploy.poll_applications", return_value=False):
         with pytest.raises(SystemExit):
-            ad.cmd_promote(_make_promote_args())
+            ad.cmd_promote(_make_promote_args(from_env="prod", to_env="local"))
+
+
+def test_cmd_promote_to_staging_writes_nothing_and_commits_nothing(tmp_path, capsys):
+    """The regression, at the level a user hits it.
+
+    Before: `promote weather --from local --to staging` died on
+    "Error: source manifest not found: infra/gitops/argo/weather.yaml" — a file
+    Wave 0 deleted on purpose. Now it refuses with the reason, and — as before,
+    but now asserted — leaves the working tree untouched."""
+    _seeded_gitops(tmp_path)
+
+    with patch("argocd_deploy.GITOPS_ROOT", tmp_path), \
+         patch("argocd_deploy.git_commit_and_push") as mock_git, \
+         patch("argocd_deploy.poll_applications", return_value=True) as mock_poll, \
+         pytest.raises(SystemExit):
+        ad.cmd_promote(_make_promote_args(to_env="staging"))
+
+    mock_git.assert_not_called()
+    mock_poll.assert_not_called()
+    assert not (tmp_path / "envs" / "staging" / "weather" / "values.yaml").exists()
+    assert not list(tmp_path.glob("argo/*.yaml"))
+    assert "applicationset.yaml" in capsys.readouterr().out
 
 
 def test_cmd_promote_exits_when_from_equals_to():

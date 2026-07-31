@@ -842,6 +842,23 @@ have: an `ownerReference` back to the ApplicationSet, and the label
 teeth — **deleting `applicationset.yaml` deletes every Application it
 generated**, where deleting one old manifest deleted one app.
 
+**`local` is the only environment that has Applications, so
+`argocd-deploy.py promote --to staging|prod` refuses.** The ApplicationSet's
+template hard-codes `/infra/gitops/envs/local/<service>/values.yaml` and
+`namespace: default`, and `infra/gitops/envs/staging/` and `envs/prod/` hold a
+`.gitkeep` and nothing else. `promote` used to copy a per-service
+`infra/gitops/argo/<service>.yaml` into `<service>-<env>.yaml`; Wave 0 deleted
+those manifests, so it started dying on "source manifest not found" — which
+reads as a forgotten file rather than a deliberate deletion. It now refuses
+before writing anything and says why. **Do not fix it by re-adding the copy:**
+`tests/test_service_ci_coverage.py` fails on a third file in that directory,
+the app-of-apps would apply the written manifest into the same namespace the
+local Application already owns, and its HTTPRoute would claim the same
+`gateway.pathPrefix` — Gateway API breaks that tie on creation timestamp, so it
+would apply cleanly and misroute silently. Real promotion needs the
+ApplicationSet to become env-aware plus an env strategy (cluster vs namespace,
+per-env gateway paths, per-env Secrets) that is Phase 6's work.
+
 All ArgoCD Applications have `selfHeal: true` and `automated.prune: true`. This means:
 
 - **Any manual `kubectl patch` or `kubectl apply` to a managed resource is reverted within seconds.** Do not try to fix live ConfigMaps, Deployments, or Service objects by hand — the change will disappear before the pod restarts.

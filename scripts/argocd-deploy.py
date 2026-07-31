@@ -21,7 +21,13 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 GITOPS_ROOT = ROOT / "infra" / "gitops"
 ARGO_DIR = ROOT / "infra" / "argo"
-ARGO_MANIFESTS_DIR = ROOT / "infra" / "gitops" / "argo"
+APPLICATIONSET = ROOT / "infra" / "gitops" / "argo" / "applicationset.yaml"
+
+# The only environment the ApplicationSet generates Applications for. Not a
+# preference — its template hard-codes `/infra/gitops/envs/local/` as the second
+# valueFile and `namespace: default` on the in-cluster API server, so `local` is
+# the whole set of envs that has a target. See `require_promotion_target`.
+GENERATED_ENVS = ("local",)
 
 
 # ── pure helpers ──────────────────────────────────────────────────────────────
@@ -168,37 +174,69 @@ def git_commit_and_push(files: list[Path], message: str) -> None:
     run(["git", "push"])
 
 
-def ensure_application_manifest(
-    service: str,
-    env: str,
-    argo_manifests_dir: Path = ARGO_MANIFESTS_DIR,
-) -> Path | None:
-    """Create an env-specific Application manifest if it doesn't exist.
+def require_promotion_target(service: str, env: str) -> None:
+    """Exit unless `env` is an environment Argo CD actually generates apps for.
 
-    Returns the new manifest path, or None if nothing was created.
+    **This used to write a manifest, and it must not any more.** It read
+    `infra/gitops/argo/<service>.yaml` and copied it into
+    `infra/gitops/argo/<service>-<env>.yaml` with the name and the env path
+    rewritten. Phase 8 Wave 0 replaced every one of those per-service manifests
+    with `infra/gitops/argo/applicationset.yaml`, so the source it read no
+    longer exists — and its own error said "source manifest not found", which
+    reads as somebody having forgotten a file rather than as the deliberate
+    deletion it was.
+
+    Restoring the copy is not the fix. Three things say so, and none of them is
+    a matter of taste:
+
+    * `tests/test_service_ci_coverage.py::test_argo_directory_holds_only_the_
+      app_of_apps_and_the_set` asserts that directory holds exactly two files.
+      A written `<service>-<env>.yaml` reds a green platform test.
+    * The app-of-apps syncs that whole directory, so the written manifest WOULD
+      be applied — into `namespace: default` on the same single cluster the
+      local Application already owns.
+    * Its HTTPRoute would carry `gateway.pathPrefix` out of
+      `helm/values/<service>/values.yaml`, which is env-independent. Two envs
+      would claim the identical path on the one `foundry` Gateway, and Gateway
+      API breaks that tie on creation timestamp. That is a manifest which
+      applies cleanly and then misroutes silently — strictly worse than a loud
+      refusal.
+
+    So this refuses, and says why. Making promotion real is an ApplicationSet
+    change plus an env strategy that does not exist yet: cluster-vs-namespace,
+    per-env gateway paths, per-env Secrets. `infra/gitops/envs/staging/` and
+    `envs/prod/` hold a `.gitkeep` and nothing else, so there is no target to
+    promote into today either way.
     """
-    if env == "local":
-        return None
+    if env in GENERATED_ENVS:
+        return
 
-    manifest_path = argo_manifests_dir / f"{service}-{env}.yaml"
-    if manifest_path.exists():
-        return None
-
-    source = argo_manifests_dir / f"{service}.yaml"
-    if not source.exists():
-        print(f"Error: source manifest not found: {source}")
-        sys.exit(1)
-
-    text = source.read_text()
-    text = re.sub(
-        r'^(  name:\s*)' + re.escape(service) + r'$',
-        rf'\g<1>{service}-{env}',
-        text,
-        flags=re.MULTILINE,
+    print(
+        f"Error: cannot promote {service!r} to {env!r} — no {env} environment "
+        f"exists to promote into.\n"
+        f"\n"
+        f"  {APPLICATIONSET.relative_to(ROOT).as_posix()} generates every Argo CD\n"
+        f"  Application from helm/values/*, and its template hard-codes the local\n"
+        f"  env: /infra/gitops/envs/local/<service>/values.yaml, namespace\n"
+        f"  'default'. There is no {service}-{env} Application for a promoted tag\n"
+        f"  to reach.\n"
+        f"\n"
+        f"  The per-service manifests this command used to copy\n"
+        f"  (infra/gitops/argo/{service}.yaml) were deleted deliberately in Phase 8\n"
+        f"  Wave 0. They are not missing files, and re-adding one is a regression:\n"
+        f"  tests/test_service_ci_coverage.py fails on any third file in that\n"
+        f"  directory, and the app-of-apps would apply it into the same namespace\n"
+        f"  and onto the same gateway path the local Application already holds.\n"
+        f"\n"
+        f"  Nothing was written and nothing was committed.\n"
+        f"\n"
+        f"  Promotion needs the ApplicationSet to become env-aware first, which\n"
+        f"  needs an env strategy nobody has designed: whether a non-local env is\n"
+        f"  a separate cluster or a namespace, how each env gets its own gateway\n"
+        f"  path, and where its Secrets come from. That is Phase 6's work — see\n"
+        f"  docs/architecture/phase-6-aws-deployment.md."
     )
-    text = text.replace("/infra/gitops/envs/local/", f"/infra/gitops/envs/{env}/")
-    manifest_path.write_text(text)
-    return manifest_path
+    sys.exit(1)
 
 
 # ── sub-commands ──────────────────────────────────────────────────────────────
@@ -315,14 +353,14 @@ def cmd_promote(args) -> None:
     tag = read_tag(from_file)
     print(f"\nPromoting {service}: {from_env} -> {to_env} @ {tag}")
 
-    manifest = ensure_application_manifest(service, to_env)
+    # Checked BEFORE write_tag, so a refused promotion leaves the tree clean.
+    # A promotion commits only the image tag now — the Application it lands on
+    # is generated, never written here. See `require_promotion_target`.
+    require_promotion_target(service, to_env)
     write_tag(to_file, tag)
 
-    files_to_commit: list[Path] = [to_file]
-    if manifest:
-        files_to_commit.append(manifest)
     git_commit_and_push(
-        files_to_commit,
+        [to_file],
         f"chore(gitops): promote {service} from {from_env} to {to_env} @ {tag}",
     )
 
@@ -424,7 +462,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_verify)
 
     # promote
-    p = sub.add_parser("promote", help="Promote a service image tag from one env to another")
+    p = sub.add_parser(
+        "promote",
+        help="Promote a service image tag from one env to another",
+        description=(
+            "Copy a service's image tag from one env's gitops values file to "
+            "another's, commit, push, and wait for the target Application to "
+            "sync. Only 'local' has generated Applications today — "
+            "infra/gitops/argo/applicationset.yaml hard-codes that env — so "
+            "--to staging|prod refuses with an explanation rather than "
+            "committing a tag nothing will read."
+        ),
+    )
     p.add_argument("service", help="Service name (e.g. weather)")
     p.add_argument("--from", dest="from_env", required=True,
                    choices=["local", "staging", "prod"], help="Source environment")
