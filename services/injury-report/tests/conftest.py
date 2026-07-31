@@ -5,8 +5,10 @@ collector-core's dev dependencies inside `services/`, so a moto import passes
 locally off a shared virtualenv and fails only in CI.
 """
 
+import asyncio
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
 from collector_core.lake import EventLoopGuardedLake, lake_key
@@ -17,8 +19,11 @@ from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider
 
 from injury_report.adapters.identity import resolve_player_id
+from injury_report.adapters.schedule import fetch_scheduled_games
 from injury_report.adapters.scope import SCOPE_SIGNAL_TYPES
+from injury_report.adapters.upstream import fetch_report_rows
 from injury_report.main import app
+from injury_report.report import practice_days_elapsed
 
 TEST_TOKEN = "test-collector-token"
 SEASON = 2026
@@ -101,28 +106,32 @@ def _collector_token(monkeypatch):
 @pytest.fixture
 def client(_collector_token, monkeypatch):
     with TestClient(app, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as c:
-        # A fresh, scope-seeded lake for every test -- the route tests drive
+        # A fresh, fully-scoped lake for every test -- the route tests drive
         # real captures through `POST /refresh`, and those now fail closed
         # without a usable membership-union-matchup scope in the lake (the
         # app's real lake is a `NullLakeWriter` absent `LAKE_BUCKET`, whose
-        # `list_keys` always answers empty). Anchor-only (see `seed_scope`)
-        # reproduces the old unnarrowed default for `team_injury_report`,
-        # which never looks at player scope at all; `player_injury_status`
-        # narrows to nothing but no route test asserts on its content
-        # specifically. A test that needs its own lake overrides
-        # `collector_spec.lake` afterward, same as before.
+        # `list_keys` always answers empty). `seed_full_stub_scope` seeds
+        # every id the real stub week's adapters will actually produce, so a
+        # route test sees `player_injury_status` rows exactly as it did
+        # before narrowing existed -- an anchor-only scope would leave every
+        # route test permanently in the `scope_dropped_everything` state and
+        # `signal_matches` with no player-row coverage anywhere in the suite.
+        # A test that needs its own lake overrides `collector_spec.lake`
+        # afterward, same as before.
         #
-        # Seeded BEFORE wrapping in `EventLoopGuardedLake`: `seed_scope`
-        # writes straight into `SpyLake.objects`, a plain synchronous dict
-        # write with no running loop involved yet, but the guard's job is to
-        # catch a *capture-path* call made directly on the loop thread --
-        # `build_collector_app` wraps every collector's real lake in this
-        # exact guard, and this task added the first capture-path lake read
-        # this collector makes. `monkeypatch.setattr` rather than a direct
+        # Seeded BEFORE wrapping in `EventLoopGuardedLake`: `seed_full_stub_scope`
+        # writes straight into `SpyLake.objects` via `seed_scope`, a plain
+        # synchronous dict write with no running loop involved, but the
+        # guard's job is to catch a *capture-path* call made directly on the
+        # loop thread -- `build_collector_app` wraps every collector's real
+        # lake in this exact guard. `asyncio.run` rather than an `async def`
+        # fixture: every test in this file is synchronous (plain `def`,
+        # driving `TestClient`), so there is no event loop already running to
+        # conflict with. `monkeypatch.setattr` rather than a direct
         # assignment, so the override reverts even though `app` is a
         # session-wide singleton.
         spy = SpyLake()
-        seed_scope(spy)
+        asyncio.run(seed_full_stub_scope(spy))
         monkeypatch.setattr(
             c.app.state.collector_spec, "lake", EventLoopGuardedLake(spy)
         )
@@ -278,3 +287,34 @@ def player_ids_in(rows) -> set[str]:
             continue
         ids.add(resolve_player_id(external_id))
     return ids
+
+
+async def seed_full_stub_scope(
+    lake, *, season: int = SEASON, week: int = WEEK, now=NOW
+) -> None:
+    """Every player id the REAL stub week produces for `now`, seeded as
+    membership -- the "narrowing changed nothing" scope for a capture that
+    goes through the real adapters (a route test's `POST /refresh`, or
+    `test_capture_contract_conformance.py`'s own `capture()` helper) rather
+    than a monkeypatched `fetch_*`.
+
+    Computed by calling the same adapters `capture_injury_report` calls
+    (`fetch_scheduled_games`/`fetch_report_rows`), not by reimplementing the
+    stub week's shape a second time: a change to the stub week cannot
+    silently desync this fixture from what a real capture actually sees.
+    `player_ids_in` mirrors `report.py`'s own extraction, so the seeded
+    membership is exactly the set of ids the real pass will resolve.
+    """
+    days = list(practice_days_elapsed(now))
+    async with httpx.AsyncClient() as client:
+        scheduled = await fetch_scheduled_games(season, week, client=client)
+        rows = await fetch_report_rows(
+            season, week, client=client, teams=sorted(scheduled), days=days
+        )
+    seed_scope(
+        lake,
+        membership=player_ids_in(rows),
+        season=season,
+        week=week,
+        captured_at=now,
+    )

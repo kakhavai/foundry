@@ -23,6 +23,7 @@ suites:
 
 import httpx
 import pytest
+from collector_core.coverage import MAX_ERRORS
 from collector_core.lake import lake_key
 from collector_core.scope import ScopeUnavailable
 
@@ -279,8 +280,43 @@ async def test_narrowing_to_nothing_is_loud(lake, monkeypatch):
         for error in envelopes[PLAYER_SIGNAL].errors
         if error["reason"] == "scope_dropped_everything"
     )
-    assert "1" in detail, detail  # one row offered, zero survived
+    assert detail.startswith("1 player row(s)"), detail  # one offered, zero survived
     assert len(calls) == 1
+
+
+async def test_scope_dropped_everything_survives_the_errors_cap(lake, monkeypatch):
+    """The identical reasoning `CoverageAccumulator.errors` already applies to
+    `below_expected_floor`: the one entry that makes a total narrowing drop
+    visible must not be the entry a busy week's error list pushes past the
+    `MAX_ERRORS` cap. Sixty unscheduled-feeling clubs file nothing, which
+    alone produces `60 * 3 = 180` `report_not_published` entries -- comfortably
+    past the cap -- while KC offers one player row that the union drops."""
+    teams = {f"T{index:02d}": f"2026_01_T{index:02d}_BYE" for index in range(60)}
+    teams["KC"] = "2026_01_KC_BUF"
+    bench_row = wire(
+        team="KC", practice_day="wednesday", player_external_id="kc-deep-bench"
+    )
+
+    async def fake_schedule(*args, **kwargs):
+        return teams
+
+    async def fake_rows(*args, **kwargs):
+        return [bench_row]
+
+    monkeypatch.setattr("injury_report.capture.fetch_scheduled_games", fake_schedule)
+    monkeypatch.setattr("injury_report.capture.fetch_report_rows", fake_rows)
+    seed_scope(lake, membership=set(), matchup=set())
+
+    envelopes = await _capture(lake)
+
+    reasons = [error["reason"] for error in envelopes[PLAYER_SIGNAL].errors]
+    # `cap_errors` keeps `MAX_ERRORS` real entries PLUS its own truncation
+    # marker as one further entry -- see `collector_core/coverage.py` -- so
+    # a genuinely truncated list is `MAX_ERRORS + 1` long, not `MAX_ERRORS`.
+    assert len(reasons) == MAX_ERRORS + 1, len(reasons)
+    assert "report_not_published" in reasons, reasons  # the cap is genuinely hit
+    assert "errors_truncated" in reasons, reasons
+    assert reasons[0] == "scope_dropped_everything", reasons[:3]
 
 
 async def test_a_partial_narrow_does_not_trip_the_total_drop_guard(lake, monkeypatch):

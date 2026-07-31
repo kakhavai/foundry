@@ -67,7 +67,7 @@ class InjuryReportMetrics(CollectorMetrics):
             ),
         )
         self._scope_dropped_everything = meter.create_counter(
-            "injury_report_scope_dropped_everything_total",
+            "injury_report_scope_dropped_everything",
             description=(
                 "Passes where every resolved player_injury_status row was "
                 "excluded by the roster-scope membership/matchup union, by "

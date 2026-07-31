@@ -17,8 +17,6 @@ import pytest
 from collector_core.streaming import UpstreamSchemaError
 from jsonschema import Draft202012Validator, FormatChecker
 
-from injury_report.adapters.schedule import fetch_scheduled_games
-from injury_report.adapters.upstream import fetch_report_rows
 from injury_report.capture import (
     MIN_SCHEDULED_TEAMS,
     SIGNAL_TYPES,
@@ -26,7 +24,7 @@ from injury_report.capture import (
 )
 from injury_report.report import practice_days_elapsed
 
-from .conftest import NOW, SpyLake, player_ids_in, seed_scope
+from .conftest import NOW, SpyLake, seed_full_stub_scope
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts" / "signal-envelope"
 ENVELOPE_SCHEMA = json.loads((CONTRACTS / "envelope.v1.schema.json").read_text())
@@ -51,29 +49,15 @@ def validate(envelopes: dict) -> None:
     assert checked, "no rows were validated — the assertion above was vacuous"
 
 
-async def _seed_full_stub_scope(lake) -> None:
-    """Every player id the real stub week produces, so narrowing changes
-    nothing this file observes -- it is about producer-side contract shape,
-    not about narrowing, which `test_narrowing.py` owns.
-
-    Computed by calling the same adapters `capture_injury_report` calls,
-    rather than reimplementing the stub week's shape a second time: a change
-    to the stub week cannot silently desync this fixture from what the real
-    capture actually sees.
-    """
-    async with httpx.AsyncClient() as client:
-        scheduled = await fetch_scheduled_games(2026, 1, client=client)
-        rows = await fetch_report_rows(
-            2026, 1, client=client, teams=sorted(scheduled), days=list(DAYS)
-        )
-    seed_scope(lake, membership=player_ids_in(rows))
-
-
 async def capture(lake, **kwargs):
     """The real capture, against the adapters' own deterministic stub week —
     not a mocked `fetch_*`. That is the point: a renamed field has to fail here
-    rather than in the generator six weeks later."""
-    await _seed_full_stub_scope(lake)
+    rather than in the generator six weeks later. `seed_full_stub_scope` (in
+    `conftest.py`, shared with the route tests) seeds every id that week will
+    produce, so narrowing changes nothing this file observes -- it is about
+    producer-side contract shape, not about narrowing, which
+    `test_narrowing.py` owns."""
+    await seed_full_stub_scope(lake)
     async with httpx.AsyncClient() as client:
         return await capture_injury_report(
             2026, 1, client=client, lake=lake, now=NOW, **kwargs

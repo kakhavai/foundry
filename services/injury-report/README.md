@@ -90,7 +90,7 @@ team-level filing keys shared with `team_injury_report`, so a
 ratio. Instead, whenever narrowing resolves at least one player row and keeps
 none of them, the pass records an `errors` entry with reason
 `scope_dropped_everything` (carrying how many rows were offered) and
-increments `injury_report_scope_dropped_everything_total`. It does **not**
+increments `injury_report_scope_dropped_everything`. It does **not**
 fire on a genuinely quiet week (no rows offered at all) — those two states
 must stay distinguishable, which is the entire point. Until the crosswalk
 above is built, expect this counter to increment on essentially every pass
@@ -110,6 +110,16 @@ A club that filed appears in `signals` either way, so a consumer reading only
 the rows sees the difference. A club that did not file appears in
 `coverage.missing`, so a consumer reading only coverage sees it too. Neither
 channel can express "healthy" for a club that said nothing.
+
+**`team_injury_report.player_count` is not narrowed, so it will not equal the
+number of that club's `player_injury_status` rows.** The count is taken off
+the unfiltered filing (every player the club actually listed); the
+`player_injury_status` rows for the same club are filtered to the
+membership/matchup union. A club that listed three players, only one of whom
+is in scope, reports `player_count: 3` alongside exactly one published
+`player_injury_status` row for that team — correct behaviour on both sides,
+not a discrepancy, but a consumer diffing the two counts will file a bug
+report over it if this is not read first.
 
 ## What `coverage.expected` counts
 
@@ -143,7 +153,7 @@ Beyond the fleet-wide `collector_*` series:
 |---|---|
 | `injury_report_teams_published{practice_day}` / `injury_report_teams_with_games{practice_day}` | one club's feed breaking on **one day**, which a week-level ratio hides |
 | `injury_report_unmapped_rows{reason}` | understanding less of the feed every week, which otherwise looks like the feed getting quieter |
-| `injury_report_scope_dropped_everything_total` | narrowing excluding every resolved `player_injury_status` row in a pass — invisible to `coverage.ratio`, which is team-keyed, so this is the only signal that distinguishes it from a genuinely quiet week. See "Known gap" above |
+| `injury_report_scope_dropped_everything` | narrowing excluding every resolved `player_injury_status` row in a pass — invisible to `coverage.ratio`, which is team-keyed, so this is the only signal that distinguishes it from a genuinely quiet week. See "Known gap" above |
 
 ## Before the real upstream is wired
 

@@ -147,6 +147,11 @@ def _envelope(
         # day; the player rows are that filing's contents, so a second,
         # player-cardinality denominator would be a number nobody could state
         # the meaning of ("how many injured players should there have been?").
+        # `errors` therefore also carries `scope_dropped_everything` into
+        # `team_injury_report`, even though that reason is entirely about
+        # `player_injury_status`'s own filter and `team_injury_report` never
+        # narrows at all -- an accepted consequence of the one shared `errors`
+        # channel, not a claim that the team-level signal narrowed.
         coverage=acc.result(),
         errors=acc.errors,
         signals=signals,
@@ -322,10 +327,31 @@ async def capture_injury_report(
         # see `adapters/identity.py`'s docstring for why that is the case
         # today. Guarded on `offered_players` so a pass with nothing to
         # narrow in the first place (no player rows at all) does not trip it.
-        acc.add_error(
-            "scope_dropped_everything",
-            f"{offered_players} player row(s) resolved, 0 survived the "
-            "membership/matchup union",
+        #
+        # Inserted at the FRONT of `acc._errors`, not appended via
+        # `add_error` — the same reasoning `CoverageAccumulator.errors`
+        # itself applies to `below_expected_floor` ("First, not last, so it
+        # survives capping"). `add_error` only appends, and `errors` caps at
+        # `MAX_ERRORS` (50); a week where half the league's feed breaks can
+        # produce up to ~78 `report_not_published` entries, which would push
+        # this one off the list entirely if it were appended after them.
+        # `CoverageAccumulator` has no public "insert first" API — only
+        # `add_error`, which appends — so this reaches into `_errors`
+        # directly rather than leaving the one entry that makes a total
+        # narrowing drop visible to be silently capped away. Safe because
+        # `errors` recomputes from `_errors` on every access (never cached)
+        # and prepends its own `below_expected_floor` entry ahead of
+        # whatever `_errors` contains, so this still lands second if a floor
+        # shortfall is also present, first otherwise.
+        acc._errors.insert(
+            0,
+            {
+                "reason": "scope_dropped_everything",
+                "detail": (
+                    f"{offered_players} player row(s) resolved, 0 survived "
+                    "the membership/matchup union"
+                ),
+            },
         )
         metrics.scope_dropped_everything()
 

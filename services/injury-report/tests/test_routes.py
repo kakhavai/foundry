@@ -10,7 +10,7 @@ import time
 
 from collector_core.envelope import ENVELOPE_VERSION
 
-from injury_report.capture import SIGNAL_TYPES
+from injury_report.capture import PLAYER_SIGNAL, SIGNAL_TYPES, TEAM_SIGNAL
 
 from .conftest import TEST_TOKEN
 
@@ -92,26 +92,46 @@ def test_a_second_refresh_inside_the_floor_is_429(client):
 
 
 def test_a_row_filter_narrows_the_signals(client):
-    """`signal_matches` is this collector's own, so prove it is consulted."""
+    """`signal_matches` is this collector's own, so prove it is consulted —
+    on a player-level row specifically, not only on `team_injury_report`'s:
+    the `client` fixture seeds the full stub scope precisely so this
+    collector's own row filter still has `player_injury_status` coverage."""
     client.post("/refresh", json={})
     wait_for_signals(client, count=len(SIGNAL_TYPES))
 
     body = client.get("/signals?team=KC").json()
-    rows = [row for envelope in body["envelopes"] for row in envelope["signals"]]
+    by_type = {
+        envelope["signal_type"]: envelope["signals"] for envelope in body["envelopes"]
+    }
+    rows = [row for rows in by_type.values() for row in rows]
     assert rows, "the filter matched nothing — is ROW_FILTERS wired up?"
     assert {row["team"] for row in rows} == {"KC"}
+    assert by_type[PLAYER_SIGNAL], "no player_injury_status row survived the filter"
 
 
-def test_the_unfiltered_response_carries_every_club(client):
+def test_the_unfiltered_response_carries_multiple_clubs(client):
     """The counterweight to the test above, and the reason it is not enough:
-    a `signal_matches` that returned `False` for everything would also make the
-    filtered set look narrow. It also pins the collector's defining property —
-    `injury-report` ignores the roster scope and carries every club's report,
-    because an opposing defender's absence moves a projection too."""
+    a `signal_matches` that returned `False` for everything would also make
+    the filtered set look narrow. Checked per signal type rather than on the
+    two combined, because they now have different scoping stories: this
+    collector's defining property is that `team_injury_report` carries every
+    scheduled club's filing regardless of the roster scope (it is keyed by
+    team, not by player), while `player_injury_status` narrows to the
+    membership/matchup union -- and a narrow that had collapsed to one club,
+    or to nothing, needs its own assertion to be caught rather than hiding
+    behind `team_injury_report`'s always-diverse team set."""
     client.post("/refresh", json={})
     body = wait_for_signals(client, count=len(SIGNAL_TYPES))
-    rows = [row for envelope in body["envelopes"] for row in envelope["signals"]]
-    assert len({row["team"] for row in rows}) > 1, rows[:3]
+    by_type: dict[str, list[dict]] = {}
+    for envelope in body["envelopes"]:
+        by_type.setdefault(envelope["signal_type"], []).extend(envelope["signals"])
+
+    team_rows = by_type[TEAM_SIGNAL]
+    assert len({row["team"] for row in team_rows}) > 1, team_rows[:3]
+
+    player_rows = by_type[PLAYER_SIGNAL]
+    assert player_rows, "the seeded scope should keep some player rows"
+    assert len({row["team"] for row in player_rows}) > 1, player_rows[:3]
 
 
 def test_a_practice_day_filter_narrows_the_team_reports(client):
