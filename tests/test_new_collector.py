@@ -312,22 +312,44 @@ def _ruff_pin() -> str:
     return versions.pop()
 
 
+def _ruff_command(command: list[str]) -> list[str]:
+    return [
+        _uv(),
+        "run",
+        "--no-project",
+        "--with",
+        f"ruff=={_ruff_pin()}",
+        "ruff",
+        *command,
+        ".",
+    ]
+
+
 def _ruff(service: Path, command: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [
-            _uv(),
-            "run",
-            "--no-project",
-            "--with",
-            f"ruff=={_ruff_pin()}",
-            "ruff",
-            *command,
-            ".",
-        ],
+        _ruff_command(command),
         check=False,
         cwd=service,
         capture_output=True,
         text=True,
+    )
+
+
+def test_the_lint_gate_pins_ruff_to_the_lockfile():
+    """Found by mutation: unpinning `_ruff` breaks nothing that anything sees.
+
+    That is exactly the problem. The whole failure class this section covers —
+    `ruff format` disagreeing with a template — moves with the ruff release,
+    so a floating `--with ruff` means this gate quietly answers a different
+    question every few weeks, and stops matching what CI's per-service `lint`
+    legs get from `uv sync --frozen`. Nothing turns red when that happens;
+    the gate just drifts.
+    """
+    pin = _ruff_pin()
+    assert re.fullmatch(r"\d+\.\d+\.\d+", pin), pin
+    argv = _ruff_command(["check"])
+    assert f"ruff=={pin}" in argv, (
+        f"_ruff_command no longer pins ruff to the lockfile's {pin}: {argv}"
     )
 
 
