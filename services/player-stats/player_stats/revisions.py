@@ -32,11 +32,14 @@ capture that changes nothing increments nothing.
 import asyncio
 import hashlib
 import json
+import logging
 from datetime import UTC, datetime
 
 from collector_core.envelope import ENVELOPE_VERSION
 from collector_core.lake import LakeWriter
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 # The blocks a restatement can touch. `rates` and `fantasy_points` are derived
 # from these, so including them would be double-counting; `revision` itself
@@ -212,6 +215,13 @@ async def revisions_view(
     a time: it does a prefix scan plus one read per snapshot, and running that
     on the event loop would stall every other request — including `/health` —
     for its duration.
+
+    An unreachable lake is a **503**, never an empty list. This route's whole
+    job is to say what changed, so answering `{"revisions": [], "count": 0}`
+    when the object store cannot be read tells the generator "nothing has been
+    restated" — which is indistinguishable from the truth and arrives with a
+    200. Found by running the image with the chart's own environment against a
+    lake endpoint that does not resolve, where it was previously a bare 500.
     """
     try:
         cutoff = parse_since(since)
@@ -224,9 +234,22 @@ async def revisions_view(
     # declares exactly one signal type, and reading it here keeps the
     # capture -> revisions dependency one-way.
     signal_type = spec.signal_types[0]
-    series = await asyncio.to_thread(
-        build_revision_series, spec.lake, spec.name, signal_type, season, week, cutoff
-    )
+    try:
+        series = await asyncio.to_thread(
+            build_revision_series,
+            spec.lake,
+            spec.name,
+            signal_type,
+            season,
+            week,
+            cutoff,
+        )
+    except Exception as exc:  # noqa: BLE001 — any lake failure, stated as one
+        logger.warning("the revision scan could not read the lake: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f"the signal lake could not be read: {type(exc).__name__}",
+        ) from None
     return {
         "season": season,
         "week": week,

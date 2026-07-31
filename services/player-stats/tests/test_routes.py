@@ -236,6 +236,18 @@ def test_revisions_reads_the_lake_the_capture_writes_to(client, monkeypatch):
     }
 
 
+def test_an_unreadable_lake_is_503_not_an_empty_revision_list(client, monkeypatch):
+    """`{"revisions": [], "count": 0}` with a 200 tells the generator 'nothing
+    has been restated', which is indistinguishable from the truth. Found by
+    running the image with the chart's environment against a lake endpoint that
+    does not resolve, where this route was previously a bare 500."""
+    spec = client.app.state.collector_spec
+    monkeypatch.setattr(spec, "lake", SpyLake(fail_read=True))
+    response = client.get("/revisions")
+    assert response.status_code == 503
+    assert "lake" in response.json()["detail"]
+
+
 def test_a_mistyped_since_is_422(client):
     """Ignoring it would return the whole history, which reads as 'nothing has
     been restated in my window'."""
