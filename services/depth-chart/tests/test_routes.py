@@ -192,6 +192,26 @@ def test_the_diff_route_404s_for_a_capture_that_never_happened(client):
     assert response.status_code == 404
 
 
+def test_an_unreachable_lake_is_503_not_a_bare_500(client, monkeypatch):
+    """`/signals/diff` is the only route that reads the lake at request time,
+    so it is the only one that can be down while `/signals` is perfectly
+    healthy. A caller has to be able to tell those apart — and a botocore
+    traceback rendered as 500 does not let them.
+
+    Observed for real: a `docker run` outside the cluster cannot resolve MinIO,
+    and this route answered 500 with an `EndpointConnectionError` stack.
+    """
+
+    class BrokenLake(SpyLake):
+        def list_keys(self, *args, **kwargs):
+            raise OSError("could not connect to the endpoint URL")
+
+    monkeypatch.setattr(app.state.collector_spec, "lake", BrokenLake())
+    response = client.get("/signals/diff?from=a&to=b")
+    assert response.status_code == 503
+    assert "signal lake unavailable" in response.json()["detail"]
+
+
 def test_the_diff_route_requires_both_endpoints(client):
     assert client.get("/signals/diff?from=2026-01-01T00:00:00Z").status_code == 422
 

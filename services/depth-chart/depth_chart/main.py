@@ -65,3 +65,11 @@ async def signals_diff(
         # 404, not an empty diff: "nothing changed" and "that capture never
         # happened" are different answers and must not look the same.
         raise HTTPException(status_code=404, detail=str(exc)) from None
+    except Exception as exc:  # noqa: BLE001 — an unreachable lake is not a bug
+        # 503 naming the lake, not a bare 500 with a botocore traceback. This
+        # route is the only one that reads the lake at request time, so it is
+        # the only one that can be down while `/signals` is perfectly healthy —
+        # and a caller has to be able to tell those apart.
+        raise HTTPException(
+            status_code=503, detail=f"signal lake unavailable: {exc}"
+        ) from None
