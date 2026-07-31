@@ -252,13 +252,22 @@ async def test_without_an_etag_key_nothing_changes():
         seen.append(dict(request.headers))
         return httpx.Response(200, text=CSV, headers={"ETag": 'W/"v1"'})
 
+    store = ETagStore()
     async with _client(handler) as client:
         for _ in range(2):
-            async for _row in stream_csv_dicts(client, "http://x/d.csv"):
+            async for _row in stream_csv_dicts(
+                client, "http://x/d.csv", etag_store=store
+            ):
                 pass
 
     assert len(seen) == 2
     assert all("if-none-match" not in headers for headers in seen)
+    # A caller that did not opt in must leave the store untouched, not just
+    # the headers -- otherwise the `etag_key is not None` guard on the write
+    # is unverified and can be deleted silently. No `etag_key` is passed
+    # above, so `None` is the key an unconditional write would land under --
+    # that is the exact key stream_csv_dicts would use internally.
+    assert store.get(None) is None
 
 
 @pytest.mark.asyncio
