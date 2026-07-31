@@ -8,11 +8,12 @@ and a position the platform has no canonical form for is discarded rather than
 counted missing.
 """
 
+from datetime import UTC, datetime, timedelta
+
 import httpx
 import pytest
 import respx
 from collector_core.streaming import UpstreamSchemaError
-from datetime import UTC, datetime, timedelta
 
 from usage_share.adapters.upstream import (
     REQUIRED_COLUMNS,
@@ -37,9 +38,7 @@ async def _fetch(body: str, **kwargs):
             return_value=httpx.Response(200, text=body)
         )
         async with httpx.AsyncClient() as client:
-            return await fetch_week_usage(
-                2026, 1, client=client, now=NOW, **kwargs
-            )
+            return await fetch_week_usage(2026, 1, client=client, now=NOW, **kwargs)
 
 
 def test_source_ref_substitutes_the_season():

@@ -54,11 +54,15 @@ extraEnv:
     value: "http://minio.monitoring.svc.cluster.local:9000"
   - name: REFRESH_MIN_INTERVAL_SECONDS
     value: "300"
-  # Scaffolded false. Flip to "true" once the real upstream is wired AND you
-  # have decided the third-party load is acceptable: the cluster is recreated
-  # on every CI run and every pod restart re-captures, so a large or
-  # rate-limited upstream should stay false here. A dispatched POST /refresh
-  # reaches the upstream regardless of this flag.
+  # Stays "false", and it is a LOAD decision rather than a way to dodge a
+  # startup bug — the container is exercised with this exact environment, and
+  # with CAPTURE_ENABLED=true, in the PR's UAT. The upstream is an ~8.3 MB
+  # season CSV published by a volunteer project on GitHub releases, and the
+  # cluster is recreated on every CI run while every pod restart re-captures.
+  # `player-identity` and `roster-scope` ship false for the same reason.
+  #
+  # A dispatched POST /refresh reaches the upstream regardless of this flag,
+  # which is why this collector has no smoke hook that posts one.
   - name: CAPTURE_ENABLED
     value: "false"
   - name: CAPTURE_SEASON

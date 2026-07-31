@@ -18,18 +18,18 @@ from jsonschema import Draft202012Validator, FormatChecker
 from usage_share.capture import EXPECTED_FLOOR, SIGNAL_TYPES, capture_usage_share
 
 from .conftest import (
+    NOW,
     SAMPLE_PLAYER_ROWS,
     SAMPLE_TEAMS,
-    NOW,
     SpyLake,
     full_league_csv,
 )
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts" / "signal-envelope"
 ENVELOPE_SCHEMA = json.loads((CONTRACTS / "envelope.v1.schema.json").read_text())
-FIELD_SCHEMAS = json.loads(
-    (CONTRACTS / "collectors" / "usage-share.json").read_text()
-)["signal_types"]
+FIELD_SCHEMAS = json.loads((CONTRACTS / "collectors" / "usage-share.json").read_text())[
+    "signal_types"
+]
 
 
 def validate(envelopes: dict) -> None:
@@ -80,7 +80,9 @@ async def test_the_published_shares_are_computed_from_the_published_bases(upstre
     assert row["target_share"] == round(10 / 25, 6)
     assert row["air_yards_share"] == round(120 / 215, 6)
     assert row["carry_share"] == round(1 / 22, 6)
-    assert row["wopr"] == round(1.5 * row["target_share"] + 0.7 * row["air_yards_share"], 6)
+    assert row["wopr"] == round(
+        1.5 * row["target_share"] + 0.7 * row["air_yards_share"], 6
+    )
 
 
 async def test_snaps_and_routes_are_null_rather_than_zero(upstream):

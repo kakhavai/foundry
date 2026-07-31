@@ -338,9 +338,7 @@ async def capture_usage_share(
             acc.fail(key, "deadline_exceeded")
             continue
         try:
-            signals.append(
-                build_signal(row, usage.denominators.get(row.team), now=now)
-            )
+            signals.append(build_signal(row, usage.denominators.get(row.team), now=now))
         except AmbiguousUsage as exc:
             acc.fail(key, exc.reason)
             continue

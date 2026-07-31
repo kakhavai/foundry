@@ -111,7 +111,9 @@ def test_drift_measures_the_upstreams_own_shares_not_ours():
     the shares this collector computes are divided by a base it summed itself."""
     usage = WeekUsage(
         denominators={
-            "KC": TeamDenominators(team="KC", targets=25, upstream_target_share_sum=1.0),
+            "KC": TeamDenominators(
+                team="KC", targets=25, upstream_target_share_sum=1.0
+            ),
             "BUF": TeamDenominators(
                 team="BUF", targets=16, upstream_target_share_sum=0.9
             ),
@@ -201,7 +203,7 @@ async def test_a_refused_row_is_counted_missing_with_its_reason(monkeypatch):
 
 
 async def test_a_team_whose_offense_never_appeared_fails_its_denominators_key():
-    """"Complete but zero" and "absent" are different, and only one of them is
+    """ "Complete but zero" and "absent" are different, and only one of them is
     a base a share can be taken against."""
     records = [
         record

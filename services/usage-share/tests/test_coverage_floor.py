@@ -19,9 +19,9 @@ from usage_share.capture import (
 )
 
 from .conftest import (
+    NOW,
     SAMPLE_PLAYER_ROWS,
     SAMPLE_TEAMS,
-    NOW,
     SpyLake,
     full_league_csv,
     to_csv,
@@ -144,7 +144,11 @@ async def test_rows_left_unbuilt_by_the_deadline_are_missing_not_dropped(monkeyp
         ],
         denominators={
             "KC": TeamDenominators(
-                team="KC", dropbacks=30, targets=2, air_yards=20.0, carries=0,
+                team="KC",
+                dropbacks=30,
+                targets=2,
+                air_yards=20.0,
+                carries=0,
                 upstream_target_share_sum=1.0,
             )
         },

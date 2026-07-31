@@ -78,7 +78,9 @@ def _record(**overrides) -> dict:
 
 def to_csv(records: list[dict]) -> str:
     header = ",".join(CSV_COLUMNS)
-    lines = [",".join(record.get(column, "") for column in CSV_COLUMNS) for record in records]
+    lines = [
+        ",".join(record.get(column, "") for column in CSV_COLUMNS) for record in records
+    ]
     return "\n".join([header, *lines]) + "\n"
 
 
@@ -87,30 +89,91 @@ def to_csv(records: list[dict]) -> str:
 # with no targets, a receiver with negative air yards, and a defender the
 # position filter must drop without counting them missing.
 SAMPLE_RECORDS = [
-    _record(player_id="00-KC-QB1", position="QB", team="KC", attempts=30,
-            sacks_suffered=2, carries=3, targets=0, target_share=0),
-    _record(player_id="00-KC-WR1", position="WR", team="KC", targets=10,
-            receiving_air_yards=120, carries=1, target_share=0.4),
-    _record(player_id="00-KC-WR2", position="WR", team="KC", targets=6,
-            receiving_air_yards=60, target_share=0.24),
-    _record(player_id="00-KC-TE1", position="TE", team="KC", targets=7,
-            receiving_air_yards=40, target_share=0.28),
-    _record(player_id="00-KC-RB1", position="FB", team="KC", targets=2,
-            receiving_air_yards=-5, carries=18, target_share=0.08),
+    _record(
+        player_id="00-KC-QB1",
+        position="QB",
+        team="KC",
+        attempts=30,
+        sacks_suffered=2,
+        carries=3,
+        targets=0,
+        target_share=0,
+    ),
+    _record(
+        player_id="00-KC-WR1",
+        position="WR",
+        team="KC",
+        targets=10,
+        receiving_air_yards=120,
+        carries=1,
+        target_share=0.4,
+    ),
+    _record(
+        player_id="00-KC-WR2",
+        position="WR",
+        team="KC",
+        targets=6,
+        receiving_air_yards=60,
+        target_share=0.24,
+    ),
+    _record(
+        player_id="00-KC-TE1",
+        position="TE",
+        team="KC",
+        targets=7,
+        receiving_air_yards=40,
+        target_share=0.28,
+    ),
+    _record(
+        player_id="00-KC-RB1",
+        position="FB",
+        team="KC",
+        targets=2,
+        receiving_air_yards=-5,
+        carries=18,
+        target_share=0.08,
+    ),
     # Dropped by the position filter, but its (zero) counts still belong to
     # KC's denominators — see the adapter's docstring.
     _record(player_id="00-KC-DE1", position="DE", team="KC", target_share=0),
-    _record(player_id="00-BUF-QB1", position="QB", team="BUF", attempts=25,
-            sacks_suffered=3, targets=0, target_share=0),
-    _record(player_id="00-BUF-WR1", position="WR", team="BUF", targets=8,
-            receiving_air_yards=90, target_share=0.5),
-    _record(player_id="00-BUF-RB1", position="RB", team="BUF", targets=8,
-            receiving_air_yards=10, carries=20, target_share=0.5),
+    _record(
+        player_id="00-BUF-QB1",
+        position="QB",
+        team="BUF",
+        attempts=25,
+        sacks_suffered=3,
+        targets=0,
+        target_share=0,
+    ),
+    _record(
+        player_id="00-BUF-WR1",
+        position="WR",
+        team="BUF",
+        targets=8,
+        receiving_air_yards=90,
+        target_share=0.5,
+    ),
+    _record(
+        player_id="00-BUF-RB1",
+        position="RB",
+        team="BUF",
+        targets=8,
+        receiving_air_yards=10,
+        carries=20,
+        target_share=0.5,
+    ),
     # A different week of the same season. The adapter must discard it as it
     # parses — including from the denominators, or KC's bases would carry two
     # games' worth of targets and every share would be halved.
-    _record(player_id="00-KC-WR1", position="WR", team="KC", week=2,
-            game_id="2026_02_KC_LAC", targets=99, target_share=1.0),
+    _record(
+        player_id="00-KC-WR1",
+        position="WR",
+        team="KC",
+        week=2,
+        game_id="2026_02_KC_LAC",
+        targets=99,
+        target_share=1.0,
+    ),
 ]
 
 # Retained rows and teams in SAMPLE_RECORDS: 5 KC skill players + 3 BUF, over
@@ -166,6 +229,7 @@ def serve_upstream():
     need a different document, and parameterising the mock is cheaper than
     thirteen near-identical fixtures.
     """
+
     def _serve(body: str, *, status: int = 200):
         router = respx.mock(assert_all_called=False)
         router.start()
