@@ -10,6 +10,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from prometheus_client import REGISTRY, generate_latest
 
 from roster_scope.main import app
+from roster_scope.matchups import MATCHUP_SIGNAL
 from roster_scope.rules import ALL_RULES, TEAMS
 from roster_scope.scope import CHANGE_SIGNAL, MEMBERSHIP_SIGNAL
 
@@ -403,3 +404,44 @@ def seeded_state():
     yield
     state.envelopes = {}
     state.last_capture_at = None
+
+
+@pytest.fixture
+def seeded_matchup_state():
+    """Populates only the matchup envelope — kept separate from `seeded_state`
+    so `/signals`' count-of-two assertions (membership + change) are not
+    disturbed by a third envelope appearing in `spec.state.envelopes`; nothing
+    in `/signals` tests wants a matchup row and `MATCHUP_SIGNAL` is not one of
+    the signal types `/signals` iterates for those tests to fail loudly on.
+    """
+    state = app.state.collector_spec.state
+    state.envelopes[MATCHUP_SIGNAL] = Envelope(
+        envelope_version=ENVELOPE_VERSION,
+        collector="roster-scope",
+        signal_type=MATCHUP_SIGNAL,
+        captured_at=NOW,
+        upstream=Upstream("nflverse-depth-charts", NOW),
+        scope={"season": 2026, "week": 1, "scope_version": 3},
+        coverage=Coverage(expected=2, present=2, missing=[]),
+        errors=[],
+        signals=[
+            {
+                "player_id": "fdy-corner-1",
+                "slot_key": "KC:cb_matchup_le_4:1",
+                "rule_id": "cb_matchup_le_4",
+                "team": "KC",
+                "position": "CB",
+                "depth_rank": 1,
+            },
+            {
+                "player_id": "fdy-corner-2",
+                "slot_key": "KC:cb_matchup_le_4:2",
+                "rule_id": "cb_matchup_le_4",
+                "team": "KC",
+                "position": "CB",
+                "depth_rank": 2,
+            },
+        ],
+    )
+    yield
+    state.envelopes.pop(MATCHUP_SIGNAL, None)

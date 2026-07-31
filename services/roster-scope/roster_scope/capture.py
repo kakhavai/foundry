@@ -59,8 +59,9 @@ from collector_core.failure import UNKNOWN_EXPECTED_FLOOR
 from collector_core.lake import LakeWriter
 from collector_core.publish import publish_capture
 
-from .adapters.depth_chart import depth_chart_url, fetch_depth_charts
+from .adapters.depth_chart import DepthChart, depth_chart_url, fetch_depth_charts
 from .adapters.identity import build_resolver
+from .matchups import MATCHUP_SIGNAL, resolve_matchup_slots
 from .metrics import metrics
 from .rules import expected_slots
 from .scope import (
@@ -85,7 +86,7 @@ __all__ = [
 
 COLLECTOR_NAME = "roster-scope"
 CADENCE_CLASS = CadenceClass.WEEKLY
-SIGNAL_TYPES = (MEMBERSHIP_SIGNAL, CHANGE_SIGNAL)
+SIGNAL_TYPES = (MEMBERSHIP_SIGNAL, CHANGE_SIGNAL, MATCHUP_SIGNAL)
 UPSTREAM_ADAPTER = "nflverse-depth-charts"
 
 
@@ -120,6 +121,29 @@ def _envelope(
         errors=errors,
         signals=signals,
     )
+
+
+def _matchup_rows(charts: dict[str, DepthChart]) -> list[dict]:
+    """Flatten every team's depth-chart rows into the shape
+    `resolve_matchup_slots` expects.
+
+    `DepthChartRow` already carries what a matchup row needs, just under
+    this module's own field names (`position_raw`, `depth_order`,
+    `name_raw`) rather than the canonical ones -- canonicalizing the raw
+    label happens inside `matchups.py` itself, the same way `scope.py`
+    canonicalizes a player position from the raw chart rather than trusting
+    the adapter to have done it.
+    """
+    return [
+        {
+            "team": row.team,
+            "position": row.position_raw,
+            "depth_rank": row.depth_order,
+            "name": row.name_raw,
+        }
+        for chart in charts.values()
+        for row in chart.rows
+    ]
 
 
 async def _persist(
@@ -168,6 +192,14 @@ async def capture_scope(
         scope = {"season": season, "week": week, "scope_version": NO_VERSION}
         errors = [{"reason": "ledger_unavailable", "detail": str(exc)}]
         empty = Coverage(expected=len(slots), present=0, missing=sorted(slots))
+        # No chart was ever fetched on this path -- the ledger read is the
+        # very first thing this coroutine does -- so the matchup accumulator
+        # sees zero rows too. Built through the real function rather than a
+        # second hand-rolled empty Coverage, so the 608-key universe it seeds
+        # cannot drift from the one the success path uses.
+        _, matchup_acc = await resolve_matchup_slots(
+            [], season=season, week=week, now=now, resolver=build_resolver(client)
+        )
         return await _persist(
             {
                 MEMBERSHIP_SIGNAL: _envelope(
@@ -197,6 +229,15 @@ async def capture_scope(
                     errors=errors,
                     signals=[],
                 ),
+                MATCHUP_SIGNAL: _envelope(
+                    MATCHUP_SIGNAL,
+                    now=now,
+                    upstream=upstream,
+                    scope=scope,
+                    coverage=matchup_acc.result(),
+                    errors=errors,
+                    signals=[],
+                ),
             },
             lake,
         )
@@ -212,18 +253,21 @@ async def capture_scope(
     acc = CoverageAccumulator(slots)
 
     metrics.capture_attempt()
+    resolver = build_resolver(client)
+    fetch_error: Exception | None = None
     try:
         charts = await fetch_depth_charts(season, week, client, now=now)
     except Exception as exc:  # noqa: BLE001 — classified, not fatal
         metrics.capture_failure(exc)
         charts = {}
+        fetch_error = exc
         acc.add_error(metrics.reason_for(exc), "depth_chart_fetch")
 
     metrics.stale_depth_charts(count_stale_depth_charts(charts, now))
 
     rows = await resolve_membership(
         charts=charts,
-        resolver=build_resolver(client),
+        resolver=resolver,
         previous=previous,
         season=season,
         week=week,
@@ -244,6 +288,25 @@ async def capture_scope(
     # series and a healthy one are indistinguishable in PromQL, and this
     # metric's only job is to be alertable on `> 0`.
     metrics.missed_producers(len(reconcile_missed_producers([], rows)))
+
+    # A second, independent accumulator -- see the module and matchups.py
+    # docstrings. Sharing `acc` here would blend a matchup outage into the
+    # membership envelope's own ratio and vice versa; a resolution failure in
+    # one must never mask a healthy result in the other.
+    matchup_signals, matchup_acc = await resolve_matchup_slots(
+        _matchup_rows(charts),
+        season=season,
+        week=week,
+        now=now,
+        resolver=resolver,
+        deadline=deadline,
+        clock=_wall_clock,
+    )
+    if fetch_error is not None:
+        # Both envelopes are built from the same fetch, so a fetch failure
+        # belongs in both accumulators' errors -- recorded independently in
+        # each rather than by sharing one accumulator between them.
+        matchup_acc.add_error(metrics.reason_for(fetch_error), "depth_chart_fetch")
 
     return await _persist(
         {
@@ -269,6 +332,15 @@ async def capture_scope(
                 coverage=Coverage(expected=0, present=0, missing=[]),
                 errors=errors,
                 signals=events,
+            ),
+            MATCHUP_SIGNAL: _envelope(
+                MATCHUP_SIGNAL,
+                now=now,
+                upstream=upstream,
+                scope=scope,
+                coverage=matchup_acc.result(),
+                errors=matchup_acc.errors,
+                signals=matchup_signals,
             ),
         },
         lake,

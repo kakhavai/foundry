@@ -4,6 +4,7 @@ Route tests pre-populate the cache directly, per the repo's convention — the
 routes never call an upstream.
 """
 
+from roster_scope.matchups import MATCHUP_SIGNAL
 from roster_scope.scope import CHANGE_SIGNAL, MEMBERSHIP_SIGNAL
 
 
@@ -22,7 +23,11 @@ def test_catalog_describes_the_collector(client, seeded_state):
     assert body["collector"] == "roster-scope"
     assert body["envelope_version"] == "1"
     assert body["cadence_class"] == "weekly"
-    assert set(body["signal_types"]) == {MEMBERSHIP_SIGNAL, CHANGE_SIGNAL}
+    assert set(body["signal_types"]) == {
+        MEMBERSHIP_SIGNAL,
+        CHANGE_SIGNAL,
+        MATCHUP_SIGNAL,
+    }
     assert "player_id" in body["filters"]
     assert body["last_capture_at"] == "2026-09-15T12:00:00Z"
     assert body["coverage"][MEMBERSHIP_SIGNAL]["expected"] == 3
@@ -201,3 +206,29 @@ def test_scope_diff_rejects_an_inverted_range(client, seeded_state):
 def test_scope_diff_requires_both_bounds(client, seeded_state):
     assert client.get("/scope/diff?from=1").status_code == 422
     assert client.get("/scope/diff").status_code == 422
+
+
+def test_scope_matchups_returns_the_matchup_slots(client, seeded_matchup_state):
+    response = client.get("/scope/matchups")
+    assert response.status_code == 200
+    body = response.json()
+    assert "slots" in body
+    assert "count" in body
+    assert body["count"] == len(body["slots"])
+    assert body["season"] == 2026
+    assert body["week"] == 1
+    assert body["captured_at"] == "2026-09-15T12:00:00Z"
+    assert {s["player_id"] for s in body["slots"]} == {"fdy-corner-1", "fdy-corner-2"}
+
+
+def test_scope_matchups_is_empty_before_the_first_capture(client):
+    """Mirrors `test_scope_players_is_empty_before_the_first_capture`: a
+    well-shaped body, not a 404 or a `null`, even with nothing captured yet."""
+    body = client.get("/scope/matchups").json()
+    assert body == {
+        "season": 2026,
+        "week": 1,
+        "slots": [],
+        "count": 0,
+        "captured_at": None,
+    }

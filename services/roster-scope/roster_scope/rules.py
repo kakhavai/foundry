@@ -52,6 +52,17 @@ POSITION_ALIASES: dict[str, str] = {
     "WR": "WR", "SE": "WR", "FL": "WR", "SLOT": "WR", "X": "WR", "Z": "WR",
     "TE": "TE", "Y": "TE",
     "K": "K", "PK": "K",
+    # Defensive and offensive-line labels, added for the matchup scope. These
+    # vary far more between sources than offensive ones do. EDGE collapses to
+    # LB rather than DL: charts use it for stand-up rushers who line up off
+    # the line, and the matchup question it answers is coverage/containment.
+    "CB": "CB", "DB": "CB", "NB": "CB", "NCB": "CB",
+    "S": "S", "FS": "S", "SS": "S", "SAF": "S",
+    "LB": "LB", "ILB": "LB", "OLB": "LB", "MLB": "LB", "WLB": "LB",
+    "SLB": "LB", "EDGE": "LB",
+    "DL": "DL", "DE": "DL", "DT": "DL", "NT": "DL",
+    "OL": "OL", "LT": "OL", "LG": "OL", "C": "OL", "RG": "OL", "RT": "OL",
+    "OT": "OL", "OG": "OL", "G": "OL", "T": "OL",
 }  # fmt: skip
 
 
@@ -171,6 +182,55 @@ def expected_slots() -> tuple[str, ...]:
         slot_key(team, rule.rule_id, rank)
         for team in TEAMS
         for rule in ALL_RULES
+        for rank in range(1, rule.max_depth + 1)
+    )
+
+
+# The matchup scope: the players who determine how our SCOPED players
+# perform. Not "the opposing defence" -- `OL` is OUR OWN line, because pass
+# protection bears on the QB and RB already in the player scope. Every other
+# rule here is an opposing player.
+#
+# Role-matched deliberately: only positions that move a scoped player's
+# projection. Including every defensive starter would add positions no 8D
+# collector asks about, and each one is a fetch we pay for.
+MATCHUP_RULES: tuple[DepthRule, ...] = (
+    DepthRule("cb_matchup_le_4", "CB", 4),  # covers WR
+    DepthRule("s_matchup_le_3", "S", 3),  # covers WR/TE deep
+    DepthRule("lb_matchup_le_3", "LB", 3),  # covers TE/RB
+    DepthRule("dl_matchup_le_4", "DL", 4),  # pressure and run defence
+    DepthRule("ol_matchup_le_5", "OL", 5),  # OUR OWN line, versus that front
+)
+
+
+def expected_matchup_slots() -> int:
+    """Total matchup slots the config demands, across all 32 teams.
+
+    Config-derived and computed before any upstream is contacted, for the
+    same reason `expected_slots()` is: an expectation built from what a fetch
+    returned reports a truncated document as ratio 1.0.
+    """
+    return len(TEAMS) * sum(rule.max_depth for rule in MATCHUP_RULES)
+
+
+def expected_matchup_keys() -> tuple[str, ...]:
+    """Every matchup slot the config demands, derived from `MATCHUP_RULES`
+    alone -- the matchup analogue of `expected_slots()`.
+
+    `expected_matchup_slots()` gives the *count* (608); this gives the
+    actual keys, because a `CoverageAccumulator` needs the keys themselves
+    to seed `missing` correctly on a total outage -- the same reason
+    `expected_slots()` exists alongside a collector that could otherwise
+    get away with just a number. Lives here, not in `matchups.py`, for the
+    same reason `expected_slots()` lives here and not in `scope.py`: this
+    module is config and nothing else, and keeping the derived-key builder
+    beside the rules it is derived from is what stops the two from ever
+    seeing a different `MATCHUP_RULES`.
+    """
+    return tuple(
+        slot_key(team, rule.rule_id, rank)
+        for team in TEAMS
+        for rule in MATCHUP_RULES
         for rank in range(1, rule.max_depth + 1)
     )
 

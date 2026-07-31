@@ -31,7 +31,44 @@ from datetime import UTC, datetime
 
 import httpx
 
-from ..rules import canonical_position, canonical_team
+from ..rules import ALL_RULES, MATCHUP_RULES, canonical_position, canonical_team
+
+# The positions any rule actually demands -- the player scope's and the
+# matchup scope's together -- derived from the rule sets rather than from
+# "canonical_position recognises it". Those two questions were the same
+# question only by accident, while the player scope was the only rule set
+# `canonical_position` served. Widening `POSITION_ALIASES` for the matchup
+# scope broke that coincidence, and the coincidence was load-bearing for
+# memory: this adapter streams the ~37 MB feed described at the top of this
+# module and must retain only what a rule demands, or the OOM this collector
+# was killed by once already comes right back. Gating on rule demand instead
+# of on recognition keeps this filter honest regardless of how wide
+# `POSITION_ALIASES` grows.
+#
+# The union is safe, not just convenient: Task 6 builds the matchup list from
+# this same feed, so the matchup positions (CB/S/LB/DL/OL) are genuinely
+# needed downstream, not dead weight like the rest of the two-deep this
+# filter still drops. Retention grows from ~416 slots' worth to ~1,024 --
+# nowhere near the ~300k rows that caused the original OOM, so admitting them
+# preserves the property that matters (retain only what a rule demands)
+# rather than the narrower one (retain only what the player scope demands).
+#
+# The player scope and the matchup scope together already cover every
+# canonical group `canonical_position` can produce, so today there is no
+# *real* upstream label left that is recognised but unwanted -- "recognised"
+# and "wanted" already compute the same function again, which has already
+# erased the test coverage that once proved this gate (vs. `is None`)
+# matters. `test_ingest_gates_on_configured_demand_not_on_recognition` in
+# `tests/test_depth_chart_adapter.py` exists because of that, not as
+# insurance against a hypothetical future rule set: it manufactures the gap
+# synthetically since the config can no longer supply one.
+#
+# `DST` (from `TEAM_DEFENSE_RULE`) is inert in this set: `canonical_position`
+# never returns it -- team defenses have no position label to canonicalize --
+# so its presence here changes nothing. Harmless, just not load-bearing.
+WANTED_POSITIONS: frozenset[str] = frozenset(
+    rule.position for rule in (*ALL_RULES, *MATCHUP_RULES)
+)
 
 # A `{season}` template, mirroring `player-projections`' PROJECTIONS_SNAPSHOT_URL:
 # the feed is published one asset per season, so a URL without the placeholder
@@ -116,12 +153,15 @@ class _ChartAccumulator:
     **Bounded by the config, not by the feed.** Two filters do that, and both
     are load-bearing rather than tidiness:
 
-    1. Rows whose position is outside the scope's rules are dropped at ingest.
-       The feed carries the full two-deep for every unit — offensive line,
-       defense, special teams — and this collector's rules only ever consult
-       QB/RB/WR/TE/K, so ~70% of it is dead weight. Carrying it to preserve
-       "the adapter does not decide what matters" cost more than the purity
-       was worth.
+    1. Rows whose position no rule demands (`WANTED_POSITIONS`) are dropped at
+       ingest. The feed carries the full two-deep for every unit — offensive
+       line, defense, special teams — and only some of that is ever consulted
+       by a rule, so the rest is dead weight. Carrying it to preserve "the
+       adapter does not decide what matters" cost more than the purity was
+       worth. Gated on rule demand rather than on whether `canonical_position`
+       merely recognises the label — recognising a label and wanting its rows
+       are different questions once more than one rule set shares
+       `canonical_position`.
 
     2. The feed is a **time series of snapshots**, not one snapshot: the same
        player appears once per `dt`, going back over the season. Only the
@@ -167,9 +207,10 @@ class _ChartAccumulator:
 
         position_raw = get("pos_abb").strip()
         position = canonical_position(position_raw)
-        if position is None:
-            # Outside the scope's rules — offensive line, defense, special
-            # teams. Filter 1 in the class docstring.
+        if position not in WANTED_POSITIONS:
+            # Dropped whether the label was unrecognised (`position is None`)
+            # or recognised but not wanted by any rule here. Filter 1 in the
+            # class docstring.
             return
 
         depth_order = _int_or_none(get("pos_rank"))
