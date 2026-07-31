@@ -106,6 +106,42 @@ def test_matchup_positions_are_retained_at_ingest():
     assert {r.position_raw for r in charts["KC"].rows} == {"QB", "LT"}
 
 
+def test_ingest_gates_on_configured_demand_not_on_recognition(monkeypatch):
+    """Synthetic, and here on purpose: no *real* position can currently prove
+    this gate matters.
+
+    The player scope (QB/RB/WR/TE/K/DST) and the matchup scope
+    (CB/S/LB/DL/OL) together already cover every canonical group
+    `canonical_position` can produce, so today `position not in
+    WANTED_POSITIONS` and `position is None` compute the exact same function
+    -- there is no recognised-but-unwanted label left to tell them apart.
+    That coverage gap is not a future risk to watch for; it has *already*
+    happened, silently, as a side effect of Task 5 adding `OL` to
+    `WANTED_POSITIONS`. Without a synthetic case, an accidental revert to
+    `is None` -- which is exactly the change that reopened the OOM-shaped
+    hole once already -- would ship with the full suite green.
+
+    So the test manufactures the gap: monkeypatch `WANTED_POSITIONS` down to
+    a set that deliberately excludes `OL`, then feed a row that
+    `canonical_position` recognises fine (`LT` -> `OL`) but this narrowed
+    set does not want. Under the real gate that row is dropped. Under
+    `is None` it would be retained regardless of `WANTED_POSITIONS`, because
+    that mutation never looks at the set at all -- which is precisely what
+    this test is here to catch.
+    """
+    monkeypatch.setattr(
+        "roster_scope.adapters.depth_chart.WANTED_POSITIONS",
+        frozenset({"QB", "RB", "WR", "TE", "K", "DST", "CB", "S", "LB", "DL"}),
+    )
+    charts = parse(
+        [
+            depth_row("KC", "QB", 1, "A Passer"),
+            depth_row("KC", "LT", 1, "A Tackle"),
+        ]
+    )
+    assert {r.position_raw for r in charts["KC"].rows} == {"QB"}
+
+
 def test_only_the_newest_snapshot_of_a_slot_is_kept():
     """The feed is a time series: the same slot appears once per `dt`, going
     back over the season. Keeping every one is what made the retained rows

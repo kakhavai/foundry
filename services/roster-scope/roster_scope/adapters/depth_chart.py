@@ -52,6 +52,20 @@ from ..rules import ALL_RULES, MATCHUP_RULES, canonical_position, canonical_team
 # nowhere near the ~300k rows that caused the original OOM, so admitting them
 # preserves the property that matters (retain only what a rule demands)
 # rather than the narrower one (retain only what the player scope demands).
+#
+# The player scope and the matchup scope together already cover every
+# canonical group `canonical_position` can produce, so today there is no
+# *real* upstream label left that is recognised but unwanted -- "recognised"
+# and "wanted" already compute the same function again, which has already
+# erased the test coverage that once proved this gate (vs. `is None`)
+# matters. `test_ingest_gates_on_configured_demand_not_on_recognition` in
+# `tests/test_depth_chart_adapter.py` exists because of that, not as
+# insurance against a hypothetical future rule set: it manufactures the gap
+# synthetically since the config can no longer supply one.
+#
+# `DST` (from `TEAM_DEFENSE_RULE`) is inert in this set: `canonical_position`
+# never returns it -- team defenses have no position label to canonicalize --
+# so its presence here changes nothing. Harmless, just not load-bearing.
 WANTED_POSITIONS: frozenset[str] = frozenset(
     rule.position for rule in (*ALL_RULES, *MATCHUP_RULES)
 )
