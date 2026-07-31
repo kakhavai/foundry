@@ -106,6 +106,52 @@ def test_matchup_positions_are_retained_at_ingest():
     assert {r.position_raw for r in charts["KC"].rows} == {"QB", "LT"}
 
 
+def test_a_full_line_of_distinct_alias_labels_all_survive_ingest():
+    """The regression test for the dedup-key collapse.
+
+    `POSITION_ALIASES` folds `LT/LG/C/RG/RT` -> `OL`, `FS/SS` -> `S`, and
+    `WLB/MLB/SLB` -> `LB`. A feed that labels each lineman/backer/safety
+    positionally -- `pos_rank` counted within its own raw label, so every
+    one of a five-man line is rank 1 -- used to hash all five to the same
+    `(team, "OL", 1)` key once the dedup key used the *canonical* position,
+    and only one of the five survived "newest wins". These are five (or
+    two, or three) distinct, simultaneously-current players, not five
+    snapshots of one slot, and dropping four of them is silent: the row is
+    neither present nor recorded as an ingest error anywhere upstream of
+    `resolve_membership`'s own coverage accounting.
+
+    All ten rows here carry rank 1 within their own raw label and must all
+    ten survive ingest.
+    """
+    charts = parse(
+        [
+            depth_row("KC", "LT", 1, "Left Tackle"),
+            depth_row("KC", "LG", 1, "Left Guard"),
+            depth_row("KC", "C", 1, "Center"),
+            depth_row("KC", "RG", 1, "Right Guard"),
+            depth_row("KC", "RT", 1, "Right Tackle"),
+            depth_row("KC", "FS", 1, "Free Safety"),
+            depth_row("KC", "SS", 1, "Strong Safety"),
+            depth_row("KC", "WLB", 1, "Weak Backer"),
+            depth_row("KC", "MLB", 1, "Mike Backer"),
+            depth_row("KC", "SLB", 1, "Sam Backer"),
+        ]
+    )
+    names = {r.name_raw for r in charts["KC"].rows}
+    assert names == {
+        "Left Tackle",
+        "Left Guard",
+        "Center",
+        "Right Guard",
+        "Right Tackle",
+        "Free Safety",
+        "Strong Safety",
+        "Weak Backer",
+        "Mike Backer",
+        "Sam Backer",
+    }, f"expected all 10 alias-group rows retained, got {sorted(names)}"
+
+
 def test_ingest_gates_on_configured_demand_not_on_recognition(monkeypatch):
     """Synthetic, and here on purpose: no *real* position can currently prove
     this gate matters.
