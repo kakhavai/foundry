@@ -1,0 +1,103 @@
+service:
+  name: player-stats
+  port: 8004
+
+image:
+  repository: ghcr.io/kakhavai/foundry/player-stats
+
+containerPort: 8004
+
+# The chart defaults. Measure before raising either: roster-scope's first deploy
+# was OOMKilled at 256Mi because its adapter buffered a 37 MB document three
+# times, and raising the limit would have hidden the bug rather than fixed it.
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+otel:
+  resourceAttributes: "service.name=player-stats,service.namespace=foundry"
+
+grafanaAnnotations:
+  enabled: true
+
+gateway:
+  enabled: true
+  pathPrefix: /collectors/player-stats
+  # Only the paths this collector publishes as its contract. /health and
+  # /metrics are deliberately absent: they are exempt from bearer auth
+  # in-process (a kubelet probe and a Prometheus scrape cannot carry a token),
+  # and that is a reason to reach them in-cluster, not at the edge.
+  # Add a path here when you add a route beyond the standard five.
+  publicPaths:
+    - /catalog
+    - /signals
+    - /refresh
+    # This collector's own route beyond the standard five. Without this entry
+    # it answers in-cluster and 404s at the edge, which reads as "the
+    # generator's restatement query returns nothing" rather than as a routing
+    # gap.
+    - /revisions
+
+extraEnv:
+  # optional: true lets the pod start before the Secret exists. player-stats then
+  # answers 503 on every data route until it arrives — the ArgoCD Application
+  # reports Healthy the whole time, so recognise that combination for what it
+  # is before assuming the deploy is broken.
+  - name: COLLECTOR_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: player-stats-collector-token
+        key: token
+        optional: true
+  - name: LAKE_BUCKET
+    value: "foundry-signals"
+  - name: LAKE_ENDPOINT_URL
+    value: "http://minio.monitoring.svc.cluster.local:9000"
+  - name: REFRESH_MIN_INTERVAL_SECONDS
+    value: "300"
+  # False as a LOAD decision, not to dodge a startup bug — the same call
+  # player-identity and roster-scope make. The upstream asset is ~8.3 MB per
+  # season (measured Content-Length), the Kind cluster is recreated on every CI
+  # run, and every pod restart would re-pull it. A dispatched POST /refresh
+  # reaches the upstream regardless of this flag, which is why smoke.sh does
+  # not post one.
+  - name: CAPTURE_ENABLED
+    value: "false"
+  # Empty means "do not narrow to the roster-scope watchlist", which is the
+  # honest configuration today: roster-scope mints player_ids from its own stub
+  # resolver while this collector mints them from the GSIS crosswalk stub, so
+  # the two id spaces do not intersect. Set BOTH of these, or neither — setting
+  # only ROSTER_SCOPE_URL reports every watchlist player as missing. See
+  # player_stats/adapters/scope.py.
+  - name: ROSTER_SCOPE_URL
+    value: ""
+  - name: PLAYER_IDENTITY_URL
+    value: ""
+  - name: CAPTURE_SEASON
+    value: "2026"
+  - name: CAPTURE_WEEK
+    value: "1"
+  # Wall-clock ceiling for one capture pass, so total upstream failure costs at
+  # most this much rather than items x per-call timeout.
+  - name: CAPTURE_DEADLINE_SECONDS
+    value: "300"
+  # Same optional:true pattern — the pod starts before the Secret exists and
+  # the lake simply has no credentials until it arrives.
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: player-stats-lake-credentials
+        key: access-key-id
+        optional: true
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: player-stats-lake-credentials
+        key: secret-access-key
+        optional: true
+  - name: AWS_DEFAULT_REGION
+    value: "us-east-1"

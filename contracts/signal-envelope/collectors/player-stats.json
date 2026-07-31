@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/player-stats.json",
+  "title": "player-stats collector signal fields",
+  "signal_types": {
+    "player_box_weekly": {
+      "type": "object",
+      "required": [
+        "player_id",
+        "game_id",
+        "team",
+        "opponent",
+        "position",
+        "played",
+        "offense_snaps",
+        "passing",
+        "rushing",
+        "receiving",
+        "misc",
+        "rates",
+        "fantasy_points",
+        "scoring_rules_version",
+        "stat_state",
+        "revision"
+      ],
+      "properties": {
+        "player_id": { "type": "string", "minLength": 1 },
+        "game_id": { "type": "string", "minLength": 1 },
+        "team": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "opponent": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "position": { "type": "string", "minLength": 1 },
+        "played": { "type": "boolean" },
+        "offense_snaps": { "type": ["integer", "null"], "minimum": 0 },
+        "passing": {
+          "type": "object",
+          "required": [
+            "attempts",
+            "completions",
+            "yards",
+            "touchdowns",
+            "interceptions",
+            "sacks_taken",
+            "air_yards"
+          ],
+          "properties": {
+            "attempts": { "type": "integer", "minimum": 0 },
+            "completions": { "type": "integer", "minimum": 0 },
+            "yards": { "type": "integer" },
+            "touchdowns": { "type": "integer", "minimum": 0 },
+            "interceptions": { "type": "integer", "minimum": 0 },
+            "sacks_taken": { "type": "integer", "minimum": 0 },
+            "air_yards": { "type": "integer" }
+          }
+        },
+        "rushing": {
+          "type": "object",
+          "required": ["attempts", "yards", "touchdowns", "first_downs"],
+          "properties": {
+            "attempts": { "type": "integer", "minimum": 0 },
+            "yards": { "type": "integer" },
+            "touchdowns": { "type": "integer", "minimum": 0 },
+            "first_downs": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "receiving": {
+          "type": "object",
+          "required": [
+            "targets",
+            "receptions",
+            "yards",
+            "touchdowns",
+            "air_yards",
+            "yards_after_catch",
+            "first_downs"
+          ],
+          "properties": {
+            "targets": { "type": "integer", "minimum": 0 },
+            "receptions": { "type": "integer", "minimum": 0 },
+            "yards": { "type": "integer" },
+            "touchdowns": { "type": "integer", "minimum": 0 },
+            "air_yards": { "type": "integer" },
+            "yards_after_catch": { "type": "integer" },
+            "first_downs": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "misc": {
+          "type": "object",
+          "required": [
+            "fumbles_lost",
+            "two_point_conversions",
+            "return_touchdowns"
+          ],
+          "properties": {
+            "fumbles_lost": { "type": "integer", "minimum": 0 },
+            "two_point_conversions": { "type": "integer", "minimum": 0 },
+            "return_touchdowns": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "rates": {
+          "type": "object",
+          "required": [
+            "yards_per_attempt",
+            "catch_rate",
+            "yards_per_target",
+            "yac_per_reception"
+          ],
+          "properties": {
+            "yards_per_attempt": { "type": ["number", "null"] },
+            "catch_rate": { "type": ["number", "null"] },
+            "yards_per_target": { "type": ["number", "null"] },
+            "yac_per_reception": { "type": ["number", "null"] }
+          }
+        },
+        "fantasy_points": {
+          "type": "object",
+          "required": ["standard", "half_ppr", "ppr"],
+          "properties": {
+            "standard": { "type": "number" },
+            "half_ppr": { "type": "number" },
+            "ppr": { "type": "number" }
+          }
+        },
+        "scoring_rules_version": { "type": "string", "minLength": 1 },
+        "stat_state": {
+          "type": ["string", "null"],
+          "enum": ["live", "provisional", "final", null]
+        },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
