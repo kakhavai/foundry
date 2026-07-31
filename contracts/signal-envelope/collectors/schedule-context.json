@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/schedule-context.json",
+  "title": "schedule-context collector signal fields",
+  "signal_types": {
+    "game_situational_context": {
+      "type": "object",
+      "required": [
+        "game_id",
+        "team_id",
+        "opponent_id",
+        "home_away",
+        "kickoff_at",
+        "kickoff_local_time",
+        "venue_id",
+        "is_international",
+        "travel_distance_mi",
+        "travel_direction",
+        "timezone_shift_hours",
+        "body_clock_offset_hours",
+        "consecutive_road_games",
+        "days_since_timezone_change",
+        "schedule_revision_count"
+      ],
+      "properties": {
+        "game_id": { "type": "string", "minLength": 1 },
+        "team_id": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "opponent_id": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "home_away": { "enum": ["home", "away", "neutral"] },
+        "kickoff_at": { "type": "string", "format": "date-time" },
+        "kickoff_local_time": {
+          "type": "string",
+          "pattern": "^[0-2][0-9]:[0-5][0-9]:[0-5][0-9]$"
+        },
+        "venue_id": { "type": "string", "minLength": 1 },
+        "is_international": { "type": "boolean" },
+        "travel_distance_mi": { "type": ["number", "null"], "minimum": 0 },
+        "travel_direction": { "enum": ["none", "east", "west", null] },
+        "timezone_shift_hours": {
+          "type": ["integer", "null"],
+          "minimum": -12,
+          "maximum": 14
+        },
+        "body_clock_offset_hours": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "exclusiveMaximum": 24
+        },
+        "consecutive_road_games": { "type": "integer", "minimum": 0 },
+        "days_since_timezone_change": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "schedule_revision_count": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "team_rest_context": {
+      "type": "object",
+      "required": [
+        "game_id",
+        "team_id",
+        "opponent_id",
+        "season",
+        "week",
+        "home_away",
+        "kickoff_at",
+        "previous_kickoff_at",
+        "days_rest",
+        "is_short_week",
+        "is_post_bye",
+        "is_pre_bye"
+      ],
+      "properties": {
+        "game_id": { "type": "string", "minLength": 1 },
+        "team_id": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "opponent_id": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "season": { "type": "integer", "minimum": 1999 },
+        "week": { "type": "integer", "minimum": 1 },
+        "home_away": { "enum": ["home", "away", "neutral"] },
+        "kickoff_at": { "type": "string", "format": "date-time" },
+        "previous_kickoff_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "days_rest": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "is_short_week": { "type": "boolean" },
+        "is_post_bye": { "type": "boolean" },
+        "is_pre_bye": { "type": "boolean" }
+      }
+    }
+  }
+}

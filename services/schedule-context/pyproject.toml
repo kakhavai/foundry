@@ -1,0 +1,60 @@
+[project]
+name = "schedule-context"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-grpc",
+    "opentelemetry-exporter-prometheus",
+    "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-instrumentation-httpx",
+    "prometheus-client",
+    "collector-core",
+    # RUNTIME, not dev. Every kickoff this collector emits goes through
+    # `zoneinfo`, which on Windows has no system database at all and on
+    # python:3.12-slim has whatever Debian happens to ship. It reaches the
+    # workspace venv today only as a transitive dev dependency (jsonschema's
+    # format extra -> arrow -> tzdata), which is exactly the shape that passes
+    # every test and then crash-loops a container built with `--no-dev`.
+    "tzdata",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "httpx",
+    "respx",
+    "jsonschema[format]",
+]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=schedule_context --cov-branch --cov-report=term --cov-fail-under=80"
+
+[tool.coverage.run]
+branch = true
+source = ["schedule_context"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.uv.sources]
+collector-core = { workspace = true }
