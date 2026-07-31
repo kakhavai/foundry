@@ -134,7 +134,10 @@ def test_staleness_is_present_on_a_second_consecutive_scrape(scrape):
     first = scrape()
     second = scrape()
 
-    assert read(first, "collector_staleness_seconds", collector="survives-staleness") == 12.0
+    assert (
+        read(first, "collector_staleness_seconds", collector="survives-staleness")
+        == 12.0
+    )
     assert (
         read(second, "collector_staleness_seconds", collector="survives-staleness")
         == 12.0
@@ -175,7 +178,10 @@ def test_the_counters_are_unaffected(scrape):
     scrape()
     series = scrape()
 
-    assert read(series, "collector_capture_requests_total", collector="survives-counters") == 1.0
+    assert (
+        read(series, "collector_capture_requests_total", collector="survives-counters")
+        == 1.0
+    )
     assert (
         read(
             series,
@@ -228,7 +234,11 @@ def test_the_attribute_set_is_exactly_the_documented_one(scrape):
     coverage_labels = [
         labels for (name, labels) in series if name == "collector_coverage_ratio"
     ]
-    matching = [dict(labels) for labels in coverage_labels if dict(labels).get("collector") == "survives-labels"]
+    matching = [
+        dict(labels)
+        for labels in coverage_labels
+        if dict(labels).get("collector") == "survives-labels"
+    ]
     assert len(matching) == 1
     assert matching[0] == {"collector": "survives-labels", "signal_type": "alpha"}
 
