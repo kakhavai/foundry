@@ -72,9 +72,7 @@ def run(cmd: list, cwd: Path | None = None) -> None:
 
 
 def cluster_running() -> bool:
-    result = subprocess.run(
-        ["kind", "get", "clusters"], capture_output=True, text=True
-    )
+    result = subprocess.run(["kind", "get", "clusters"], capture_output=True, text=True)
     return "foundry" in result.stdout.splitlines()
 
 
@@ -101,10 +99,15 @@ def main() -> None:
         if cluster_running():
             print("\nKind cluster 'foundry' already running — skipping create.")
         else:
-            run([
-                "kind", "create", "cluster",
-                "--config", ROOT / "infra/kind/cluster.yaml",
-            ])
+            run(
+                [
+                    "kind",
+                    "create",
+                    "cluster",
+                    "--config",
+                    ROOT / "infra/kind/cluster.yaml",
+                ]
+            )
 
         # 2. Observability stack
         grafana_stack = ROOT / "infra/grafana-stack"
@@ -115,10 +118,17 @@ def main() -> None:
         gateway = ROOT / "infra/gateway"
         run(["helmfile", "apply"], cwd=gateway)
         run(["kubectl", "apply", "-f", str(gateway / "manifests")])
-        run([
-            "kubectl", "wait", "--for=condition=Programmed",
-            "gateway/foundry", "-n", "envoy-gateway-system", "--timeout=180s",
-        ])
+        run(
+            [
+                "kubectl",
+                "wait",
+                "--for=condition=Programmed",
+                "gateway/foundry",
+                "-n",
+                "envoy-gateway-system",
+                "--timeout=180s",
+            ]
+        )
 
         # 4. Services
         for service in requested:
@@ -126,20 +136,33 @@ def main() -> None:
 
         # 5. Wait for pods to be ready
         print("\nWaiting for pods to be ready...")
-        run([
-            "kubectl", "wait", "--for=condition=ready", "pod",
-            "--all", "-n", "monitoring", "--timeout=180s",
-        ])
+        run(
+            [
+                "kubectl",
+                "wait",
+                "--for=condition=ready",
+                "pod",
+                "--all",
+                "-n",
+                "monitoring",
+                "--timeout=180s",
+            ]
+        )
         # `rollout status`, not `wait --for=condition=ready pod -l <label>`: the
         # label selector also matches pods left Terminating by a rollout, which
         # never reach Ready, so the wait times out on a healthy Deployment.
         # deploy-local.py already waits per service; this re-checks cheaply
         # after all of them are deployed.
         for service in requested:
-            run([
-                "kubectl", "rollout", "status", f"deployment/{service}",
-                "--timeout=120s",
-            ])
+            run(
+                [
+                    "kubectl",
+                    "rollout",
+                    "status",
+                    f"deployment/{service}",
+                    "--timeout=120s",
+                ]
+            )
     else:
         print("\nSkipping deploy — starting port-forwards only.")
 
@@ -148,22 +171,34 @@ def main() -> None:
     procs = []
 
     for fwd in OBS_FORWARDS:
-        proc = subprocess.Popen([
-            "kubectl", "port-forward",
-            "-n", fwd["namespace"],
-            f"svc/{fwd['svc']}",
-            f"{fwd['local']}:{fwd['remote']}",
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(
+            [
+                "kubectl",
+                "port-forward",
+                "-n",
+                fwd["namespace"],
+                f"svc/{fwd['svc']}",
+                f"{fwd['local']}:{fwd['remote']}",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         procs.append(proc)
 
     for service in requested:
         port = services[service].port
-        proc = subprocess.Popen([
-            "kubectl", "port-forward",
-            "-n", SERVICE_NAMESPACE,
-            f"svc/{service}",
-            f"{port}:{port}",
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(
+            [
+                "kubectl",
+                "port-forward",
+                "-n",
+                SERVICE_NAMESPACE,
+                f"svc/{service}",
+                f"{port}:{port}",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         procs.append(proc)
 
     # Give forwards a moment to bind

@@ -1121,7 +1121,7 @@ def test_every_signal_type_declares_a_floor():
     assert all(floor >= 1 for floor in EXPECTED_FLOOR.values())
 '''
 
-PYPROJECT_TOML = '''\
+PYPROJECT_TOML = """\
 [project]
 name = "%%name%%"
 version = "0.1.0"
@@ -1175,9 +1175,9 @@ show_missing = true
 
 [tool.uv.sources]
 collector-core = { workspace = true }
-'''
+"""
 
-DOCKERFILE = '''\
+DOCKERFILE = """\
 # Stage 1 — workspace-manifests. Verbatim in every collector; the write-up
 # lives in services/weather/Dockerfile, and tests/test_dockerfile_workspace.py
 # enforces that they agree.
@@ -1247,9 +1247,9 @@ ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE %%port%%
 
 CMD ["uvicorn", "%%pkg%%.main:app", "--host", "0.0.0.0", "--port", "%%port%%"]
-'''
+"""
 
-HELM_VALUES = '''\
+HELM_VALUES = """\
 service:
   name: %%name%%
   port: %%port%%
@@ -1337,26 +1337,26 @@ extraEnv:
         optional: true
   - name: AWS_DEFAULT_REGION
     value: "us-east-1"
-'''
+"""
 
-GITOPS_VALUES = '''\
+GITOPS_VALUES = """\
 # The image tag ArgoCD deploys. Overwritten on every push to main by
 # .github/actions/update-gitops-tag with the Git SHA that built the image —
 # 0.1.0 is only the placeholder that makes the generated Application render
 # before the first build lands.
 image:
   tag: "0.1.0"
-'''
+"""
 
-FIELD_SCHEMA_HEAD = '''\
+FIELD_SCHEMA_HEAD = """\
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://foundry.internal/signal-envelope/collectors/%%name%%.json",
   "title": "%%name%% collector signal fields",
   "signal_types": {
-'''
+"""
 
-FIELD_SCHEMA_TYPE = '''\
+FIELD_SCHEMA_TYPE = """\
     "%%signal_type%%": {
       "type": "object",
       "required": ["key", "observed_at", "value"],
@@ -1365,9 +1365,9 @@ FIELD_SCHEMA_TYPE = '''\
         "observed_at": { "type": "string", "format": "date-time" },
         "value": { "type": "number" }
       }
-    }'''
+    }"""
 
-README_MD = '''\
+README_MD = """\
 # %%name%%
 
 A Foundry signal collector. Scaffolded by `scripts/new-collector.py`; see
@@ -1412,9 +1412,9 @@ background task; poll `/signals` rather than reading it on the next line.
 cd services/%%name%%
 uv run pytest -v
 ```
-'''
+"""
 
-SMOKE_SH = '''\
+SMOKE_SH = """\
 #!/usr/bin/env bash
 #
 # %%name%%'s own smoke assertions — the routes beyond the standard five.
@@ -1437,9 +1437,9 @@ AUTH="Authorization: Bearer $SMOKE_TOKEN"
 # required check would pass over an unprotected path.
 curl -sf -H "$AUTH" "$SMOKE_GATEWAY_URL/catalog" >/dev/null
 echo "%%name%%: extra-route smoke OK"
-'''
+"""
 
-REGISTRY_ENTRY = '''\
+REGISTRY_ENTRY = """\
 
   - name: %%name%%
     path: %%path%%
@@ -1451,7 +1451,7 @@ REGISTRY_ENTRY = '''\
     # collector narrows to roster-scope's membership list before it fetches.
     scope_aware: %%scope_aware%%
     depends_on: [%%depends_on_inline%%]
-'''
+"""
 
 
 # ── writing ───────────────────────────────────────────────────────────────────
@@ -1508,9 +1508,7 @@ def build_files(collector: Collector, *, capture_enabled: bool) -> dict[str, str
         f"{service}/tests/__init__.py": "",
         f"{service}/tests/conftest.py": r(CONFTEST_PY),
         f"{service}/tests/test_routes.py": r(TEST_ROUTES_PY),
-        f"{service}/tests/test_capture_contract_conformance.py": r(
-            TEST_CONFORMANCE_PY
-        ),
+        f"{service}/tests/test_capture_contract_conformance.py": r(TEST_CONFORMANCE_PY),
         f"{service}/tests/test_coverage_floor.py": r(TEST_COVERAGE_PY),
         f"{service}/Dockerfile": r(DOCKERFILE),
         f"{service}/pyproject.toml": r(PYPROJECT_TOML),

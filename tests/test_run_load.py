@@ -31,6 +31,7 @@ spec.loader.exec_module(rl)
 # meaningful once the .js files exist, and adding it now would mean committing
 # placeholder scripts for a test to pass against.
 
+
 def test_the_four_specified_shapes_are_present():
     assert set(rl.SHAPES) == {"ramp", "soak", "spike", "breakpoint"}
 
@@ -50,6 +51,7 @@ def test_every_shape_has_a_script_file():
 
 
 # ── render_job ────────────────────────────────────────────────────────────────
+
 
 def test_render_job_runs_the_shape_s_own_script():
     job = rl.render_job("ramp", soak_minutes=5)
@@ -109,8 +111,9 @@ def test_render_job_names_are_distinct_per_shape():
 
 # ── split_summary ─────────────────────────────────────────────────────────────
 
+
 def test_split_summary_separates_text_from_json():
-    log = f"TOTAL RESULTS\n  http_reqs: 400\n{rl.SUMMARY_MARKER}\n{{\"metrics\": {{}}}}\n"
+    log = f'TOTAL RESULTS\n  http_reqs: 400\n{rl.SUMMARY_MARKER}\n{{"metrics": {{}}}}\n'
     text, payload = rl.split_summary(log)
     assert "http_reqs: 400" in text
     assert rl.SUMMARY_MARKER not in text
@@ -125,6 +128,7 @@ def test_split_summary_tolerates_a_missing_marker():
 
 
 # ── route_log_lines ───────────────────────────────────────────────────────────
+
 
 def test_route_log_lines_shows_lines_before_the_marker():
     lines = ["line one\n", "line two\n", f"{rl.SUMMARY_MARKER}\n", '{"metrics": {}}\n']
@@ -171,6 +175,7 @@ def test_route_log_lines_output_feeds_split_summary():
 
 # ── needs_fallback ────────────────────────────────────────────────────────────
 
+
 def test_needs_fallback_when_the_follow_stream_exited_nonzero():
     """A non-zero exit means kubectl itself gave up on the stream — a cut
     connection, a late attach — so the captured text cannot be trusted even
@@ -192,6 +197,7 @@ def test_no_fallback_for_a_clean_stream_with_a_marker():
 
 
 # ── interpret_exit ────────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("shape", ["ramp", "soak", "spike"])
 def test_zero_passes_for_asserting_shapes(shape):
@@ -232,6 +238,7 @@ def test_other_nonzero_codes_fail_even_for_breakpoint(code):
 
 
 # ── apply_restart_check ─────────────────────────────────────────────────────────
+
 
 def test_only_breakpoint_is_exempt_from_the_no_restart_assertion():
     exempt = {s for s, c in rl.SHAPES.items() if not c["asserts_no_restart"]}
@@ -322,14 +329,18 @@ def test_returns_none_when_every_threshold_held():
 
 
 def test_tolerates_a_metric_with_no_thresholds():
-    assert rl.first_breached_threshold({"metrics": {"http_reqs": {"value": 10}}}) is None
+    assert (
+        rl.first_breached_threshold({"metrics": {"http_reqs": {"value": 10}}}) is None
+    )
 
 
 def test_tolerates_an_empty_summary():
     assert rl.first_breached_threshold({}) is None
 
 
-@pytest.mark.parametrize("summary", [None, 42, "not a dict", ["also", "not", "a", "dict"]])
+@pytest.mark.parametrize(
+    "summary", [None, 42, "not a dict", ["also", "not", "a", "dict"]]
+)
 def test_tolerates_a_non_dict_summary(summary):
     """Valid JSON that isn't an object -- json.loads("null") -> None, a bare
     number, a bare string, a list -- has no thresholds to name. Before this
@@ -347,6 +358,7 @@ def test_tolerates_a_non_dict_summary(summary):
 # identical window and failing the same way. phase_action is the decision that
 # drives waiting through that window instead of racing it; the polling loop
 # that calls it needs a live cluster and is not tested here.
+
 
 def test_pending_means_wait():
     assert rl.phase_action("Pending") == "wait"
@@ -388,6 +400,7 @@ def test_unrecognized_phase_means_wait():
 
 # ── parse_kube_duration ──────────────────────────────────────────────────────
 
+
 def test_parses_minutes():
     assert rl.parse_kube_duration("10m") == 600
 
@@ -415,6 +428,7 @@ def test_rejects_an_unrecognized_duration():
 # Picking `.items[0]` (the old approach, flagged in Task 2's review) could
 # silently read the wrong one. These fixtures are shaped like real
 # `kubectl get pod -o json` output, trimmed to the fields newest_pod reads.
+
 
 def _pod(name: str, created: str, phase: str = "Running") -> dict:
     return {
@@ -466,7 +480,9 @@ K6_BANNER = (
 )
 
 
-def _mock_cluster(monkeypatch, tmp_path, *, log_text: str, exit_code: int, restarts: int = 2):
+def _mock_cluster(
+    monkeypatch, tmp_path, *, log_text: str, exit_code: int, restarts: int = 2
+):
     """Stand in for every cluster call run_shape makes, so its own logic --
     including the threshold-naming wired in below -- runs for real without a
     live cluster.
@@ -495,12 +511,16 @@ def _summary_log(metrics: dict) -> str:
     return f"{K6_BANNER}TOTAL RESULTS\n{rl.SUMMARY_MARKER}\n{json.dumps({'metrics': metrics})}\n"
 
 
-def test_run_shape_names_the_breached_threshold_for_a_failing_shape(monkeypatch, tmp_path, capsys):
+def test_run_shape_names_the_breached_threshold_for_a_failing_shape(
+    monkeypatch, tmp_path, capsys
+):
     """A non-breakpoint shape that crossed a threshold it should have held
     must say which metric, not just FAIL -- this is the whole point of
     wiring first_breached_threshold in."""
     log = _summary_log({"http_req_failed": {"thresholds": {"rate<0.01": True}}})
-    _mock_cluster(monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED)
+    _mock_cluster(
+        monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED
+    )
 
     passed = rl.run_shape("ramp", soak_minutes=5)
 
@@ -516,7 +536,9 @@ def test_run_shape_breakpoint_names_the_rung_that_broke(monkeypatch, tmp_path, c
     log = _summary_log(
         {"http_req_failed{scenario:rate_600}": {"thresholds": {"rate<0.01": True}}}
     )
-    _mock_cluster(monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED)
+    _mock_cluster(
+        monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED
+    )
 
     passed = rl.run_shape("breakpoint", soak_minutes=5)
 
@@ -533,7 +555,9 @@ def test_run_shape_survives_a_malformed_summary_payload(monkeypatch, tmp_path, c
     isn't valid JSON (a truncated export, a k6 crash mid-write) must degrade
     to the plain verdict, not raise."""
     log = f"{K6_BANNER}TOTAL RESULTS\n{rl.SUMMARY_MARKER}\nnot valid json\n"
-    _mock_cluster(monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED)
+    _mock_cluster(
+        monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED
+    )
 
     passed = rl.run_shape("ramp", soak_minutes=5)
 
@@ -543,7 +567,9 @@ def test_run_shape_survives_a_malformed_summary_payload(monkeypatch, tmp_path, c
     assert "FAIL -- a threshold was crossed:" not in out  # nothing named
 
 
-def test_run_shape_survives_a_valid_but_non_dict_summary_payload(monkeypatch, tmp_path, capsys):
+def test_run_shape_survives_a_valid_but_non_dict_summary_payload(
+    monkeypatch, tmp_path, capsys
+):
     """A payload that parses fine but isn't a JSON object (`null` here --
     e.g. a summary export that got truncated to just its final newline-free
     token, or overwritten) took a different path than the malformed-JSON
@@ -552,7 +578,9 @@ def test_run_shape_survives_a_valid_but_non_dict_summary_payload(monkeypatch, tm
     K6_EXIT_THRESHOLD_CROSSED path where the runner is reporting a failure.
     Must degrade to the plain verdict instead, same as malformed JSON."""
     log = f"{K6_BANNER}TOTAL RESULTS\n{rl.SUMMARY_MARKER}\nnull\n"
-    _mock_cluster(monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED)
+    _mock_cluster(
+        monkeypatch, tmp_path, log_text=log, exit_code=rl.K6_EXIT_THRESHOLD_CROSSED
+    )
 
     passed = rl.run_shape("ramp", soak_minutes=5)
 
@@ -562,7 +590,9 @@ def test_run_shape_survives_a_valid_but_non_dict_summary_payload(monkeypatch, tm
     assert "FAIL -- a threshold was crossed:" not in out  # nothing named
 
 
-def test_run_shape_a_passing_run_gets_no_threshold_suffix(monkeypatch, tmp_path, capsys):
+def test_run_shape_a_passing_run_gets_no_threshold_suffix(
+    monkeypatch, tmp_path, capsys
+):
     """A clean PASS must stay exactly 'PASS' -- no colon, no metric name --
     since nothing crossed."""
     log = _summary_log({"http_req_failed": {"thresholds": {"rate<0.01": False}}})
@@ -587,7 +617,10 @@ def test_run_shape_a_passing_run_gets_no_threshold_suffix(monkeypatch, tmp_path,
 # fails with a clear message (rather than an opaque encode error deep in a
 # different test) if the encoding= argument is ever dropped.
 
-def test_run_shape_writes_results_containing_the_k6_banner_without_crashing(monkeypatch, tmp_path):
+
+def test_run_shape_writes_results_containing_the_k6_banner_without_crashing(
+    monkeypatch, tmp_path
+):
     log = _summary_log({"http_reqs": {"value": 100}})
     _mock_cluster(monkeypatch, tmp_path, log_text=log, exit_code=0)
 

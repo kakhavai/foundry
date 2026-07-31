@@ -73,9 +73,15 @@ def ensure_collector_secret(name: str) -> None:
     print(f"\n$ kubectl create secret generic {name} | kubectl apply -f -")
     run_piped(
         [
-            "kubectl", "create", "secret", "generic", name,
+            "kubectl",
+            "create",
+            "secret",
+            "generic",
+            name,
             f"--from-literal=token={LOCAL_DEV_TOKEN}",
-            "--dry-run=client", "-o", "yaml",
+            "--dry-run=client",
+            "-o",
+            "yaml",
         ],
         ["kubectl", "apply", "-f", "-"],
     )
@@ -86,10 +92,16 @@ def ensure_lake_secret(name: str) -> None:
     print(f"\n$ kubectl create secret generic {name} | kubectl apply -f -")
     run_piped(
         [
-            "kubectl", "create", "secret", "generic", name,
+            "kubectl",
+            "create",
+            "secret",
+            "generic",
+            name,
             f"--from-literal=access-key-id={LOCAL_LAKE_ACCESS_KEY}",
             f"--from-literal=secret-access-key={LOCAL_LAKE_SECRET_KEY}",
-            "--dry-run=client", "-o", "yaml",
+            "--dry-run=client",
+            "-o",
+            "yaml",
         ],
         ["kubectl", "apply", "-f", "-"],
     )
@@ -122,8 +134,15 @@ def main() -> None:
         # Collectors are uv workspace members depending on libs/collector-core/
         # by path, so the build needs the repo root in its context.
         run(
-            ["docker", "build", "-f", f"services/{name}/Dockerfile",
-             "-t", f"{name}:local", "."],
+            [
+                "docker",
+                "build",
+                "-f",
+                f"services/{name}/Dockerfile",
+                "-t",
+                f"{name}:local",
+                ".",
+            ],
             env=_BUILD_ENV,
         )
     else:
@@ -140,14 +159,23 @@ def main() -> None:
     if service.lake_secret:
         ensure_lake_secret(service.lake_secret)
 
-    run([
-        "helm", "upgrade", "--install", name,
-        "helm/charts/generic-service",
-        "-f", f"helm/values/{name}/values.yaml",
-        "--set", f"image.repository={name}",
-        "--set", "image.tag=local",
-        "--set", "image.pullPolicy=Never",
-    ])
+    run(
+        [
+            "helm",
+            "upgrade",
+            "--install",
+            name,
+            "helm/charts/generic-service",
+            "-f",
+            f"helm/values/{name}/values.yaml",
+            "--set",
+            f"image.repository={name}",
+            "--set",
+            "image.tag=local",
+            "--set",
+            "image.pullPolicy=Never",
+        ]
+    )
 
     # image.tag is pinned to "local" on every deploy, so a rebuilt image (or a
     # just-updated token Secret) produces a byte-identical PodSpec and

@@ -188,7 +188,15 @@ def _value_layers(values_file: Path) -> list[Path]:
     set only in the overlay.
     """
     layers = [values_file]
-    overlay = ROOT / "infra" / "gitops" / "envs" / "local" / values_file.parent.name / "values.yaml"
+    overlay = (
+        ROOT
+        / "infra"
+        / "gitops"
+        / "envs"
+        / "local"
+        / values_file.parent.name
+        / "values.yaml"
+    )
     if overlay.exists():
         layers.append(overlay)
     return layers
@@ -213,7 +221,9 @@ def test_gateway_enabled_services_require_a_collector_token(values_file):
         pytest.skip("gateway not enabled for this service")
 
     deployments = [d for d in docs if d.get("kind") == "Deployment"]
-    assert deployments, f"{values_file.parent.name} rendered an HTTPRoute but no Deployment"
+    assert deployments, (
+        f"{values_file.parent.name} rendered an HTTPRoute but no Deployment"
+    )
     containers = deployments[0]["spec"]["template"]["spec"]["containers"]
     env_vars = [env for c in containers for env in (c.get("env") or [])]
 

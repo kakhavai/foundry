@@ -154,9 +154,7 @@ def render_job(shape: str, soak_minutes: int) -> dict:
                             },
                         }
                     ],
-                    "volumes": [
-                        {"name": "scripts", "configMap": {"name": CONFIGMAP}}
-                    ],
+                    "volumes": [{"name": "scripts", "configMap": {"name": CONFIGMAP}}],
                 },
             },
         },
@@ -345,11 +343,10 @@ def first_breached_threshold(summary: dict) -> str | None:
 
 # ── cluster interaction ───────────────────────────────────────────────────────
 
+
 def kubectl(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
     print(f"  $ kubectl {' '.join(args)}")
-    result = subprocess.run(
-        ["kubectl", *args], capture_output=True, text=True
-    )
+    result = subprocess.run(["kubectl", *args], capture_output=True, text=True)
     if check and result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip()
         raise RuntimeError(f"kubectl {args[0]} failed: {message}")
@@ -411,7 +408,9 @@ def pod_exit_code(shape: str) -> int:
     if pod is None:
         raise RuntimeError(f"{job_name(shape)}: no pod found to read")
     try:
-        exit_code = pod["status"]["containerStatuses"][0]["state"]["terminated"]["exitCode"]
+        exit_code = pod["status"]["containerStatuses"][0]["state"]["terminated"][
+            "exitCode"
+        ]
     except (KeyError, IndexError):
         raise RuntimeError(f"{job_name(shape)}: no terminated container to read")
     return int(exit_code)
@@ -426,7 +425,9 @@ def pod_phase(shape: str) -> str:
     return pod.get("status", {}).get("phase", "")
 
 
-def wait_for_pod_action(shape: str, timeout_s: float, poll_interval: float = 2.0) -> str:
+def wait_for_pod_action(
+    shape: str, timeout_s: float, poll_interval: float = 2.0
+) -> str:
     """Poll the shape's pod until phase_action has a real decision, up to timeout_s.
 
     Deliberately not `kubectl wait --for=condition=ready` — this repo has
@@ -464,11 +465,16 @@ def restart_count() -> int:
     lasts a second would fall between 60s scrapes, which is the lesson
     resource-pressure learned in #46 when a gauge criterion sat flat.
     """
-    result = kubectl([
-        "get", "pod",
-        "-l", "app.kubernetes.io/name=player-projections",
-        "-o", "jsonpath={.items[*].status.containerStatuses[*].restartCount}",
-    ])
+    result = kubectl(
+        [
+            "get",
+            "pod",
+            "-l",
+            "app.kubernetes.io/name=player-projections",
+            "-o",
+            "jsonpath={.items[*].status.containerStatuses[*].restartCount}",
+        ]
+    )
     return sum(int(n) for n in result.stdout.split())
 
 
@@ -495,7 +501,15 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
         # in pod_phase/pod_exit_code is the second, independent line of
         # defence if a pod from outside this tool's own lifecycle ever
         # matches anyway.
-        kubectl(["delete", "job", job_name(shape), "--ignore-not-found", "--cascade=foreground"])
+        kubectl(
+            [
+                "delete",
+                "job",
+                job_name(shape),
+                "--ignore-not-found",
+                "--cascade=foreground",
+            ]
+        )
         apply_job(render_job(shape, soak_minutes))
 
         # The very first live run of this tool found kubectl logs -f giving up
@@ -513,12 +527,19 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
             # wait; the summary JSON is withheld from the console and captured
             # for the results file instead.
             follow_cmd = [
-                "kubectl", "logs", "-f", f"job/{job_name(shape)}",
-                "--pod-running-timeout", cfg["timeout"],
+                "kubectl",
+                "logs",
+                "-f",
+                f"job/{job_name(shape)}",
+                "--pod-running-timeout",
+                cfg["timeout"],
             ]
             print(f"  $ {' '.join(follow_cmd)}")
             proc = subprocess.Popen(
-                follow_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                follow_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
             )
             logs = route_log_lines(proc.stdout, lambda line: print(line, end=""))
             proc.wait()
@@ -542,7 +563,9 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
             # attach to a stream with nothing left to send, so this is the
             # normal path for a quick run, not a failure; go straight to the
             # checked fetch.
-            print("  pod already terminated before follow would have attached -- fetching settled logs directly")
+            print(
+                "  pod already terminated before follow would have attached -- fetching settled logs directly"
+            )
             logs = kubectl(["logs", f"job/{job_name(shape)}"]).stdout
 
         text, payload = split_summary(logs)
@@ -598,7 +621,13 @@ def run_shape(shape: str, soak_minutes: int) -> bool:
         # old pod instead, which still works but makes this cleanup's own
         # "done" signal a lie in the meantime.
         kubectl(
-            ["delete", "job", job_name(shape), "--ignore-not-found", "--cascade=foreground"],
+            [
+                "delete",
+                "job",
+                job_name(shape),
+                "--ignore-not-found",
+                "--cascade=foreground",
+            ],
             check=False,
         )
         kubectl(["delete", "configmap", CONFIGMAP, "--ignore-not-found"], check=False)
@@ -623,7 +652,9 @@ def main() -> None:
     parser.add_argument("--all", action="store_true", help="run every shape in order")
     parser.add_argument("--list", action="store_true", help="list available shapes")
     parser.add_argument(
-        "--soak-minutes", type=int, default=5,
+        "--soak-minutes",
+        type=int,
+        default=5,
         help="soak duration in minutes (default 5; the phase doc specifies 30)",
     )
     args = parser.parse_args()

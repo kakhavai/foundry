@@ -509,6 +509,7 @@ def test_the_final_sync_reinstalls_the_service_package(service):
 def test_the_dockerfile_matches_the_reference_collectors_stage():
     """The stage is verbatim across the fleet. If weather's changes and the
     scaffolder's does not, every collector generated afterwards is wrong."""
+
     def commands(text: str) -> list[str]:
         """The stage's instructions, comments and banner styling stripped.
 
@@ -630,8 +631,7 @@ def test_the_capture_tail_is_the_shared_one_not_a_hand_written_write_loop(root):
     assert "from collector_core.publish import publish_capture" in text
     assert "lake.write(" not in text
     assert "await awrite(lake," not in text, (
-        "the generated capture hand-rolls the write loop the shared tail exists "
-        "to own"
+        "the generated capture hand-rolls the write loop the shared tail exists to own"
     )
 
 

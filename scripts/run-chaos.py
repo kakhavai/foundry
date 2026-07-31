@@ -30,8 +30,7 @@ TRAFFIC_DIR = ROOT / "chaos" / "traffic"
 
 SCENARIO_API = "foundry.chaos/v1"
 PROM_PROXY = (
-    "/api/v1/namespaces/monitoring/services/prometheus-server:80"
-    "/proxy/api/v1/query"
+    "/api/v1/namespaces/monitoring/services/prometheus-server:80/proxy/api/v1/query"
 )
 
 # Two-character operators first: ">= 2" must not parse as ">" of "= 2".
@@ -52,7 +51,7 @@ def parse_expect(expect: str) -> tuple[str, float]:
     text = (expect or "").strip()
     for op in _OPERATORS:
         if text.startswith(op):
-            rest = text[len(op):].strip()
+            rest = text[len(op) :].strip()
             try:
                 return op, float(rest)
             except ValueError:
@@ -165,6 +164,7 @@ def validate_scenario(head: dict, chaos_docs: list[dict]) -> list[str]:
 
 # ── cluster interaction ───────────────────────────────────────────────────────
 
+
 def run_cmd(cmd: list[str], check: bool = True) -> None:
     """Run a command, printing it first. Optionally tolerate failure."""
     print(f"  $ {' '.join(str(c) for c in cmd)}")
@@ -240,10 +240,19 @@ def gateway_host() -> str:
     scripts/smoke-test.sh does.
     """
     result = subprocess.run(
-        ["kubectl", "get", "svc", "-n", "envoy-gateway-system",
-         "-l", "gateway.envoyproxy.io/owning-gateway-name=foundry",
-         "-o", "jsonpath={.items[0].metadata.name}"],
-        capture_output=True, text=True,
+        [
+            "kubectl",
+            "get",
+            "svc",
+            "-n",
+            "envoy-gateway-system",
+            "-l",
+            "gateway.envoyproxy.io/owning-gateway-name=foundry",
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+        ],
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0 or not result.stdout.strip():
         raise RuntimeError("could not resolve the Envoy data-plane Service")
@@ -261,16 +270,32 @@ def traffic_up(name: str) -> None:
         raise RuntimeError(f"applying traffic failed: {result.stderr.strip()}")
     # rollout status, never `wait --for=condition=ready pod -l`: the label
     # selector also matches Terminating pods, which never reach Ready.
-    run_cmd(["kubectl", "rollout", "status",
-             f"deployment/chaos-traffic-{name}", "--timeout=120s"])
+    run_cmd(
+        [
+            "kubectl",
+            "rollout",
+            "status",
+            f"deployment/chaos-traffic-{name}",
+            "--timeout=120s",
+        ]
+    )
 
 
 def traffic_down(name: str) -> None:
-    run_cmd(["kubectl", "delete", "deployment", f"chaos-traffic-{name}",
-             "--ignore-not-found"], check=False)
+    run_cmd(
+        [
+            "kubectl",
+            "delete",
+            "deployment",
+            f"chaos-traffic-{name}",
+            "--ignore-not-found",
+        ],
+        check=False,
+    )
 
 
 # ── the scenario loop ─────────────────────────────────────────────────────────
+
 
 def run_scenario(path: Path, *, skip_steady_state: bool = False) -> bool:
     head, chaos_docs = load_scenario(path)
@@ -343,10 +368,13 @@ def main() -> None:
         description="Run a chaos scenario and check its hypothesis against Prometheus.",
     )
     parser.add_argument("scenario", nargs="?", help="scenario name, e.g. pod-kill")
-    parser.add_argument("--all", action="store_true", help="run every scenario in order")
+    parser.add_argument(
+        "--all", action="store_true", help="run every scenario in order"
+    )
     parser.add_argument("--list", action="store_true", help="list available scenarios")
     parser.add_argument(
-        "--skip-steady-state", action="store_true",
+        "--skip-steady-state",
+        action="store_true",
         help="inject without checking steady state first (debugging only)",
     )
     args = parser.parse_args()
