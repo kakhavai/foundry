@@ -51,9 +51,11 @@ from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
 from collector_core.lake import LakeWriter
 from collector_core.publish import publish_capture
-from collector_core.scope import ScopeUnavailable
+from collector_core.scope import fetch_scope_or_fail
 
 from .adapters.scope import (
+    IDENTITY_UPSTREAM_ERROR,
+    IdentityFailures,
     build_identity_client,
     fetch_scope,
     resolve_in_scope,
@@ -314,10 +316,21 @@ async def capture_usage_share(
 
     metrics.capture_attempt()
 
+    # Recorded up front, before anything can fail, and overwritten with the real
+    # numbers at the end of a successful pass. An absent Prometheus series and a
+    # healthy one are indistinguishable, so these gauges must not simply stop on
+    # a failure path — and a `LastValueGauge` is a dict write, so seeding zero
+    # here and setting the true value later is the same thing as recording once,
+    # minus a pair of lines on every `except` arm for somebody to forget.
+    metrics.rows_captured(0)
+    metrics.team_sum_drift(0.0)
+
     # Every failure path below writes the same envelope and differs only in how
     # the failure is named, so the arguments are stated once. `expected=` is the
     # load-bearing one: it floors a failure envelope to 384 rather than 1, so a
-    # total outage reads ratio 0.00 instead of 0/1.
+    # total outage reads ratio 0.00 instead of 0/1. `reason` is deliberately not
+    # in here — `fetch_scope_or_fail` supplies its own, and a duplicate keyword
+    # would be a TypeError.
     failure_context = dict(
         collector=COLLECTOR_NAME,
         signal_types=SIGNAL_TYPES,
@@ -330,6 +343,16 @@ async def capture_usage_share(
         source_ref=source_ref(season, week),
     )
 
+    async def _narrowing_seams():
+        """Both seams narrowing needs, resolved together.
+
+        `build_identity_client` is synchronous and raises `ScopeUnavailable`
+        when `PLAYER_IDENTITY_URL` is empty, which is why the helper takes a
+        callable rather than an awaitable — a raise before the first `await`
+        must be caught by the same two arms.
+        """
+        return build_identity_client(client), await fetch_scope(lake, season, week)
+
     # BEFORE the upstream fetch, deliberately, and this ordering is the whole
     # of failing closed. Both seams narrowing needs are resolved first — the
     # membership list out of the lake, and the `player-identity` client the
@@ -337,49 +360,22 @@ async def capture_usage_share(
     # upstream calls rather than an ~8.3 MB season CSV fetched to publish
     # nothing. Moving either below `fetch_week_usage` looks harmless and
     # silently reintroduces the cost the narrowing exists to remove.
-    try:
-        identity = build_identity_client(client)
-        membership = await fetch_scope(lake, season, week)
-    except ScopeUnavailable as exc:
-        metrics.rows_captured(0)
-        metrics.team_sum_drift(0.0)
-        # `exc.reason` rather than a literal: `scope_unavailable`,
-        # `scope_empty` and `identity_unavailable` have three different fixes,
-        # and collapsing them costs an operator the one thing the envelope
-        # could have told them. Never returns — see below.
-        await fail_capture(exc, reason=exc.reason, **failure_context)
-    except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
-        # The scope read is I/O, and `ScopeUnavailable` is only what
-        # `ScopeClient` raises when the lake answered and had nothing usable.
-        # The lake can also fail *outright*: `S3LakeWriter.list_keys`/`read`
-        # propagate botocore errors and `json` decode errors untouched, and
-        # `ScopeClient._parse_captured_at` raises `ValueError` on a timestamp
-        # it does not recognise. Without this arm every one of those escapes
-        # `capture_usage_share` entirely — no `present: 0` envelope, no
-        # `collector_capture_failures_total`, just a log line from whoever
-        # dispatched the pass. That is precisely the "we failed" vs "we never
-        # tried" distinction `collector_core.failure` exists to record, and
-        # this collector is the first in the fleet to read the lake mid-capture
-        # at all, so the gap arrived with the narrowing.
-        #
-        # No explicit `reason=`: `fail_capture` falls back to
-        # `CollectorMetrics.reason_for(exc)`, which classifies a decode or
-        # timestamp failure as `malformed` and anything else as `unknown` —
-        # both of which are true statements, and neither of which can be
-        # mistaken for `scope_unavailable`.
-        metrics.rows_captured(0)
-        metrics.team_sum_drift(0.0)
-        await fail_capture(exc, **failure_context)
+    #
+    # `fetch_scope_or_fail` owns both refusal arms — `ScopeUnavailable`
+    # forwarding `exc.reason` (`scope_unavailable`, `scope_empty` and
+    # `identity_unavailable` have three different fixes), and the lake failing
+    # outright with no reason at all. See its docstring for why the second arm
+    # is the load-bearing half and why it lives in the library rather than in
+    # three collectors.
+    identity, membership = await fetch_scope_or_fail(
+        _narrowing_seams, **failure_context
+    )
 
     try:
         usage = await fetch_week_usage(
             season, week, client=client, now=now, deadline=deadline
         )
     except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
-        # Recorded even on the failure path: an absent Prometheus series and a
-        # healthy one are indistinguishable, so the gauges must not simply stop.
-        metrics.rows_captured(0)
-        metrics.team_sum_drift(0.0)
         # Writes a `present: 0` envelope per signal type, then re-raises `exc`.
         # Never returns — do not add code after this call.
         await fail_capture(exc, **failure_context)
@@ -412,8 +408,15 @@ async def capture_usage_share(
     # permanent coverage regression that buries the rows genuinely missing.
     # The shortfall against `EXPECTED_FLOOR` is what stays loud instead.
     signals: list[dict] = []
+    # Accumulated across every batch, reported once below. `resolve_many`
+    # resets its own `failures` per call, so nothing but this survives the loop.
+    identity_failures = IdentityFailures()
     async for row, player_id in resolve_in_scope(
-        usage.rows, season=season, scope=membership, identity=identity
+        usage.rows,
+        season=season,
+        scope=membership,
+        identity=identity,
+        failures=identity_failures,
     ):
         key = player_key(player_id)
         # Declared because the row EXISTS, is in scope, and is therefore owed —
@@ -441,6 +444,20 @@ async def capture_usage_share(
             acc.fail(key, metrics.reason_for(exc))
             continue
         acc.record(key)
+
+    if identity_failures.rows:
+        # A `player-identity` OUTAGE, as distinct from a refusal.
+        # `IdentityClient.resolve_many` answers a failed chunk by returning a
+        # partial dict and recording the reason out of band, so without this
+        # entry an unreachable `player-identity` drops every row and leaves an
+        # envelope whose only complaint is `below_expected_floor` — the exact
+        # same symptom as a two-member scope or a truncated feed. Three
+        # incidents, three fixes, and previously one indistinguishable signal.
+        #
+        # ONE entry, not one per row: a total outage against ~1,700 rows would
+        # otherwise fill the 50-entry cap by itself and push `team_sum_drift`
+        # and every other reason off the list.
+        acc.add_error(IDENTITY_UPSTREAM_ERROR, identity_failures.detail())
 
     drift = team_sum_drift(usage)
     for team, value in sorted(drift.items()):

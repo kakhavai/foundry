@@ -54,7 +54,7 @@ from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
 from collector_core.lake import LakeWriter
 from collector_core.publish import publish_capture
-from collector_core.scope import ScopeUnavailable
+from collector_core.scope import fetch_scope_or_fail
 
 from .adapters.identity import UnresolvedPlayer, build_id_resolver
 from .adapters.scope import fetch_watchlist
@@ -188,20 +188,25 @@ async def capture_player_stats(
         adapter=UPSTREAM_ADAPTER, fetched_at=now, source_ref=source_ref(season, week)
     )
 
+    # Stated once, so every failure path below writes the same envelope and
+    # differs only in how the failure is named. Also the kwargs
+    # `fetch_scope_or_fail` forwards to `fail_capture` on its own two arms —
+    # which is why `reason` is deliberately NOT in here: that helper supplies
+    # its own, and a duplicate keyword would be a TypeError.
+    failure_context = dict(
+        collector=COLLECTOR_NAME,
+        signal_types=SIGNAL_TYPES,
+        adapter=UPSTREAM_ADAPTER,
+        now=now,
+        scope=scope,
+        lake=lake,
+        metrics=metrics,
+        expected=EXPECTED_FLOOR,
+        source_ref=source_ref(season, week),
+    )
+
     def fail(exc: BaseException, reason: str | None = None):
-        return fail_capture(
-            exc,
-            collector=COLLECTOR_NAME,
-            signal_types=SIGNAL_TYPES,
-            adapter=UPSTREAM_ADAPTER,
-            now=now,
-            scope=scope,
-            lake=lake,
-            metrics=metrics,
-            reason=reason,
-            expected=EXPECTED_FLOOR,
-            source_ref=source_ref(season, week),
-        )
+        return fail_capture(exc, reason=reason, **failure_context)
 
     # `to_thread` rather than a direct call, and deliberately the very first
     # thing this coroutine does: it is both the offload AND the `await` that
@@ -220,28 +225,14 @@ async def capture_player_stats(
     # BEFORE the upstream fetch, deliberately, and this ordering is the whole
     # of failing closed: a pass that cannot narrow costs zero upstream calls
     # rather than an ~8.3 MB season CSV fetched to publish nothing.
-    try:
-        watchlist = await fetch_watchlist(lake, season, week)
-    except ScopeUnavailable as exc:
-        # `exc.reason` rather than a literal: `scope_unavailable` and
-        # `scope_empty` have two different fixes, and collapsing them costs
-        # an operator the one thing the envelope could have told them. Never
-        # returns — see `fail`.
-        await fail(exc, reason=exc.reason)
-    except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
-        # The scope read is I/O, and `ScopeUnavailable` is only what
-        # `ScopeClient` raises when the lake answered and had nothing usable.
-        # The lake can also fail outright: `S3LakeWriter.list_keys`/`read`
-        # propagate botocore errors and `json` decode errors untouched, and
-        # `ScopeClient._parse_captured_at` raises `ValueError` on a timestamp
-        # it does not recognise. Without this arm every one of those escapes
-        # this coroutine entirely — no `present: 0` envelope, no
-        # `collector_capture_failures_total`, just a log line. No explicit
-        # `reason=`: `fail_capture` falls back to
-        # `CollectorMetrics.reason_for(exc)`, which classifies a decode or
-        # timestamp failure as `malformed` and anything else as `unknown` —
-        # both true, and neither mistakable for `scope_unavailable`.
-        await fail(exc)
+    #
+    # `fetch_scope_or_fail` owns both refusal arms — `ScopeUnavailable`
+    # forwarding `exc.reason`, and the lake failing outright with no reason at
+    # all — see its docstring for why the second one is the load-bearing half
+    # and why it lives in the library rather than in three collectors.
+    watchlist = await fetch_scope_or_fail(
+        lambda: fetch_watchlist(lake, season, week), **failure_context
+    )
 
     try:
         rows, row_errors = await fetch_box_rows(season, week, client=client, now=now)
