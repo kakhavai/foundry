@@ -475,6 +475,78 @@ is rule 1 made reusable and hands rows out one at a time so an ordinary
 deliberately reverted: it hides the bug and re-sizes the pod against an upstream
 nobody controls.
 
+## Conditional GET: skip a re-fetch the upstream itself says is unnecessary
+
+**Opt-in, one argument wide, for an upstream that changes slower than your
+poll interval.** `depth-chart`'s season CSV moves once or twice a day; a
+`volatile`-cadence collector polling it every 15 minutes spends almost every
+one of those polls re-downloading bytes it already has.
+[`collector_core.conditional`](../libs/collector-core/collector_core/conditional.py)
+gives every collector `ETagStore`, the shared `ETAGS` instance, and
+`conditional_headers` — and there are two ways to use them, depending on how
+your adapter reads the upstream.
+
+**Route 1 — your adapter already calls `stream_csv_dicts`.** Pass
+`etag_key=<the URL>` and add `except UpstreamUnchanged: raise` **above** your
+generic `except Exception` handler:
+
+```python
+rows = stream_csv_dicts(
+    client, url, required_columns=REQUIRED_COLUMNS,
+    etag_key=url,   # the cache key — use the same string the envelope
+)                   # records as upstream.source_ref, so they cannot drift
+...
+try:
+    ...
+except UpstreamUnchanged:
+    raise                          # above the generic handler, unchanged
+except Exception as exc:
+    await fail_capture(exc, ...)
+```
+
+`depth-chart` (`depth_chart/adapters/upstream.py`) is this route.
+
+**Route 2 — your adapter streams the response itself**, the way
+`roster-scope` folds the same feed into per-team charts without going through
+`stream_csv_dicts`. Reuse the primitives directly and mirror `stream_csv_dicts`'s
+order of operations exactly: build `conditional_headers` before the request,
+check `response.status_code == 304` **before** `raise_for_status()` (httpx
+only treats 4xx/5xx as errors, so a 304 falls through `raise_for_status()`
+undetected), raise `UpstreamUnchanged` on that branch, and only then call
+`ETAGS.set()` on the success path:
+
+```python
+headers = conditional_headers(url, ETAGS)
+async with client.stream("GET", url, headers=headers) as response:
+    if response.status_code == 304:
+        raise UpstreamUnchanged(url, source_ref=ETAGS.get(url))
+    response.raise_for_status()
+    ETAGS.set(url, response.headers.get("etag"))
+    ...
+```
+
+`roster-scope` (`roster_scope/adapters/depth_chart.py`) is this route, because
+its adapter consumes neither `stream_csv_dicts` nor `fail_capture` directly.
+
+**Both halves are required either way.** Without the `etag_key`/`ETagStore`
+half, nothing is saved — every poll still round-trips the full body. Without
+the `except UpstreamUnchanged: raise` half placed *above* the generic
+exception handler, a `304` is routed into `fail_capture`, which writes a
+`present: 0` envelope over a healthy capture and counts a failure that did not
+happen.
+
+A `304` is a **successful** capture, not a skipped one. `run_capture_loop`
+and `_run_capture` catch `UpstreamUnchanged` and call
+`CaptureState.mark_unchanged(now)`, which advances `last_capture_at` and
+records `collector_upstream_unchanged_total` without touching the stored
+envelopes. So `/catalog` reports a fresh pass while `/signals` keeps serving
+the previous capture's rows unchanged — that is the two fields meaning
+different things, not drift.
+
+Do not opt in a collector whose upstream is generated per request or otherwise
+lacks a stable `ETag`/`Last-Modified` — a value that changes on every poll
+costs one extra round trip on the conditional request and saves nothing.
+
 ## The lake refuses to run on the event loop
 
 `LakeWriter` is synchronous boto3. `build_collector_app` hands every collector

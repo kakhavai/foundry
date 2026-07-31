@@ -427,6 +427,18 @@ yourself only for a failure the library cannot see: one bad row, one item's
 fetch inside a multi-call pass, or a degraded path that builds its own
 envelopes. See [`docs/collectors.md`](docs/collectors.md).
 
+**Conditional GET is opt-in** via `collector_core.conditional` — `ETagStore`,
+the shared `ETAGS`, and `UpstreamUnchanged` — for an upstream that changes
+slower than your poll interval. A collector using `stream_csv_dicts` passes
+`etag_key=<the URL>`; one that streams the response itself (`roster-scope`
+does, because its adapter uses neither `stream_csv_dicts` nor `fail_capture`)
+reuses the same primitives directly, checking for a `304` before
+`raise_for_status()`. Either way a `304` is a **successful** capture —
+`last_capture_at` advances and `collector_upstream_unchanged_total`
+increments, but no envelope is written, so `/signals` keeps serving the prior
+capture's rows. See [`docs/collectors.md`](docs/collectors.md) for both
+routes' exact shape and the two failure modes an incomplete opt-in produces.
+
 Any route beyond the standard five (weather's `/signals/convergence` is the
 example) is a plain `@app.get`/`@app.post` added to `main.py` after the
 `build_collector_app` call, reaching the lake and collector name via
