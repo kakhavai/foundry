@@ -161,6 +161,85 @@ and each service's `tests/test_metrics.py` pins its own series the same way.
 
 ---
 
+## Narrowing to a scope: `ScopeClient` and `IdentityClient`
+
+`--scope-aware` on the scaffolder records the flag on your registry entry
+today; it does not yet generate the wiring below. That retrofit is deferred
+work (this repo's scope-narrowing plan calls it out explicitly as future
+work), but the two seams it will retrofit onto already exist in
+`libs/collector-core` and are unit-tested on their own, independent of any
+collector that calls them:
+[`collector_core/scope.py`](../libs/collector-core/collector_core/scope.py)
+and [`collector_core/identity.py`](../libs/collector-core/collector_core/identity.py).
+
+**`ScopeClient` reads the published scope from the lake, never from
+`roster-scope` over HTTP.** `roster-scope`'s `GET /scope/players` and
+`GET /scope/matchups` exist for the out-of-repo generator and for operators —
+a person or process asking "what does the scope look like right now."
+A collector narrowing its own fetch asks a different question — "what was the
+last scope this fleet agreed on" — and the lake, not a live HTTP call, is the
+answer that survives a `roster-scope` outage. `roster-scope`'s own capture
+writes its membership envelope there on every pass; `ScopeClient.fetch(...)`
+reads the newest one back:
+
+```python
+scope = await ScopeClient(lake).fetch(MEMBERSHIP_SIGNAL, season, week)
+# scope.members: frozenset[str] of player_id
+# scope.captured_at: datetime — age it against `now` before trusting it
+```
+
+It **fails closed on two distinct empty states**, and both raise
+`ScopeUnavailable` rather than returning something a caller could mistake for
+"fetch everyone": no envelope in the lake for `(season, week)` at all
+(`scope_unavailable`), and an envelope that exists but resolved zero members
+(`scope_empty`) — a `roster-scope` capture against a dead upstream still
+writes an envelope, and an empty one is not silently different from a missing
+one to a collector reading it.
+
+**There is no unnarrowed fallback.** A collector that caught
+`ScopeUnavailable` and fell back to fetching every player anyway would spend
+its entire per-run vendor-API budget in exactly the run where the fleet's own
+scope is unavailable — an incident on `roster-scope` would then cascade into
+every collector maxing out its own rate limit at the same time, which is the
+one moment a shared vendor budget can least absorb it. The correct response to
+`ScopeUnavailable` is the same shape `roster-scope`'s own ledger-unavailable
+path uses (see
+["A failed capture still writes an envelope"](#a-failed-capture-still-writes-an-envelope),
+later in this doc): write a
+`present: 0` envelope, classify the reason, make zero upstream calls, and let
+next pass's alert be `collector_coverage_ratio` reading zero rather than a
+vendor 429 that took the rest of the fleet down with it.
+
+**`IdentityClient` resolves upstream rows to canonical `fdy-` ids, and never
+adopts a refusal.** `player-identity`'s `POST /resolve/batch` is the
+authoritative answer for "who is this" across the fleet, chunked at
+`BATCH_LIMIT` (500) so a season's worth of queries never lands in a single
+oversized request body. Its `resolve_many(...)` returns a mapping — **only**
+the queries it
+was told `resolved: true` for. Anything else (an absent `resolved` field, an
+explicit `false`, `candidates` with no chosen winner) is simply missing from
+the returned dict, exactly the way `roster-scope`'s own
+`HttpPlayerIdentityResolver` treats its single-query `GET /resolve`: the
+upstream's `candidates` are its own working, filed against its own
+name-resolution-miss queue, not a second-guess opportunity for the caller. A
+client that re-ranked `candidates` against a local confidence floor would be
+adopting an identity `player-identity` deliberately declined to give it — see
+that class's docstring in `services/roster-scope/roster_scope/adapters/identity.py`
+for the full history of why that used to be a real bug. Treat every id
+`resolve_many` did not return the same way `roster-scope` treats every
+resolver refusal: a slot recorded in `coverage.missing` with the reason
+attached, never a skipped row — a skipped row shrinks the numerator and the
+denominator together and reads as perfect coverage.
+
+Successful resolutions are cached **per `IdentityClient` instance**, keyed on
+`(crosswalk_version, query)` — construct one per capture pass, not one at
+import time, or a republished crosswalk mid-season never invalidates the
+cache. Unresolved queries are deliberately never cached: a miss today may
+become a hit once `player-identity` republishes, and caching the refusal would
+pin that gap in place until the process restarts.
+
+---
+
 ## The five-route contract
 
 `GET /health`, `GET /metrics`, `GET /catalog`, `GET /signals`,
