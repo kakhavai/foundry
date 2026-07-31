@@ -13,7 +13,7 @@ from collector_core.envelope import ENVELOPE_VERSION
 from usage_share.capture import SIGNAL_TYPES
 from usage_share.signals import ROW_FILTERS, SUPPORTED_FILTERS
 
-from .conftest import SAMPLE_PLAYER_ROWS, TEST_TOKEN
+from .conftest import SAMPLE_PLAYER_ROWS, TEST_TOKEN, canonical_id
 
 
 def wait_for_signals(client, *, count: int, timeout: float = 10.0) -> dict:
@@ -121,13 +121,21 @@ def test_a_row_filter_narrows_the_signals(client, upstream):
 
 
 def test_a_player_id_filter_narrows_to_one_row(client, upstream):
+    """The filter is on the CANONICAL id, because that is what is published —
+    the upstream's GSIS key is the join's input and never leaves the pod."""
     client.post("/refresh", json={"season": 2026, "week": 1})
     wait_for_signals(client, count=len(SIGNAL_TYPES))
 
-    body = client.get("/signals?player_id=00-KC-WR1").json()
+    wanted = canonical_id("00-KC-WR1")
+    body = client.get(f"/signals?player_id={wanted}").json()
     rows = [row for envelope in body["envelopes"] for row in envelope["signals"]]
     assert len(rows) == 1
-    assert rows[0]["player_id"] == "00-KC-WR1"
+    assert rows[0]["player_id"] == wanted
+
+    stale = client.get("/signals?player_id=00-KC-WR1").json()
+    assert stale["envelopes"] == [] or not [
+        row for envelope in stale["envelopes"] for row in envelope["signals"]
+    ]
 
 
 def test_a_data_route_without_a_token_is_401(client):

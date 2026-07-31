@@ -10,7 +10,16 @@ team-level denominators, without which every share is uninterpretable. So every
 share published here is computed from an explicit base that travels in the same
 row, never taken from whatever the vendor already divided.
 
-Two things here are correctness, not style, and both have a fleet-wide history:
+**This collector narrows, and it narrows before it fetches.** The membership
+list comes from the lake (`adapters/scope.py`), every upstream row's GSIS id is
+resolved forward through `player-identity`, and only rows landing inside the
+scope are published. No scope — or no `player-identity` to resolve against —
+means ZERO upstream calls and a `present: 0` envelope. There is deliberately no
+unnarrowed fallback: one would blow the vendor's budget precisely during an
+incident, which is the moment it can least be afforded.
+
+Three things here are correctness, not style, and each has a fleet-wide
+history:
 
 **`coverage.expected` never derives from what succeeded.** A collector that
 builds its expectation from the document it just fetched reports a truncated
@@ -42,7 +51,13 @@ from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
 from collector_core.lake import LakeWriter
 from collector_core.publish import publish_capture
+from collector_core.scope import ScopeUnavailable
 
+from .adapters.scope import (
+    build_identity_client,
+    fetch_scope,
+    resolve_in_scope,
+)
 from .adapters.upstream import (
     UPSTREAM_ADAPTER,
     TeamDenominators,
@@ -90,10 +105,15 @@ SIGNAL_TYPES = ("player_usage_weekly",)
 # 32 * (11 + 1) = 384. Why the floor is not optional: `Coverage.ratio` returns
 # 1.0 when `expected` is 0, so a pass that captured nothing would otherwise
 # report perfect coverage. With the floor, a total outage reads 0/384 = 0.00, a
-# truncated document reads 100/384 = 0.26, and a healthy week — which observes
-# far more than 384 keys, because this collector captures every offensive-skill
-# player the feed carries rather than only the ~352 in scope — is unaffected,
-# because the floor raises a short count and never lowers a genuine one.
+# truncated document reads 100/384 = 0.26, and a healthy week lands at or near
+# 384 — the floor raises a short count and never lowers a genuine one.
+#
+# It is also the ONLY number that survives narrowing, and that is the whole
+# reason it is a constant rather than something derived. Now that the pass
+# publishes one row per scoped player, an expectation taken from the scope
+# would make a truncated scope — two members instead of 416 — read as a
+# perfect week, and a scope that failed to resolve at all read as a bye. The
+# floor is a fact about the league; the scope is a fetch.
 LEAGUE_TEAMS = 32
 OFFENSIVE_SCOPE_SLOTS_PER_TEAM = 11
 EXPECTED_FLOOR: dict[str, int] = {
@@ -131,15 +151,21 @@ class AmbiguousUsage(ValueError):
         self.detail = detail
 
 
-def player_key(row: UsageRow) -> str:
-    """The coverage key for one player row.
+def player_key(player_id: str) -> str:
+    """The coverage key for one player row, on the CANONICAL id.
 
     Namespaced, because this accumulator holds two kinds of key and a bare team
     abbreviation could otherwise collide with a player id. Stable across passes
     and unique within one: it is what appears in `coverage.missing`, so a key
     that changes between passes makes every row look newly missing.
+
+    Canonical rather than the upstream's GSIS key, and that matters now that
+    the collector narrows: `coverage.missing` and `signals[].player_id` are the
+    two halves of one answer to "what was owed and what arrived", and a
+    consumer can only join them if they name players in the same namespace.
+    The upstream key is the join's input and stops at this module's edge.
     """
-    return f"player:{row.upstream_player_id}"
+    return f"player:{player_id}"
 
 
 def denominators_key(team: str) -> str:
@@ -166,9 +192,18 @@ def _share(numerator: float, denominator: float, *, field: str) -> float:
 
 
 def build_signal(
-    row: UsageRow, denominators: TeamDenominators | None, *, now: datetime
+    row: UsageRow,
+    denominators: TeamDenominators | None,
+    *,
+    player_id: str,
+    now: datetime,
 ) -> dict:
     """One upstream row plus its team's bases -> one published usage row.
+
+    `player_id` is the canonical `fdy-` id `player-identity` resolved this
+    row's GSIS id to, passed in rather than read off the row: the upstream key
+    is what the join takes as *input*, and letting this function reach for it
+    is how a fallback to the un-canonical id gets reintroduced by accident.
 
     This collector's actual product. The shape is mirrored in
     `contracts/signal-envelope/collectors/usage-share.json`, and
@@ -192,16 +227,14 @@ def build_signal(
     carry_share = _share(row.carries, denominators.carries, field="carry_share")
 
     signal = {
-        "player_id": row.upstream_player_id,
-        # NOT in the phase doc's field table. Added deliberately: that table
-        # says `player_id` is "the canonical id from player-identity", and this
-        # collector cannot produce one yet — roster-scope's membership rows
-        # carry no name and no external id, so there is nothing to join a
-        # GSIS-keyed feed onto. Emitting the upstream id under a field
-        # documented as canonical, with no way for a consumer to tell, is
-        # exactly the silent gap the envelope's coverage block exists to
-        # prevent. Flips to `player_identity` when that join exists.
-        "player_id_source": "upstream_gsis",
+        "player_id": player_id,
+        # NOT in the phase doc's field table, and kept now that the id IS
+        # canonical: the field's whole job is to let a consumer tell which of
+        # the two eras a lake object was written in, and the lake is
+        # append-only, so every row this collector wrote before the join
+        # existed still says `upstream_gsis` and always will. Dropping the
+        # field would make those rows indistinguishable from these.
+        "player_id_source": "player_identity",
         "game_id": row.game_id,
         "team": row.team,
         # null, not 0.0 — this feed carries no snap counts, and "we cannot see
@@ -280,6 +313,38 @@ async def capture_usage_share(
     )
 
     metrics.capture_attempt()
+
+    # BEFORE the upstream fetch, deliberately, and this ordering is the whole
+    # of failing closed. Both seams narrowing needs are resolved first — the
+    # membership list out of the lake, and the `player-identity` client the
+    # forward join runs through — so a pass that cannot narrow costs zero
+    # upstream calls rather than an ~8.3 MB season CSV fetched to publish
+    # nothing. Moving either below `fetch_week_usage` looks harmless and
+    # silently reintroduces the cost the narrowing exists to remove.
+    try:
+        identity = build_identity_client(client)
+        membership = await fetch_scope(lake, season, week)
+    except ScopeUnavailable as exc:
+        metrics.rows_captured(0)
+        metrics.team_sum_drift(0.0)
+        # `exc.reason` rather than a literal: `scope_unavailable`,
+        # `scope_empty` and `identity_unavailable` have three different fixes,
+        # and collapsing them costs an operator the one thing the envelope
+        # could have told them. Never returns — see below.
+        await fail_capture(
+            exc,
+            collector=COLLECTOR_NAME,
+            signal_types=SIGNAL_TYPES,
+            adapter=UPSTREAM_ADAPTER,
+            now=now,
+            scope=scope,
+            lake=lake,
+            metrics=metrics,
+            reason=exc.reason,
+            expected=EXPECTED_FLOOR,
+            source_ref=source_ref(season, week),
+        )
+
     try:
         usage = await fetch_week_usage(
             season, week, client=client, now=now, deadline=deadline
@@ -324,12 +389,21 @@ async def capture_usage_share(
             continue
         acc.record(key)
 
-    # Half two: one row per player whose team completed its game.
+    # Half two: one row per SCOPED player whose team completed its game.
+    #
+    # `resolve_in_scope` is the narrowing, and what it drops is deliberately
+    # not counted. A player the scope excludes was never owed a row, and an
+    # unresolved one cannot be attributed to a scope slot without the very
+    # join that just failed — recording either would turn narrowing into a
+    # permanent coverage regression that buries the rows genuinely missing.
+    # The shortfall against `EXPECTED_FLOOR` is what stays loud instead.
     signals: list[dict] = []
-    for row in usage.rows:
-        key = player_key(row)
-        # Declared because the row EXISTS and is therefore owed — never because
-        # building it below happened to succeed.
+    async for row, player_id in resolve_in_scope(
+        usage.rows, season=season, scope=membership, identity=identity
+    ):
+        key = player_key(player_id)
+        # Declared because the row EXISTS, is in scope, and is therefore owed —
+        # never because building it below happened to succeed.
         acc.expect(key)
         if deadline is not None and datetime.now(tz=UTC) >= deadline:
             # Over budget. Record the rest as missing rather than throwing away
@@ -338,7 +412,14 @@ async def capture_usage_share(
             acc.fail(key, "deadline_exceeded")
             continue
         try:
-            signals.append(build_signal(row, usage.denominators.get(row.team), now=now))
+            signals.append(
+                build_signal(
+                    row,
+                    usage.denominators.get(row.team),
+                    player_id=player_id,
+                    now=now,
+                )
+            )
         except AmbiguousUsage as exc:
             acc.fail(key, exc.reason)
             continue

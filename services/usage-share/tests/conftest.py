@@ -9,24 +9,40 @@ hand-written list of already-parsed rows. That is deliberate: the adapter's
 whole job is the wire format, and a fixture that skips the wire proves nothing
 about column names, blank cells, or the streaming path — which is where this
 collector's memory rules live.
+
+**Every capture now narrows**, so the two seams narrowing needs are part of the
+baseline fixture rather than something each test assembles: `upstream` and
+`serve_upstream` mock `player-identity` on the same respx router and seed the
+`lake` fixture with a `roster-scope` membership envelope naming every player in
+the document they serve. A test that wants a *narrower* scope, an unresolvable
+row, or no scope at all overrides one of those — see `tests/test_narrowing.py`.
 """
 
+import csv
+import io
+import json
 from datetime import UTC, datetime
 
 import httpx
 import pytest
 import respx
-from collector_core.envelope import ENVELOPE_VERSION, Envelope
+from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
 from collector_core.lake import lake_key
 from fastapi.testclient import TestClient
 from opentelemetry import metrics as otel_metrics
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider
 
+from usage_share.adapters.scope import SCOPE_SIGNAL_TYPE, UPSTREAM_SOURCE
 from usage_share.adapters.upstream import UPSTREAM_URL
 from usage_share.main import app
 
 TEST_TOKEN = "test-collector-token"
+
+# Where the fake `player-identity` answers. Set into PLAYER_IDENTITY_URL by an
+# autouse fixture, because narrowing fails closed without it.
+IDENTITY_URL = "http://player-identity:8002"
+RESOLVE_BATCH_URL = f"{IDENTITY_URL}/resolve/batch"
 
 # One frozen instant the whole suite describes. `Envelope` rejects a naive
 # datetime rather than assuming UTC — guessing puts a wrong instant into an
@@ -211,23 +227,151 @@ def full_league_csv(*, teams: int = 32, players_per_team: int = 11) -> str:
     return to_csv(records)
 
 
-@pytest.fixture
-def upstream():
-    """Serve `SAMPLE_RECORDS` at the adapter's real URL."""
-    with respx.mock(assert_all_called=False) as router:
-        router.get(UPSTREAM_FOR_SEASON).mock(
-            return_value=httpx.Response(200, text=to_csv(SAMPLE_RECORDS))
+# ── narrowing fixtures ────────────────────────────────────────────────────────
+#
+# The canonical id the fake `player-identity` issues for a GSIS id. `fdy-` +
+# the upstream key, so a test can name either side of the join by hand and the
+# relationship between them is legible in the assertion rather than opaque.
+# The real service mints ids that look nothing like this; nothing here depends
+# on the shape, only on the mapping being total and stable.
+def canonical_id(upstream_player_id: str) -> str:
+    return f"fdy-{upstream_player_id}"
+
+
+# A scope member no fixture document carries a row for. Present in every seeded
+# scope because `ScopeClient` treats a membership envelope with zero signals as
+# `scope_empty` and falls back a week — so a document with no players (the 503
+# and empty-document tests) would otherwise fail closed for a reason those
+# tests are not about. It is also realistic: roster-scope's universe is 416
+# slots and no week's feed carries all of them.
+UNPLAYED_SCOPE_MEMBER = canonical_id("00-SCOPE-ONLY")
+
+
+def upstream_player_ids(body: str) -> list[str]:
+    """Every `player_id` in a served CSV body, in document order."""
+    reader = csv.DictReader(io.StringIO(body))
+    return [
+        (record.get("player_id") or "").strip()
+        for record in reader
+        if (record.get("player_id") or "").strip()
+    ]
+
+
+def scope_for(body: str) -> set[str]:
+    """A scope naming every player the document carries — the "narrowing is
+    switched on but excludes nobody" baseline the pre-existing suite assumes."""
+    return {canonical_id(player_id) for player_id in upstream_player_ids(body)}
+
+
+def scope_envelope(
+    members, *, season: int = SEASON, week: int = WEEK, captured_at=NOW
+) -> Envelope:
+    """One `roster-scope` membership envelope, as `ScopeClient` reads it.
+
+    A real `Envelope` through the real `lake_key`, not a hand-placed dict: a
+    fixture that writes its own key is a second implementation of the layout
+    `ScopeClient` navigates, and would keep passing after that layout changed.
+    """
+    rows = [
+        {"player_id": player_id, "membership_status": "active"}
+        for player_id in sorted(members)
+    ]
+    return Envelope(
+        envelope_version=ENVELOPE_VERSION,
+        collector="roster-scope",
+        signal_type=SCOPE_SIGNAL_TYPE,
+        captured_at=captured_at,
+        upstream=Upstream(adapter="depth-chart", fetched_at=captured_at),
+        scope={"season": season, "week": week},
+        coverage=Coverage(expected=len(rows), present=len(rows), missing=[]),
+        errors=[],
+        signals=rows,
+    )
+
+
+def seed_scope(lake, members, *, season: int = SEASON, week: int = WEEK, **kwargs):
+    """Write a membership envelope into `lake` so a capture can narrow to it."""
+    lake.write(
+        scope_envelope(
+            {*members, UNPLAYED_SCOPE_MEMBER}, season=season, week=week, **kwargs
         )
+    )
+    return lake
+
+
+def mock_identity(router, *, unresolvable: set[str] = frozenset()):
+    """Answer `POST /resolve/batch` the way `player-identity` does.
+
+    Every query resolves to `canonical_id(source_id)` except the ids named in
+    `unresolvable`, which come back `resolved: false` **with a high-confidence
+    candidate attached** — the shape that matters, because a caller that
+    re-ranks `candidates` against a local floor would adopt exactly that id.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        queries = json.loads(request.content)["queries"]
+        results = []
+        for query in queries:
+            source_id = query.get("source_id") or ""
+            assert query.get("source") == UPSTREAM_SOURCE, query
+            if not source_id or source_id in unresolvable:
+                results.append(
+                    {
+                        "resolved": False,
+                        "player_id": None,
+                        "candidates": [
+                            {
+                                "player_id": canonical_id(source_id),
+                                "confidence": 0.99,
+                            }
+                        ],
+                    }
+                )
+                continue
+            results.append(
+                {
+                    "resolved": True,
+                    "player_id": canonical_id(source_id),
+                    "confidence": 1.0,
+                    "candidates": [],
+                }
+            )
+        return httpx.Response(200, json={"results": results})
+
+    return router.post(RESOLVE_BATCH_URL).mock(side_effect=handler)
+
+
+@pytest.fixture(autouse=True)
+def _player_identity_url(monkeypatch):
+    """Narrowing fails closed without a `player-identity` to resolve against,
+    so the suite's baseline is one that exists."""
+    monkeypatch.setenv("PLAYER_IDENTITY_URL", IDENTITY_URL)
+
+
+@pytest.fixture
+def upstream(lake):
+    """Serve `SAMPLE_RECORDS`, with a scope and an identity that pass it all."""
+    with respx.mock(assert_all_called=False) as router:
+        body = to_csv(SAMPLE_RECORDS)
+        router.get(UPSTREAM_FOR_SEASON).mock(
+            return_value=httpx.Response(200, text=body)
+        )
+        mock_identity(router)
+        seed_scope(lake, scope_for(body))
         yield router
 
 
 @pytest.fixture
-def serve_upstream():
+def serve_upstream(lake):
     """Serve an arbitrary document body at the adapter's real URL.
 
     A factory rather than a second fixture per body: the coverage tests each
     need a different document, and parameterising the mock is cheaper than
     thirteen near-identical fixtures.
+
+    It also seeds the `lake` fixture with a scope naming every player in the
+    body it was handed, so a test about coverage stays a test about coverage
+    rather than accidentally becoming one about narrowing.
     """
 
     def _serve(body: str, *, status: int = 200):
@@ -236,6 +380,7 @@ def serve_upstream():
         router.get(UPSTREAM_FOR_SEASON).mock(
             return_value=httpx.Response(status, text=body)
         )
+        mock_identity(router)
         return router
 
     routers = []
@@ -243,6 +388,7 @@ def serve_upstream():
     def factory(body: str, *, status: int = 200):
         router = _serve(body, status=status)
         routers.append(router)
+        seed_scope(lake, scope_for(body))
         return router
 
     yield factory
@@ -269,9 +415,22 @@ def _collector_token(monkeypatch):
 
 
 @pytest.fixture
-def client(_collector_token):
-    with TestClient(app, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as c:
-        yield c
+def client(_collector_token, lake):
+    """The real app, with the `lake` fixture standing in for its own writer.
+
+    Swapped rather than left alone because a dispatched `/refresh` narrows
+    against `spec.lake`, and the process's own is a `NullLakeWriter` (no
+    `LAKE_BUCKET` in tests) whose empty listing reads as `scope_unavailable`.
+    Every route test would then exercise the fail-closed path by accident.
+    """
+    spec = app.state.collector_spec
+    original = spec.lake
+    spec.lake = lake
+    try:
+        with TestClient(app, headers={"Authorization": f"Bearer {TEST_TOKEN}"}) as c:
+            yield c
+    finally:
+        spec.lake = original
 
 
 @pytest.fixture(autouse=True)
