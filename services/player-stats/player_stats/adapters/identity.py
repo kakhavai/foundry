@@ -23,13 +23,14 @@ anyway is how two Josh Allens become one player.
   every row look newly restated.
 - `HttpIdCrosswalk` calls the real collector.
 
-**The stub's ids do not join with `roster-scope`'s stub ids**, and that is not
-a bug this module can fix: the two stubs hash different inputs (a GSIS id here,
-`name|team|position` there). It is why the scope watchlist is off by default —
-see `adapters/scope.py`. Setting `ROSTER_SCOPE_URL` without also setting
-`PLAYER_IDENTITY_URL` produces a total join failure, which shows up loudly as
-`coverage.missing` naming every watchlist player rather than quietly as a short
-list of rows.
+**The stub's ids do not join with `roster-scope`'s stub ids.** The two stubs
+hash different inputs (a GSIS id here, `name|team|position` there), which used
+to be why the watchlist in `adapters/scope.py` was unreliable while both
+services ran unconfigured. That module now reads the watchlist from the lake
+unconditionally, with no env var of its own — leaving `PLAYER_IDENTITY_URL`
+empty here still means the join runs stub-vs-real, which shows up loudly as
+`coverage.missing` naming every watchlist player rather than quietly as a
+short list of rows.
 """
 
 import hashlib

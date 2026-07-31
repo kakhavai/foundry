@@ -4,7 +4,16 @@
 upstream outage costs **freshness, not availability**. A collector that reaches
 its upstream inside a request handler has inverted that contract.
 
-Four things here are correctness rather than style.
+Five things here are correctness rather than style.
+
+**The watchlist is fetched from the lake before the upstream is touched, and
+a failure to fetch it is fatal to the pass.** `adapters/scope.py` reads the
+last `roster-scope` capture straight out of the lake — never `roster-scope`
+over HTTP — so a `roster-scope` outage costs this collector's coverage
+freshness, not `/signals`'s availability. `fetch_watchlist` raises
+`ScopeUnavailable` rather than returning an empty set, and this coroutine
+never falls back to an unnarrowed capture: no scope means zero calls to the
+box-score feed and a `present: 0` envelope for every signal type.
 
 **`coverage.expected` never derives from what succeeded.** `EXPECTED_FLOOR`
 below is computed from `roster-scope`'s *config*, before any upstream is
@@ -45,6 +54,7 @@ from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
 from collector_core.lake import LakeWriter
 from collector_core.publish import publish_capture
+from collector_core.scope import ScopeUnavailable
 
 from .adapters.identity import UnresolvedPlayer, build_id_resolver
 from .adapters.scope import fetch_watchlist
@@ -206,7 +216,32 @@ async def capture_player_stats(
         await fail(exc, reason="previous_snapshot_unavailable")
 
     metrics.capture_attempt()
-    watchlist, errors = await fetch_watchlist(client)
+
+    # BEFORE the upstream fetch, deliberately, and this ordering is the whole
+    # of failing closed: a pass that cannot narrow costs zero upstream calls
+    # rather than an ~8.3 MB season CSV fetched to publish nothing.
+    try:
+        watchlist = await fetch_watchlist(lake, season, week)
+    except ScopeUnavailable as exc:
+        # `exc.reason` rather than a literal: `scope_unavailable` and
+        # `scope_empty` have two different fixes, and collapsing them costs
+        # an operator the one thing the envelope could have told them. Never
+        # returns — see `fail`.
+        await fail(exc, reason=exc.reason)
+    except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
+        # The scope read is I/O, and `ScopeUnavailable` is only what
+        # `ScopeClient` raises when the lake answered and had nothing usable.
+        # The lake can also fail outright: `S3LakeWriter.list_keys`/`read`
+        # propagate botocore errors and `json` decode errors untouched, and
+        # `ScopeClient._parse_captured_at` raises `ValueError` on a timestamp
+        # it does not recognise. Without this arm every one of those escapes
+        # this coroutine entirely — no `present: 0` envelope, no
+        # `collector_capture_failures_total`, just a log line. No explicit
+        # `reason=`: `fail_capture` falls back to
+        # `CollectorMetrics.reason_for(exc)`, which classifies a decode or
+        # timestamp failure as `malformed` and anything else as `unknown` —
+        # both true, and neither mistakable for `scope_unavailable`.
+        await fail(exc)
 
     try:
         rows, row_errors = await fetch_box_rows(season, week, client=client, now=now)
@@ -214,7 +249,7 @@ async def capture_player_stats(
         await fail(exc)
 
     acc = CoverageAccumulator(floor=EXPECTED_FLOOR[BOX_SIGNAL])
-    for error in (*errors, *row_errors):
+    for error in row_errors:
         acc.add_error(error["reason"], error.get("detail", ""))
     # Owed because `roster-scope` names them, not because a row turned up.
     for player_id in watchlist:
