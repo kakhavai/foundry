@@ -5,21 +5,23 @@ roster-scope's spec is unambiguous: every slot is filled by a resolved
 missing slot rather than skipped*. A skipped row would shrink the numerator
 and the denominator together and read as perfect coverage.
 
-`player-identity` is being built in parallel and is not callable yet, so this
-module is a seam rather than a client:
+Two implementations behind one Protocol:
 
-- `StubPlayerIdentityResolver` is the default. It mints a deterministic
-  `fdy-` id from the attributes it was given, and **refuses rather than
-  guesses** when those attributes cannot identify anybody.
-- `HttpPlayerIdentityResolver` calls the real collector. Its request and
-  response shape is **PROVISIONAL** — see the class docstring. It has not
-  been agreed with the team building `player-identity`.
+- `StubPlayerIdentityResolver` is the default, selected when
+  `PLAYER_IDENTITY_URL` is empty. It mints a deterministic `fdy-` id from the
+  attributes it was given, and **refuses rather than guesses** when those
+  attributes cannot identify anybody.
+- `HttpPlayerIdentityResolver` calls the real collector, whose `GET /resolve`
+  it is now reconciled against — see the class docstring. It **obeys that
+  endpoint's `resolved` flag** and does no ranking of its own.
 - `build_resolver` picks between them on `PLAYER_IDENTITY_URL`, exactly the
   way weather's `SCHEDULE_URL` is env-overridable.
 
-Swapping the stub for the real thing is therefore a ConfigMap edit plus
-whatever the agreed shape turns out to be inside one method — no call site in
-`scope.py` or `capture.py` changes.
+Both refuse in the same shape, and that is the point of the seam: whichever is
+selected, an identity that cannot be established becomes an
+`UnresolvablePlayer` carrying a reason, never a plausible-looking id. Turning
+the HTTP resolver on is a ConfigMap edit — no call site in `scope.py` or
+`capture.py` changes.
 """
 
 import hashlib
@@ -70,6 +72,21 @@ def normalize_name(raw: str) -> str:
     cleaned = _WHITESPACE.sub(" ", _PUNCTUATION.sub(" ", ascii_only)).strip()
     parts = [p for p in cleaned.split(" ") if p and p not in _SUFFIXES]
     return " ".join(parts)
+
+
+# `player-identity` names four: `no_candidate`, `below_threshold`,
+# `insufficient_agreeing_attributes`, `ambiguous`. They are carried through
+# verbatim rather than collapsed, because "we could not tell two players apart"
+# and "nobody by that name" are different operational problems. Sanitised
+# anyway: the value arrives from a network peer and lands in an append-only
+# errors array, so it must not be able to widen that vocabulary arbitrarily.
+_REASON_ALLOWED = re.compile(r"[^a-z0-9_]+")
+MAX_UPSTREAM_REASON_LENGTH = 40
+
+
+def _upstream_reason(raw) -> str:
+    cleaned = _REASON_ALLOWED.sub("_", str(raw or "").lower()).strip("_")
+    return cleaned[:MAX_UPSTREAM_REASON_LENGTH] or "unknown"
 
 
 class UnresolvablePlayer(Exception):
@@ -140,28 +157,55 @@ class StubPlayerIdentityResolver:
 class HttpPlayerIdentityResolver:
     """Calls the real `player-identity` collector.
 
-    **PROVISIONAL — NOT AGREED WITH THE `player-identity` AUTHOR.**
-
-    The shape assumed here is:
+    Reconciled against that service's actual `GET /resolve` — see
+    `services/player-identity/player_identity/{main,api,resolution}.py`:
 
         GET {base}/resolve?name=&team=&position=&jersey_number=
             Authorization: Bearer <COLLECTOR_TOKEN>
-        200 {"candidates": [{"player_id": "fdy-...", "confidence": 0.97}, ...]}
+        200 {"resolved": true,  "player_id": "fdy-...", "reason": null,
+             "link_method": "attribute_score", "confidence": 0.77,
+             "candidates": [...]}
+        200 {"resolved": false, "player_id": null, "reason": "ambiguous",
+             "link_method": null, "confidence": 0.97, "candidates": [...]}
 
-    with the highest-confidence candidate taken, and an empty `candidates`
-    list meaning "this went to the miss queue". The Phase 8 spec names
-    `GET /resolve` and describes ranked candidates with a `confidence` in
-    `[0,1]`, so the route is right; the parameter names, the envelope key,
-    and the confidence floor are this module's guess and must be reconciled
-    before `PLAYER_IDENTITY_URL` is ever set in a values file.
+    **`resolved` is the answer. `candidates` is the working.** That distinction
+    is the whole contract, and inverting it is how this class was wrong: it
+    used to ignore `resolved` entirely, re-rank `candidates` against a local
+    0.5 floor, and take the winner.
 
-    Everything outside this class is insulated from that: the contract with
-    `scope.py` is `resolve(PlayerRef) -> str | raise UnresolvablePlayer`.
+    `player-identity` populates `candidates` *precisely when it has decided not
+    to resolve* — a `resolved: false` response carries the rows it would not
+    choose between, and it has already filed the query in its own standing
+    name-resolution miss queue. So the old code adopted an identity the
+    collector that owns identity deliberately refused, and did it hardest in
+    the cases that matter most: `ambiguous` means two records scored within
+    `MARGIN` of each other, both typically well above 0.9, and picking the
+    higher one is exactly the tie-break `player-identity` exists to refuse.
+    `insufficient_agreeing_attributes` means a sparse record cleared the
+    threshold on a single agreeing attribute (0.30/0.45 = 0.667) — confident
+    looking, and nothing of the kind.
+
+    A wrong `player_id` is not a recoverable error. It propagates into an
+    append-only lake that is never rewritten, and every downstream collector
+    reads it as settled.
+
+    **There is no local confidence floor, deliberately.** `player-identity`
+    owns `THRESHOLD`, `MARGIN` and `MIN_AGREEING_ATTRIBUTES`. A second, weaker
+    floor here could never *tighten* the decision — a resolved
+    `attribute_score` is already >= 0.60 and an adopted crosswalk or exact-id
+    link is 1.0, both above 0.5 — so its only possible effect was to loosen a
+    refusal. Deleting it is the fix; tuning it would have kept the inversion
+    and moved the threshold.
+
+    The refusal is made **visible**, not swallowed: the upstream's own reason
+    is carried into `UnresolvablePlayer.reason`, which `scope.py` records with
+    `acc.fail(...)`, so the slot lands in `coverage.missing` with a reason
+    naming why identity declined. Never a skipped row — a skipped row shrinks
+    numerator and denominator together and reads as perfect coverage.
+
+    Everything outside this class is insulated: the contract with `scope.py` is
+    `resolve(PlayerRef) -> str | raise UnresolvablePlayer`.
     """
-
-    # A candidate below this is a tie or a coin-flip, and the spec is explicit
-    # that a tie goes to the miss queue rather than to the higher score.
-    MIN_CONFIDENCE = 0.5
 
     def __init__(self, client: httpx.AsyncClient, base_url: str) -> None:
         self._client = client
@@ -180,15 +224,23 @@ class HttpPlayerIdentityResolver:
                 f"{self._base_url}/resolve", params=params, headers=headers
             )
             resp.raise_for_status()
-            candidates = resp.json().get("candidates") or []
+            body = resp.json()
         except Exception as exc:  # noqa: BLE001 — every failure is one missing slot
             raise UnresolvablePlayer("identity_upstream_error", str(exc)) from exc
 
-        best = max(candidates, key=lambda c: c.get("confidence", 0.0), default=None)
-        if best is None or best.get("confidence", 0.0) < self.MIN_CONFIDENCE:
-            raise UnresolvablePlayer("identity_no_confident_match", ref.name)
-        player_id = best.get("player_id")
+        # Anything that is not explicitly `resolved: true` is a refusal. An
+        # absent field is not permission — a body that has lost the flag is a
+        # body this collector cannot reason about.
+        if body.get("resolved") is not True:
+            raise UnresolvablePlayer(
+                f"identity_unresolved_{_upstream_reason(body.get('reason'))}",
+                ref.name,
+            )
+
+        player_id = body.get("player_id")
         if not player_id:
+            # `resolved: true` with no id is a contract violation, not a licence
+            # to go looking in `candidates` for one.
             raise UnresolvablePlayer("identity_malformed_response", ref.name)
         return str(player_id)
 

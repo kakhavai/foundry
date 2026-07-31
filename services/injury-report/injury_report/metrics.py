@@ -25,7 +25,7 @@ These belong here rather than in `collector-core`: a metric only one service
 records must not grow into the shared library.
 """
 
-from collector_core.metrics import CollectorMetrics
+from collector_core.metrics import CollectorMetrics, LastValueGauge
 from opentelemetry import metrics as otel_metrics
 
 COLLECTOR = "injury-report"
@@ -35,13 +35,15 @@ class InjuryReportMetrics(CollectorMetrics):
     def __init__(self, collector: str = COLLECTOR) -> None:
         super().__init__(collector)
         meter = otel_metrics.get_meter(collector)
-        self._teams_published = meter.create_gauge(
+        self._teams_published = LastValueGauge(
+            meter,
             "injury_report_teams_published",
             description=(
                 "Clubs that filed an injury report, by collector and practice day."
             ),
         )
-        self._teams_with_games = meter.create_gauge(
+        self._teams_with_games = LastValueGauge(
+            meter,
             "injury_report_teams_with_games",
             description=(
                 "Clubs owing an injury report — those with a scheduled game — "

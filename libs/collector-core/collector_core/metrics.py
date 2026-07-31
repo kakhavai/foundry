@@ -10,10 +10,92 @@ spans the fleet instead of twenty-six service-specific series. See
 docs/architecture/phase-8-data-source-collectors.md. `player-projections` is
 deliberately excluded: it consumes the generator's output rather than capturing
 a signal, so it is not a collector and keeps its `upstream_*` names.
+
+**Every gauge here is observable, and that is not a style choice.** See
+`LastValueGauge`.
 """
+
+import threading
+from collections.abc import Mapping, Sequence
 
 import httpx
 from opentelemetry import metrics
+from opentelemetry.metrics import CallbackOptions, Observation
+
+
+class LastValueGauge:
+    """A gauge whose value survives a scrape it was not written before.
+
+    Drop-in for `meter.create_gauge(...)` — same `.set(value, attributes)` call
+    shape — and every collector gauge in the fleet must use it instead.
+
+    OTel's **synchronous** gauge is last-value aggregated with the value
+    *consumed* by a collection: `_LastValueAggregation.collect` returns the
+    point once and clears it, so the series appears on the first scrape after a
+    recording and is **absent from every scrape after that**. Collectors record
+    on a capture cadence — minutes to hours — while Prometheus scrapes every
+    15-30 seconds, so the overwhelming majority of scrapes see nothing at all.
+
+    That is worse than a wrong number. `collector_coverage_ratio` exists so a
+    collector silently capturing 3% of the league is *visible*, and PromQL
+    cannot tell a series that never existed from one that is healthy and idle —
+    which is exactly why `scripts/run-chaos.py` treats an empty query result as
+    a hard error rather than a zero. A chaos criterion or an alert on a
+    synchronous gauge is flaky by construction.
+
+    An **observable** gauge inverts the ownership: the callback runs at
+    collection time and reports current state, so every scrape carries every
+    label set that has ever been written. `set` becomes a dict write.
+
+    Two properties the callback must keep, both load-bearing:
+
+    - **It must never block.** It runs on whichever thread drives the
+      collection, which for `/metrics` is the event loop thread. It touches a
+      dict under a lock held for a copy and nothing else — no I/O, no `await`,
+      and above all nothing that reaches the lake, since
+      `EventLoopGuardedLake` *raises* on a loop-thread call.
+    - **A label set, once written, is reported forever.** That is the point,
+      and it is also the cost: this is only safe for bounded label sets. Every
+      gauge in the fleet is keyed by `collector` and at most `signal_type`,
+      both of which are fixed per process.
+
+    One limitation it does *not* fix: `collector_staleness_seconds` is still
+    the value the capture loop last wrote, not seconds-since-capture recomputed
+    at scrape time, so it steps at the loop's cadence rather than climbing
+    smoothly. Present and slightly coarse beats absent; making it continuous
+    would mean handing the clock and `CaptureState` to the recorder.
+    """
+
+    def __init__(
+        self,
+        meter: metrics.Meter,
+        name: str,
+        *,
+        description: str = "",
+        unit: str = "",
+    ) -> None:
+        self._values: dict[tuple[tuple[str, object], ...], float] = {}
+        # Guards a dict copy, never I/O. The GIL alone would very nearly do,
+        # but "very nearly" in a callback that runs on the event loop is not a
+        # thing worth being clever about.
+        self._lock = threading.Lock()
+        self._gauge = meter.create_observable_gauge(
+            name,
+            callbacks=[self._observe],
+            description=description,
+            unit=unit,
+        )
+
+    def _observe(self, options: CallbackOptions) -> Sequence[Observation]:
+        with self._lock:
+            snapshot = list(self._values.items())
+        return [Observation(value, dict(key)) for key, value in snapshot]
+
+    def set(self, value: float, attributes: Mapping[str, object] | None = None) -> None:
+        """Replace this label set's value. Read back on the next scrape."""
+        key = tuple(sorted((attributes or {}).items()))
+        with self._lock:
+            self._values[key] = float(value)
 
 
 class CollectorMetrics:
@@ -42,13 +124,18 @@ class CollectorMetrics:
             "collector_auth_failures",
             description="Collector API requests rejected by the token check, by cause.",
         )
-        self._coverage_ratio = meter.create_gauge(
+        # Observable, not synchronous. A synchronous gauge here is absent from
+        # every scrape that does not immediately follow a capture -- see
+        # `LastValueGauge`.
+        self._coverage_ratio = LastValueGauge(
+            meter,
             "collector_coverage_ratio",
             description=(
                 "present/expected for the last capture, by collector and signal type."
             ),
         )
-        self._staleness = meter.create_gauge(
+        self._staleness = LastValueGauge(
+            meter,
             "collector_staleness_seconds",
             description="Seconds since the last successful capture, by collector.",
         )

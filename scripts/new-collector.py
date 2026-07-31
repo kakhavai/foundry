@@ -408,9 +408,15 @@ that looks like when it is real.
 `%%class_prefix%%Metrics` is still a `CollectorMetrics`, so it satisfies
 `CollectorDescriptor.metrics` unchanged. Exactly one instance exists per
 process — the library never constructs one, it takes the one below.
+
+**Every gauge is a `LastValueGauge`, never `meter.create_gauge`.** OTel's
+synchronous gauge is *consumed* by a collection, so a value written on a
+capture cadence is absent from every scrape that does not immediately follow
+one — and PromQL cannot tell an absent series from a healthy idle one. Counters
+are fine as they are; only gauges need the wrapper.
 """
 
-from collector_core.metrics import CollectorMetrics
+from collector_core.metrics import CollectorMetrics, LastValueGauge
 from opentelemetry import metrics as otel_metrics
 
 COLLECTOR = "%%name%%"
@@ -425,7 +431,8 @@ class %%class_prefix%%Metrics(CollectorMetrics):
         # because coverage is computed against the same input that drove the
         # fetch. If there genuinely is no such series, delete the subclass and
         # use `metrics = CollectorMetrics(COLLECTOR)` (weather does).
-        self._rows_captured = meter.create_gauge(
+        self._rows_captured = LastValueGauge(
+            meter,
             "%%pkg%%_rows_captured",
             description="Rows captured in the last pass, by collector.",
         )
@@ -435,7 +442,8 @@ class %%class_prefix%%Metrics(CollectorMetrics):
 
         An absent Prometheus series and a healthy one are indistinguishable in
         PromQL, so a gauge only written when it is interesting cannot be
-        alerted on.
+        alerted on. `LastValueGauge` is the other half of that: it keeps the
+        series present on every scrape, not only the one after this call.
         """
         self._rows_captured.set(count, {"collector": self.collector})
 

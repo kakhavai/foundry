@@ -20,7 +20,7 @@ to be its own series to be alertable.
 — the library never constructs one, it takes the one below.
 """
 
-from collector_core.metrics import CollectorMetrics
+from collector_core.metrics import CollectorMetrics, LastValueGauge
 from opentelemetry import metrics as otel_metrics
 
 COLLECTOR = "depth-chart"
@@ -30,14 +30,16 @@ class DepthChartMetrics(CollectorMetrics):
     def __init__(self, collector: str = COLLECTOR) -> None:
         super().__init__(collector)
         meter = otel_metrics.get_meter(collector)
-        self._stale_charts = meter.create_gauge(
+        self._stale_charts = LastValueGauge(
+            meter,
             "depth_chart_stale_charts",
             description=(
                 "(team, position) groups whose chart_published_at is older than "
                 "the staleness threshold, by collector."
             ),
         )
-        self._charted_players = meter.create_gauge(
+        self._charted_players = LastValueGauge(
+            meter,
             "depth_chart_charted_players",
             description="Charted players in the last pass, by collector.",
         )
