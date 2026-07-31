@@ -11,29 +11,37 @@ a loud error, not look like a quiet week.
 
 from collections.abc import Mapping
 
-# TODO: declare the filters this collector's rows actually support.
-# Do not list one you do not implement below — the router will accept it and
-# `signal_matches` will ignore it, which returns everything and looks like a
-# working filter.
+# The phase doc's `/signals` filters for this collector are `season`, `week`,
+# `player_id` and `team`. `game_id` and `position` are added because both are
+# first-class keys on every emitted row — a player traded mid-season yields one
+# row per game, so `game_id` is how a consumer pins the one it means.
+#
+# Nothing here is declared that `signal_matches` does not implement: the router
+# would accept it, the predicate would ignore it, and the response would return
+# everything — which looks exactly like a working filter.
 SUPPORTED_FILTERS: tuple[str, ...] = (
     "season",
     "week",
     "signal_type",
-    "key",
+    "player_id",
+    "game_id",
+    "team",
+    "position",
 )
 
 # The subset of the above this module filters on: the universal three are
 # already applied by the router before a row reaches here.
-ROW_FILTERS: tuple[str, ...] = ("key",)
+ROW_FILTERS: tuple[str, ...] = ("player_id", "game_id", "team", "position")
 
 
 def signal_matches(row: dict, params: Mapping[str, str]) -> bool:
     """Whether one signal row satisfies the collector-specific query params.
 
     `params` values arrive from the query string and are therefore **always
-    strings**, while a row's value may well be an int. Comparing them directly
-    makes `?week_index=3` silently match nothing. `str()` on the row side is
-    the fix, and forgetting it is the single most common bug in this function.
+    strings**. Every field filtered here happens to be a string on the row as
+    well, but `str()` on the row side is kept anyway: it costs nothing and it
+    is the single most common bug in this function the day somebody adds an
+    integer field to `ROW_FILTERS`.
     """
     for key in ROW_FILTERS:
         if key in params and str(row.get(key)) != params[key]:

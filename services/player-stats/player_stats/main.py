@@ -1,4 +1,4 @@
-"""player-stats's process wiring: the descriptor, and nothing else yet.
+"""player-stats' process wiring: the descriptor, and `GET /revisions`.
 
 Everything else — environment parsing, `CaptureState`, the capture loop, bearer
 auth, the OTel guard and the standard five routes — lives in
@@ -15,6 +15,7 @@ from .capture import (
     capture_player_stats,
 )
 from .metrics import metrics
+from .revisions import revisions_view
 from .signals import SUPPORTED_FILTERS, signal_matches
 
 app = build_collector_app(
@@ -28,23 +29,28 @@ app = build_collector_app(
         metrics=metrics,
         # No `telemetry_module`: it defaults to `collector_core.telemetry`, the
         # fleet's shared wiring, resolved by importlib INSIDE the
-        # OTEL_EXPORTER_OTLP_ENDPOINT guard. Do not write a telemetry.py, and
-        # never pass a callable here — an already-bound function defeats the
-        # guard while every test stays green.
+        # OTEL_EXPORTER_OTLP_ENDPOINT guard.
         #
-        # No `next_event_at`: the loop runs on its cadence class's base
-        # interval and never escalates. Add one only if this collector has a
-        # genuinely perishable moment to escalate toward — weather's
-        # `next_kickoff` is the only example in the fleet.
+        # No `next_event_at`: a box score is not perishable. It is published
+        # once a game ends and only ever restated afterwards, so the weekly
+        # cadence's base interval is the whole schedule and there is nothing to
+        # escalate toward.
     )
 )
 
-# Routes beyond the standard five go below this line, as plain `@app.get` /
-# `@app.post` handlers. Reach the lake and the collector name through
-# `app.state.collector_spec` — never a module-level global, which only this
-# file could see. Anything that touches the lake must be offloaded with
-# `asyncio.to_thread` (or `collector_core.lake`'s awrite/aread/alist_keys);
-# the lake you are handed refuses a synchronous call from the loop thread.
-#
-# Remember to publish any new path in this collector's Helm values under
-# `gateway.publicPaths`, or it 404s at the gateway while working in-cluster.
+
+@app.get("/revisions")
+async def revisions(
+    since: str | None = None, season: int | None = None, week: int | None = None
+):
+    """Restated `(game_id, player_id, revision)` tuples, so the generator can
+    invalidate cached features without re-reading the whole week.
+
+    Validation, the lake scan and the payload shaping all live in
+    `revisions.py`; this reaches the lake and the collector name through
+    `app.state.collector_spec` rather than a module-level global, so the route
+    sees the same objects a capture just replaced.
+    """
+    return await revisions_view(
+        app.state.collector_spec, since=since, season=season, week=week
+    )

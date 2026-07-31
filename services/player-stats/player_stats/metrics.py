@@ -1,17 +1,27 @@
-"""player-stats's binding to the shared collector metrics.
+"""player-stats' binding to the shared collector metrics.
 
-A subclass rather than a bare `CollectorMetrics(COLLECTOR)` instance, and
-deliberately **not** consolidated into `collector-core`: the fleet-wide series
-(`collector_capture_*`, `collector_coverage_ratio`, `collector_staleness_
-seconds`) belong to the library, and the series that answer "is THIS collector
-wrong in the way only it can be wrong" belong here. A metric only one service
-records must not grow into the shared library — see player-identity's
-`identity_merge_conflicts` and roster-scope's `scope_missed_producers` for what
-that looks like when it is real.
+A subclass rather than a bare `CollectorMetrics(COLLECTOR)`, and deliberately
+**not** consolidated into `collector-core`: the fleet-wide series
+(`collector_capture_*`, `collector_coverage_ratio`,
+`collector_staleness_seconds`) belong to the library, and the series that
+answer "is THIS collector wrong in the way only it can be wrong" belong here.
 
-`PlayerStatsMetrics` is still a `CollectorMetrics`, so it satisfies
-`CollectorDescriptor.metrics` unchanged. Exactly one instance exists per
-process — the library never constructs one, it takes the one below.
+Both series below are named by the Phase 8 spec, and both catch something
+`collector_coverage_ratio` structurally cannot:
+
+- `player_stats_restatements_total` — the spec's own alert: "spiking outside
+  the normal Monday-to-Wednesday window, which usually means an adapter is
+  re-emitting unchanged rows as new revisions". Every one of those re-emissions
+  is a *present* row, so coverage stays at 1.0 while the lake fills with
+  fictional corrections.
+- `player_stats_identity_misses` — a box-score row whose upstream id did not
+  cross-walk to a canonical `player_id`. The phase doc calls this "the failure
+  most likely to go unnoticed for a season": a capture that resolves 97% of
+  rows looks completely healthy on every other metric.
+
+Both are recorded on **every** pass, including zero. An absent Prometheus
+series and a healthy one are indistinguishable in PromQL, so a value only
+written when it is interesting cannot be alerted on.
 """
 
 from collector_core.metrics import CollectorMetrics
@@ -24,24 +34,31 @@ class PlayerStatsMetrics(CollectorMetrics):
     def __init__(self, collector: str = COLLECTOR) -> None:
         super().__init__(collector)
         meter = otel_metrics.get_meter(collector)
-        # PLACEHOLDER. Replace with the series that make THIS collector's own
-        # failure mode visible — the one `collector_coverage_ratio` cannot see
-        # because coverage is computed against the same input that drove the
-        # fetch. If there genuinely is no such series, delete the subclass and
-        # use `metrics = CollectorMetrics(COLLECTOR)` (weather does).
-        self._rows_captured = meter.create_gauge(
-            "player_stats_rows_captured",
-            description="Rows captured in the last pass, by collector.",
+        # A counter, not a gauge: the spec alerts on the *rate* of
+        # restatements, and OTel renders this as
+        # `player_stats_restatements_total`.
+        self._restatements = meter.create_counter(
+            "player_stats_restatements",
+            description=(
+                "Rows whose counting stats changed against the previous "
+                "snapshot, by collector."
+            ),
+        )
+        self._identity_misses = meter.create_gauge(
+            "player_stats_identity_misses",
+            description=(
+                "Box-score rows in the last pass whose upstream id did not "
+                "resolve to a canonical player_id, by collector."
+            ),
         )
 
-    def rows_captured(self, count: int) -> None:
-        """Record every pass, including zero.
+    def restatements(self, count: int) -> None:
+        """Record every pass, including zero — `add(0)` keeps the series alive
+        so a quiet week is distinguishable from a collector that stopped."""
+        self._restatements.add(count, {"collector": self.collector})
 
-        An absent Prometheus series and a healthy one are indistinguishable in
-        PromQL, so a gauge only written when it is interesting cannot be
-        alerted on.
-        """
-        self._rows_captured.set(count, {"collector": self.collector})
+    def identity_misses(self, count: int) -> None:
+        self._identity_misses.set(count, {"collector": self.collector})
 
 
 metrics = PlayerStatsMetrics()
