@@ -1,9 +1,9 @@
-"""roster-transactions's five-route contract surface, plus auth.
+"""roster-transactions's five-route contract surface, plus `/events` and auth.
 
-The routes themselves are `collector_core.routes`' and are proved there against
-a fake collector. What this file proves is that THIS service is wired to them —
-that its descriptor reaches `/catalog`, that its own `signal_matches` is
-consulted, and that auth is mounted.
+The five routes themselves are `collector_core.routes`' and are proved there
+against a fake collector. What this file proves is that THIS service is wired to
+them — that its descriptor reaches `/catalog`, that its own `signal_matches` is
+consulted, and that auth is mounted — plus the one route beyond the five.
 """
 
 import time
@@ -11,6 +11,7 @@ import time
 from collector_core.envelope import ENVELOPE_VERSION
 
 from roster_transactions.capture import SIGNAL_TYPES
+from roster_transactions.events import MAX_LIMIT
 
 from .conftest import TEST_TOKEN
 
@@ -64,7 +65,8 @@ def test_signals_is_empty_before_any_capture(client):
 
 
 def test_an_undeclared_filter_is_422_not_ignored(client):
-    """A silently ignored filter returns everything and looks like it worked."""
+    """A silently ignored filter returns everything and looks like it worked —
+    and for an event stream, 'everything' and 'a busy week' look alike."""
     assert client.get("/signals?not_a_filter=x").status_code == 422
 
 
@@ -96,10 +98,24 @@ def test_a_row_filter_narrows_the_signals(client):
     client.post("/refresh", json={})
     wait_for_signals(client, count=len(SIGNAL_TYPES))
 
-    body = client.get("/signals?key=placeholder-a").json()
+    body = client.get("/signals?transaction_type=ps_elevation").json()
     rows = [row for envelope in body["envelopes"] for row in envelope["signals"]]
-    assert rows, "the filter matched nothing — is ROW_FILTERS wired up?"
-    assert {row["key"] for row in rows} == {"placeholder-a"}
+    assert len(rows) == 1, rows
+    assert {row["transaction_type"] for row in rows} == {"ps_elevation"}
+
+
+def test_the_team_filter_matches_both_sides_of_a_move(client):
+    """A transaction is an edge between two rosters. Matching only `to_team`
+    would hide every player a team LOST, which is the half that breaks a depth
+    chart."""
+    client.post("/refresh", json={})
+    wait_for_signals(client, count=len(SIGNAL_TYPES))
+
+    departures = client.get("/signals?team=SF").json()
+    rows = [row for envelope in departures["envelopes"] for row in envelope["signals"]]
+    assert len(rows) == 1, rows
+    assert rows[0]["from_team"] == "SF"
+    assert rows[0]["to_team"] is None
 
 
 def test_a_data_route_without_a_token_is_401(client):
@@ -121,3 +137,57 @@ def test_an_absent_token_env_fails_closed_with_503(client, monkeypatch):
     collector. The ArgoCD Application stays Healthy either way."""
     monkeypatch.setenv("COLLECTOR_TOKEN", "")
     assert client.get("/signals").status_code == 503
+
+
+def test_events_requires_a_token_too(client):
+    """The extra route is mounted after `build_collector_app`, so it inherits
+    the bearer middleware rather than declaring its own. Proving that is the
+    point: a route added later must be protected by default."""
+    assert client.get("/events", headers={"Authorization": ""}).status_code == 401
+
+
+def test_events_is_empty_before_any_capture(client):
+    assert client.get("/events").json() == {
+        "events": [],
+        "count": 0,
+        "next_cursor": None,
+    }
+
+
+def test_events_pages_through_the_captured_stream(client):
+    """Cursor paging end to end: page, resume, exhaust."""
+    client.post("/refresh", json={})
+    wait_for_signals(client, count=len(SIGNAL_TYPES))
+
+    first = client.get("/events?limit=2").json()
+    assert first["count"] == 2
+    assert first["next_cursor"], "a full page must hand back a resume point"
+
+    second = client.get(f"/events?limit=2&since={first['next_cursor']}").json()
+    assert second["count"] == 1
+    assert second["next_cursor"] is None, "an exhausted stream ends the cursor"
+
+    seen = [row["transaction_id"] for row in first["events"] + second["events"]]
+    assert len(seen) == 3
+    assert len(set(seen)) == 3, "paging must neither repeat nor drop a row"
+
+
+def test_events_orders_by_announced_at(client):
+    client.post("/refresh", json={})
+    wait_for_signals(client, count=len(SIGNAL_TYPES))
+
+    body = client.get("/events").json()
+    announced = [row["announced_at"] for row in body["events"]]
+    assert len(announced) == 3
+    assert announced == sorted(announced)
+
+
+def test_events_rejects_a_malformed_cursor(client):
+    """A cursor this collector did not issue is a client bug, and 422 says so.
+    Silently restarting from the beginning would re-deliver a whole week."""
+    assert client.get("/events?since=garbage").status_code == 422
+
+
+def test_events_rejects_an_out_of_range_limit(client):
+    assert client.get("/events?limit=0").status_code == 422
+    assert client.get(f"/events?limit={MAX_LIMIT + 1}").status_code == 422

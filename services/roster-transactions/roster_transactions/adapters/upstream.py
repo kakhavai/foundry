@@ -132,9 +132,20 @@ def _placeholder_manifest(season: int, week: int, now: datetime) -> CoverageWind
     collector with no upstream should report *honest* coverage — it really did
     cover everything its (empty) feed claimed — rather than an alarm nobody can
     act on.
+
+    `max` because a scoped week can legitimately be in the *future*: a cluster
+    running in July with `CAPTURE_WEEK=1` is polling a window that has not
+    opened. Nothing has elapsed, so nothing can be acknowledged, and the
+    watermark clamps to the window's own start rather than preceding it — which
+    `CoverageWindow` refuses outright. The pass then reports coverage 0.0,
+    which is the honest reading of "no interval of this week has been covered
+    yet" and exactly what `windows.py` argues 0/0 must never be allowed to read
+    as instead.
     """
     start, _ = week_window(season, week)
-    return CoverageWindow(covers_from=start, covers_through=now, feed_url="")
+    return CoverageWindow(
+        covers_from=start, covers_through=max(start, now), feed_url=""
+    )
 
 
 # DELETE ME along with the branch in `stream_rows`. Deterministic, offline, and

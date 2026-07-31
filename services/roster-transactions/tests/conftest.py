@@ -5,8 +5,10 @@ collector-core's dev dependencies inside `services/`, so a moto import passes
 locally off a shared virtualenv and fails only in CI.
 """
 
-from datetime import UTC, datetime
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 from collector_core.envelope import ENVELOPE_VERSION, Envelope
 from collector_core.lake import lake_key
@@ -15,14 +17,19 @@ from opentelemetry import metrics as otel_metrics
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider
 
+from roster_transactions.adapters.upstream import CoverageWindow
+from roster_transactions.capture import capture_roster_transactions
 from roster_transactions.main import app
+from roster_transactions.windows import week_window
 
 TEST_TOKEN = "test-collector-token"
 
 # One frozen instant the whole suite describes. `Envelope` rejects a naive
 # datetime rather than assuming UTC — guessing puts a wrong instant into an
-# append-only lake nobody rewrites.
-NOW = datetime(2026, 9, 15, 12, 0, tzinfo=UTC)
+# append-only lake nobody rewrites. Deliberately inside week 1's own window
+# (see `windows.week_window`) so the placeholder rows the scaffolded adapter
+# emits land in the week the tests capture.
+NOW = week_window(2026, 1)[0] + timedelta(days=4)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -101,3 +108,58 @@ class SpyLake:
 @pytest.fixture
 def lake() -> SpyLake:
     return SpyLake()
+
+
+def fake_window(
+    covers_from: datetime, covers_through: datetime, feed_url: str = "https://feed"
+) -> CoverageWindow:
+    """A manifest acknowledging exactly `[covers_from, covers_through]`.
+
+    The acknowledged window is the number the whole coverage block turns on, so
+    the suite sets it explicitly rather than letting a fixture imply it.
+    """
+    return CoverageWindow(
+        covers_from=covers_from, covers_through=covers_through, feed_url=feed_url
+    )
+
+
+async def capture_with(
+    monkeypatch,
+    *,
+    rows: Iterable[dict],
+    now: datetime,
+    covers_through: datetime,
+    season: int = 2026,
+    week: int = 1,
+    lake: SpyLake | None = None,
+    deadline: datetime | None = None,
+) -> dict[str, Envelope]:
+    """Run the **real** capture path against a stated window and row set.
+
+    Both halves of the upstream are faked at the adapter seam rather than over
+    HTTP, so what is under test is the orchestration — coverage accounting,
+    envelopes, the lake — and not a mock of httpx.
+    """
+    start, _ = week_window(season, week)
+
+    async def manifest(*args, **kwargs):
+        # `min` because a week that has not started yet is a real case: the
+        # upstream cannot acknowledge through an instant earlier than the
+        # window it opens at, and `CoverageWindow` refuses that pair outright.
+        return fake_window(min(start, covers_through), covers_through)
+
+    async def stream(*args, **kwargs):
+        for row in rows:
+            yield row
+
+    monkeypatch.setattr("roster_transactions.capture.fetch_manifest", manifest)
+    monkeypatch.setattr("roster_transactions.capture.stream_rows", stream)
+    async with httpx.AsyncClient() as client:
+        return await capture_roster_transactions(
+            season,
+            week,
+            client=client,
+            lake=lake if lake is not None else SpyLake(),
+            now=now,
+            deadline=deadline,
+        )
