@@ -65,9 +65,15 @@ object, which the spec names as part of complete coverage in its own right.
 
 - total outage → `0 / 384`, ratio **0.00**
 - truncated document → `100 / 384`, ratio **0.26**
-- a healthy week observes *more* than 384 keys, because this collector captures
-  every offensive-skill player the feed carries rather than only the ~352 in
-  scope. The floor raises a short count and never lowers a genuine one.
+- a real week runs **just under** the floor: 2024 week 1 measured `375 / 384`,
+  ratio **0.977**, because a handful of watchlist slots legitimately record no
+  stat line at all and nflverse omits the row. That is honest coverage, not a
+  fault — but it does mean `errors` carries `below_expected_floor` on a normal
+  week. **Alert on the ratio, not on the presence of that entry**: truncation
+  reads ~0.26 and an outage reads 0.00, so the two are nowhere near each other.
+
+The floor raises a short count and never lowers a genuine one, so a week where
+more than 384 keys are observed still reports honestly.
 
 ## Scope awareness
 
