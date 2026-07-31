@@ -30,7 +30,16 @@ def test_fixture_conforms_to_the_envelope_contract(fixture):
 
 
 def test_every_fixture_declares_a_known_collector():
-    known = {"weather", "player-identity", "roster-scope"}
+    """Derived from `contracts/signal-envelope/collectors/`, not hand-listed.
+
+    The literal set this replaced was a shared line that every new collector
+    had to append to, which is a guaranteed merge conflict when several land in
+    one wave — and the same reasoning that makes the registry append-only. The
+    directory is the authority on which collectors have a committed field
+    schema, and a fixture naming one that does not is exactly what this asserts.
+    """
+    known = {path.stem for path in COLLECTORS_DIR.glob("*.json")}
+    assert known, "no per-collector field schemas — the check below is vacuous"
     for fixture in FIXTURES:
         body = json.loads(fixture.read_text())
         assert body["collector"] in known, fixture.name

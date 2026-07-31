@@ -1,0 +1,160 @@
+{
+  "captured_at": "2026-09-15T12:00:00Z",
+  "collector": "injury-report",
+  "coverage": {
+    "expected": 96,
+    "missing": [
+      "LV:friday",
+      "LV:thursday",
+      "LV:wednesday"
+    ],
+    "present": 93
+  },
+  "envelope_version": "1",
+  "errors": [
+    {
+      "detail": "LV:wednesday",
+      "reason": "report_not_published"
+    },
+    {
+      "detail": "LV:thursday",
+      "reason": "report_not_published"
+    },
+    {
+      "detail": "LV:friday",
+      "reason": "report_not_published"
+    }
+  ],
+  "scope": {
+    "season": 2026,
+    "week": 1
+  },
+  "signal_type": "player_injury_status",
+  "signals": [
+    {
+      "absence_reason": "injury",
+      "body_part": "hamstring",
+      "body_part_raw": "left hamstring strain",
+      "designation_history": [
+        {
+          "designation": "out",
+          "published_at": "2026-09-18T21:00:00Z"
+        }
+      ],
+      "game_designation": "out",
+      "game_id": "2026_01_ARI_ATL",
+      "is_final_report": true,
+      "is_non_injury": false,
+      "player_id": "fdy-31c3d6badd7a",
+      "practice_participation": [
+        {
+          "day_label": "wednesday",
+          "is_estimated": false,
+          "participation": "dnp",
+          "practice_date": "2026-09-16"
+        },
+        {
+          "day_label": "thursday",
+          "is_estimated": false,
+          "participation": "dnp",
+          "practice_date": "2026-09-17"
+        },
+        {
+          "day_label": "friday",
+          "is_estimated": false,
+          "participation": "dnp",
+          "practice_date": "2026-09-18"
+        }
+      ],
+      "report_published_at": "2026-09-18T21:00:00Z",
+      "roster_status": "active",
+      "side_of_ball": "offense",
+      "team": "ARI"
+    },
+    {
+      "absence_reason": "injury",
+      "body_part": "knee",
+      "body_part_raw": "knee",
+      "designation_history": [
+        {
+          "designation": "questionable",
+          "published_at": "2026-09-18T21:00:00Z"
+        }
+      ],
+      "game_designation": "questionable",
+      "game_id": "2026_01_ARI_ATL",
+      "is_final_report": true,
+      "is_non_injury": false,
+      "player_id": "fdy-10fb659f3c40",
+      "practice_participation": [
+        {
+          "day_label": "wednesday",
+          "is_estimated": false,
+          "participation": "limited",
+          "practice_date": "2026-09-16"
+        },
+        {
+          "day_label": "thursday",
+          "is_estimated": false,
+          "participation": "limited",
+          "practice_date": "2026-09-17"
+        },
+        {
+          "day_label": "friday",
+          "is_estimated": false,
+          "participation": "limited",
+          "practice_date": "2026-09-18"
+        }
+      ],
+      "report_published_at": "2026-09-18T21:00:00Z",
+      "roster_status": "active",
+      "side_of_ball": "defense",
+      "team": "ARI"
+    },
+    {
+      "absence_reason": "rest",
+      "body_part": "unspecified",
+      "body_part_raw": "not injury related",
+      "designation_history": [
+        {
+          "designation": "none",
+          "published_at": "2026-09-18T21:00:00Z"
+        }
+      ],
+      "game_designation": "none",
+      "game_id": "2026_01_ARI_ATL",
+      "is_final_report": true,
+      "is_non_injury": true,
+      "player_id": "fdy-adf69f98ed24",
+      "practice_participation": [
+        {
+          "day_label": "wednesday",
+          "is_estimated": false,
+          "participation": "full",
+          "practice_date": "2026-09-16"
+        },
+        {
+          "day_label": "thursday",
+          "is_estimated": false,
+          "participation": "full",
+          "practice_date": "2026-09-17"
+        },
+        {
+          "day_label": "friday",
+          "is_estimated": false,
+          "participation": "full",
+          "practice_date": "2026-09-18"
+        }
+      ],
+      "report_published_at": "2026-09-18T21:00:00Z",
+      "roster_status": "active",
+      "side_of_ball": "offense",
+      "team": "ARI"
+    }
+  ],
+  "upstream": {
+    "adapter": "league-injury-report",
+    "fetched_at": "2026-09-15T12:00:00Z",
+    "source_ref": null
+  }
+}
