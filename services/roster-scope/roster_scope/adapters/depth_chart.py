@@ -165,8 +165,12 @@ class _ChartAccumulator:
 
     2. The feed is a **time series of snapshots**, not one snapshot: the same
        player appears once per `dt`, going back over the season. Only the
-       newest row for each `(team, position, rank)` is kept, so what comes out
-       is the *current* chart rather than its whole history.
+       newest row for each `(team, RAW position label, rank)` is kept, so
+       what comes out is the *current* chart rather than its whole history.
+       Raw label, not `canonical_position` -- see the `__init__` comment on
+       `_newest` for why keying on the canonical form silently collapses
+       distinct alias groups (`LT`/`LG`/`C`/`RG`/`RT` all -> `OL`) into one
+       slot.
 
     Without both, streaming alone is not enough: the retained rows OOM-killed
     a 256Mi pod even after the body stopped being buffered. With them, the
@@ -175,8 +179,25 @@ class _ChartAccumulator:
 
     def __init__(self, fetched_at: datetime) -> None:
         self._fetched_at = fetched_at
-        # (team, canonical position, rank) -> (row, dt). One entry per slot,
+        # (team, RAW position label, rank) -> (row, dt). One entry per slot,
         # holding whichever snapshot is newest.
+        #
+        # Keyed on the raw label, not `canonical_position`. Task 4 widened
+        # `POSITION_ALIASES` so several raw labels collapse into one
+        # canonical group (`LT/LG/C/RG/RT` -> `OL`, `FS/SS` -> `S`,
+        # `WLB/MLB/SLB` -> `LB`). A feed that labels each lineman
+        # positionally -- `pos_rank` counted within its own label, so every
+        # one of the five is rank 1 -- would hash all five to the same
+        # `(team, "OL", 1)` key under the canonical form, and four of them
+        # would silently lose to "newest wins" even though they are five
+        # distinct, simultaneously-current players, not five snapshots of
+        # one slot. Keying on the label the feed actually printed keeps
+        # every raw label its own slot, so aliasing two labels into one
+        # canonical group (a modelling decision made downstream, in
+        # `ordered_candidates`/`resolve_matchup_slots`) can never again
+        # collide two real rows at ingest. `result()` still reports
+        # `position_raw` on every row, so nothing downstream needs to know
+        # the key changed.
         self._newest: dict[tuple[str, str, int], tuple[DepthChartRow, datetime]] = {}
         self._freshest: dict[str, datetime] = {}
         self._index: dict[str, int] | None = None
@@ -228,7 +249,10 @@ class _ChartAccumulator:
         # Filter 2: newest snapshot wins for this slot. `>=` rather than `>`
         # so that when a feed repeats a `dt` the later line is authoritative,
         # matching how a reader scanning top-to-bottom would resolve it.
-        key = (team, position, depth_order)
+        # `position_raw`, not `position` (the canonicalized form) -- see the
+        # `_newest` field comment in `__init__` for why keying on the
+        # canonical group silently collapses distinct alias groups.
+        key = (team, position_raw, depth_order)
         existing = self._newest.get(key)
         if existing is not None and captured < existing[1]:
             return
@@ -249,7 +273,7 @@ class _ChartAccumulator:
 
     def result(self) -> dict[str, DepthChart]:
         rows_by_team: dict[str, list[DepthChartRow]] = {}
-        for (team, _position, _rank), (row, captured) in self._newest.items():
+        for (team, _position_raw, _rank), (row, captured) in self._newest.items():
             rows_by_team.setdefault(team, []).append(row)
             # Freshness is taken from the rows actually kept, so it describes
             # the chart being returned rather than the oldest snapshot the

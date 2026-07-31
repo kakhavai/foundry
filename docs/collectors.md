@@ -232,11 +232,35 @@ attached, never a skipped row — a skipped row shrinks the numerator and the
 denominator together and reads as perfect coverage.
 
 Successful resolutions are cached **per `IdentityClient` instance**, keyed on
-`(crosswalk_version, query)` — construct one per capture pass, not one at
-import time, or a republished crosswalk mid-season never invalidates the
-cache. Unresolved queries are deliberately never cached: a miss today may
-become a hit once `player-identity` republishes, and caching the refusal would
-pin that gap in place until the process restarts.
+`(crosswalk_version, query)`. That key only pays for itself if the instance
+outlives a single capture pass — **build one per collector process and reuse
+it across every pass**, the same lifetime as the `httpx.AsyncClient` a
+collector's `client_factory` already hands it. A fresh instance every pass
+starts with an empty cache regardless of `crosswalk_version`, which makes the
+version-keyed invalidation this cache exists for unreachable — every lookup
+would miss on construction alone, version or no version. (An earlier revision
+of this doc said the opposite — "construct one per capture pass" — which was
+exactly backwards for this reason.) Unresolved queries are deliberately never
+cached: a miss today may become a hit once `player-identity` republishes, and
+caching the refusal would pin that gap in place until the process restarts.
+
+**`crosswalk_version` has no source today.** The cache is keyed on it and
+unit-tested against it, but nothing a caller can call gives it a value to
+pass: `POST /resolve/batch`'s response is `{results, count, resolved_count,
+unresolved_count}` — no timestamp, no version, nothing to key a cache
+invalidation on. So today every long-lived `IdentityClient` either passes
+`None` (functionally: cache forever, for the life of the process) or a
+caller-invented constant that `player-identity` never confirms or refutes.
+The parameter and the tests that exercise it (`test_a_new_crosswalk_version_
+invalidates_the_cache`, `test_a_crosswalk_version_change_on_the_same_client_
+invalidates_the_cache`) are correct as a mechanism — a real version, once one
+exists, invalidates the cache exactly as designed — but the mechanism is
+inert until `player-identity` exposes something to drive it with. That is not
+this seam's gap to close: it would need a new field on the resolve response
+or a new endpoint, and speculatively adding one here without `player-identity`
+side to back it would be documenting a contract that does not exist. Until
+then, treat `crosswalk_version` as forward-looking wiring, not a working
+invalidation path.
 
 ---
 

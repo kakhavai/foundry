@@ -186,6 +186,47 @@ def test_scope_rules_lists_every_configured_rule(client):
     assert all(r["produced_zero_slots"] for r in body["rules"])
 
 
+def test_scope_rules_includes_matchup_rules(client, seeded_matchup_state):
+    """The whole reason `/scope/rules` exists is to catch a rule silently
+    matching nothing -- that applies to the matchup scope (Task 6) exactly
+    as much as the player scope, and it was invisible here until now."""
+    body = client.get("/scope/rules").json()
+    matchup_rules = {r["rule_id"]: r for r in body["matchup_rules"]}
+    assert set(matchup_rules) == {
+        "cb_matchup_le_4",
+        "s_matchup_le_3",
+        "lb_matchup_le_3",
+        "dl_matchup_le_4",
+        "ol_matchup_le_5",
+    }
+    # seeded_matchup_state populates two CB slots and nothing else.
+    assert matchup_rules["cb_matchup_le_4"]["slots_filled"] == 2
+    assert matchup_rules["cb_matchup_le_4"]["produced_zero_slots"] is False
+    assert matchup_rules["cb_matchup_le_4"]["slots_expected"] == 32 * 4
+    assert matchup_rules["s_matchup_le_3"]["slots_filled"] == 0
+    assert matchup_rules["s_matchup_le_3"]["produced_zero_slots"] is True
+
+
+def test_scope_rules_matchup_rules_is_empty_shaped_before_any_capture(client):
+    """No matchup envelope yet must still yield a well-formed response --
+    every rule present, all reading zero -- rather than a missing key or a
+    500."""
+    body = client.get("/scope/rules").json()
+    assert len(body["matchup_rules"]) == 5
+    assert all(r["produced_zero_slots"] for r in body["matchup_rules"])
+
+
+def test_scope_rules_player_and_matchup_lists_stay_independent(
+    client, seeded_state, seeded_matchup_state
+):
+    """The player scope's `rules` must not pick up matchup rule ids, and vice
+    versa -- two separate `CoverageAccumulator`s, two separate lists."""
+    body = client.get("/scope/rules").json()
+    player_rule_ids = {r["rule_id"] for r in body["rules"]}
+    matchup_rule_ids = {r["rule_id"] for r in body["matchup_rules"]}
+    assert player_rule_ids.isdisjoint(matchup_rule_ids)
+
+
 def test_scope_diff_returns_transitions_in_the_half_open_range(client, seeded_state):
     body = client.get("/scope/diff?from=1&to=3").json()
     assert body["count"] == 2

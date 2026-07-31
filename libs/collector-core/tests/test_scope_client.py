@@ -31,6 +31,37 @@ def _envelope(captured_at: str, player_ids: list[str]) -> dict:
     }
 
 
+def _envelope_with_status(captured_at: str, rows: list[tuple[str, str]]) -> dict:
+    """Like `_envelope`, but each row also carries `membership_status`."""
+    return {
+        "captured_at": captured_at,
+        "signals": [
+            {"player_id": pid, "membership_status": status} for pid, status in rows
+        ],
+    }
+
+
+class WeekAwareFakeLake:
+    """Like `FakeLake`, but `list_keys` actually respects the `week` it is
+    given -- `FakeLake` returns the same fixed key list regardless of which
+    week is asked for, which cannot exercise a `week - 1` fallback."""
+
+    def __init__(self, keys_by_week: dict[int, list[str]], objects: dict):
+        self._keys_by_week = keys_by_week
+        self._objects = objects
+        self.list_calls = []
+
+    def list_keys(self, collector, signal_type, season, week, version="1"):
+        self.list_calls.append((collector, signal_type, season, week))
+        return list(self._keys_by_week.get(week, []))
+
+    def read(self, key):
+        return self._objects[key]
+
+    def write(self, envelope):  # pragma: no cover - unused here
+        raise AssertionError("ScopeClient must never write")
+
+
 @pytest.mark.asyncio
 async def test_fetch_returns_the_newest_envelopes_members():
     keys = [
@@ -91,6 +122,164 @@ async def test_fetch_asks_the_lake_for_the_right_partition():
     await ScopeClient(lake).fetch("scope_matchup_weekly", 2026, 4)
 
     assert lake.list_calls == [("roster-scope", "scope_matchup_weekly", 2026, 4)]
+
+
+@pytest.mark.asyncio
+async def test_fetch_falls_back_to_last_week_when_this_weeks_partition_is_missing():
+    """At every week rollover, `roster-scope`'s weekly capture has not landed
+    yet for consumers running hourly-to-volatile. Without this fallback
+    every collector fails closed for the whole gap even though last week's
+    scope is sitting right there in the lake and is ~99% correct."""
+    week4_key = (
+        "signals/roster-scope/v1/season=2026/week=04/"
+        "2026-09-23T00:00:00Z-scope_membership_weekly.json"
+    )
+    lake = WeekAwareFakeLake(
+        keys_by_week={4: [week4_key]},
+        objects={week4_key: _envelope("2026-09-23T00:00:00Z", ["fdy-a"])},
+    )
+
+    scope = await ScopeClient(lake).fetch("scope_membership_weekly", 2026, 5)
+
+    assert scope.members == frozenset({"fdy-a"})
+    assert scope.captured_at == datetime(2026, 9, 23, tzinfo=UTC)
+    assert lake.list_calls == [
+        ("roster-scope", "scope_membership_weekly", 2026, 5),
+        ("roster-scope", "scope_membership_weekly", 2026, 4),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_falls_back_when_this_weeks_envelope_is_empty():
+    """A total capture failure for the current week still writes a
+    `present: 0` envelope (`roster_scope.capture.capture_scope`'s
+    ledger-unavailable path) rather than nothing at all -- that must fall
+    back exactly like a missing partition does, or the fallback never fires
+    for the failure mode it exists for."""
+    week5_key = (
+        "signals/roster-scope/v1/season=2026/week=05/"
+        "2026-09-30T00:00:00Z-scope_membership_weekly.json"
+    )
+    week4_key = (
+        "signals/roster-scope/v1/season=2026/week=04/"
+        "2026-09-23T00:00:00Z-scope_membership_weekly.json"
+    )
+    lake = WeekAwareFakeLake(
+        keys_by_week={5: [week5_key], 4: [week4_key]},
+        objects={
+            week5_key: _envelope("2026-09-30T00:00:00Z", []),
+            week4_key: _envelope("2026-09-23T00:00:00Z", ["fdy-a"]),
+        },
+    )
+
+    scope = await ScopeClient(lake).fetch("scope_membership_weekly", 2026, 5)
+
+    assert scope.members == frozenset({"fdy-a"})
+
+
+@pytest.mark.asyncio
+async def test_fetch_does_not_fall_back_past_one_week():
+    """Two weeks stale is a different judgement than one -- the fallback
+    stops at `week - 1` and must raise rather than reaching for `week - 2`,
+    even though a usable scope exists there too."""
+    week3_key = (
+        "signals/roster-scope/v1/season=2026/week=03/"
+        "2026-09-16T00:00:00Z-scope_membership_weekly.json"
+    )
+    lake = WeekAwareFakeLake(
+        keys_by_week={3: [week3_key]},
+        objects={week3_key: _envelope("2026-09-16T00:00:00Z", ["fdy-old"])},
+    )
+
+    with pytest.raises(ScopeUnavailable) as excinfo:
+        await ScopeClient(lake).fetch("scope_membership_weekly", 2026, 5)
+
+    assert excinfo.value.reason == "scope_unavailable"
+    assert lake.list_calls == [
+        ("roster-scope", "scope_membership_weekly", 2026, 5),
+        ("roster-scope", "scope_membership_weekly", 2026, 4),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_never_asks_the_lake_for_week_zero():
+    """Week 1's fallback would be week 0, which cannot exist -- the loop
+    must skip it rather than issuing a nonsensical `list_keys` call."""
+    lake = WeekAwareFakeLake(keys_by_week={}, objects={})
+
+    with pytest.raises(ScopeUnavailable):
+        await ScopeClient(lake).fetch("scope_membership_weekly", 2026, 1)
+
+    assert lake.list_calls == [("roster-scope", "scope_membership_weekly", 2026, 1)]
+
+
+@pytest.mark.asyncio
+async def test_fetch_raised_reason_describes_the_requested_week_not_the_fallback():
+    """`week`'s own envelope is empty (a real capture that resolved nothing);
+    `week - 1` has no partition at all. Both fail, but the reason reported
+    must describe what happened to the week the caller actually asked
+    about."""
+    week5_key = (
+        "signals/roster-scope/v1/season=2026/week=05/"
+        "2026-09-30T00:00:00Z-scope_membership_weekly.json"
+    )
+    lake = WeekAwareFakeLake(
+        keys_by_week={5: [week5_key]},
+        objects={week5_key: _envelope("2026-09-30T00:00:00Z", [])},
+    )
+
+    with pytest.raises(ScopeUnavailable) as excinfo:
+        await ScopeClient(lake).fetch("scope_membership_weekly", 2026, 5)
+
+    assert excinfo.value.reason == "scope_empty"
+
+
+@pytest.mark.asyncio
+async def test_fetch_excludes_departed_players_but_keeps_grace():
+    """`grace` is intended -- it is the "keep fetching for someone who just
+    fell out" state `GRACE_WEEKS` exists for. `excluded` is not:
+    `_carry_forward` emits it exactly once, to ANNOUNCE a departure, and a
+    collector that kept it in `members` would keep fetching for a player who
+    is gone."""
+    key = (
+        "signals/roster-scope/v1/season=2026/week=01/"
+        "2026-09-02T00:00:00Z-scope_membership_weekly.json"
+    )
+    lake = FakeLake(
+        keys=[key],
+        objects={
+            key: _envelope_with_status(
+                "2026-09-02T00:00:00Z",
+                [
+                    ("fdy-active", "active"),
+                    ("fdy-grace", "grace"),
+                    ("fdy-gone", "excluded"),
+                ],
+            )
+        },
+    )
+
+    scope = await ScopeClient(lake).fetch("scope_membership_weekly", 2026, 1)
+
+    assert scope.members == frozenset({"fdy-active", "fdy-grace"})
+
+
+@pytest.mark.asyncio
+async def test_fetch_keeps_rows_with_no_membership_status_at_all():
+    """`scope_matchup_weekly` rows carry no `membership_status` field --
+    the exclusion filter must not treat their absence as a reason to drop
+    them."""
+    key = (
+        "signals/roster-scope/v1/season=2026/week=04/"
+        "2026-09-30T00:00:00Z-scope_matchup_weekly.json"
+    )
+    lake = FakeLake(
+        keys=[key], objects={key: _envelope("2026-09-30T00:00:00Z", ["fdy-x"])}
+    )
+
+    scope = await ScopeClient(lake).fetch("scope_matchup_weekly", 2026, 4)
+
+    assert scope.members == frozenset({"fdy-x"})
 
 
 def test_age_seconds_measures_from_captured_at():
