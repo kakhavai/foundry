@@ -230,7 +230,28 @@ jobs:
           kubectl port-forward -n monitoring svc/minio 9000:9000 &
           PF_PID=$!
           trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
-          sleep 3
+
+          # Wait on the tunnel being USABLE, not on a guess at how long it
+          # takes to come up. Everything else in this file waits on a
+          # condition; a fixed sleep here meant a slow port-forward refused
+          # the boto3 write below and turned the REQUIRED integration-test
+          # check red for a reason that has nothing to do with the diff.
+          #
+          # MinIO's liveness endpoint needs no credentials and no bucket, so
+          # a 200 from it means exactly "the tunnel carries HTTP to MinIO" —
+          # which is the only thing this step needs to know before writing.
+          for attempt in $(seq 1 30); do
+            if curl -fsS -o /dev/null --max-time 2 \
+                 http://localhost:9000/minio/health/live; then
+              echo "MinIO reachable through the port-forward after ${attempt}s"
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "MinIO did not answer through the port-forward within 30s" >&2
+              exit 1
+            fi
+            sleep 1
+          done
 
           # Credentials match scripts/deploy-local.py's LOCAL_LAKE_ACCESS_KEY /
           # LOCAL_LAKE_SECRET_KEY — the same values infra/grafana-stack/values/
