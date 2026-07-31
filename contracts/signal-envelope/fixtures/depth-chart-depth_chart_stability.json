@@ -1,0 +1,55 @@
+{
+  "captured_at": "2026-09-15T12:00:00Z",
+  "collector": "depth-chart",
+  "coverage": {
+    "expected": 160,
+    "missing": [
+      "ARI:K",
+      "ARI:QB",
+      "ARI:RB"
+    ],
+    "present": 2
+  },
+  "envelope_version": "1",
+  "errors": [],
+  "scope": {
+    "season": 2026,
+    "week": 1
+  },
+  "signal_type": "depth_chart_stability",
+  "signals": [
+    {
+      "chart_age_days": 7.208,
+      "chart_hash": "a22a99b5d134503f",
+      "chart_published_at": "2026-09-08T07:00:00Z",
+      "charted_players": 2,
+      "comparisons": 3,
+      "is_stale": false,
+      "position": "QB",
+      "rank_changes_4w": 0,
+      "stability_score": 1.0,
+      "team": "BUF",
+      "weeks_observed": 4,
+      "window_weeks": 4
+    },
+    {
+      "chart_age_days": 7.208,
+      "chart_hash": "7c4ca3a262808ffe",
+      "chart_published_at": "2026-09-08T07:00:00Z",
+      "charted_players": 2,
+      "comparisons": 3,
+      "is_stale": false,
+      "position": "WR",
+      "rank_changes_4w": 1,
+      "stability_score": 0.6667,
+      "team": "KC",
+      "weeks_observed": 4,
+      "window_weeks": 4
+    }
+  ],
+  "upstream": {
+    "adapter": "nflverse-depth-charts",
+    "fetched_at": "2026-09-15T12:00:00Z",
+    "source_ref": "https://github.com/nflverse/nflverse-data/releases/download/depth_charts/depth_charts_2026.csv"
+  }
+}

@@ -203,3 +203,34 @@ collectors:
     # same shape as weather's bundled schedule adapter. `depends_on` names
     # registered collectors, and `venue` is not one yet.
     depends_on: []
+  - name: depth-chart
+    path: /collectors/depth-chart
+    stage: 8B
+    cadence_class: volatile
+    envelope_version: "1"
+    signal_types: [team_depth_chart, depth_chart_stability]
+    # TYPE-CHECKED ONLY — nothing verifies this is correct. False deliberately,
+    # and the spec gives the reason: the chart is a team-level structure, and
+    # ranking only watchlist players would hide the backup who is one move away
+    # from entering it. Every charted player at the configured positions is
+    # published, however deep.
+    scope_aware: false
+    # NOT roster-scope, and the direction is the point: roster-scope CONSUMES a
+    # depth chart to decide who is in scope, while this collector PUBLISHES the
+    # chart itself. Naming it here would invert the arrow and would set up a
+    # cycle the moment roster-scope declared this collector — which is the
+    # follow-up worth doing, since roster-scope currently reads the same feed
+    # through its own adapter.
+    #
+    # player-identity is declared for the reason roster-scope declares it: the
+    # `player_id` field on `team_depth_chart` has no other possible source. It
+    # is conceptual today rather than a runtime call — the field ships null and
+    # the published `gsis_id` crosswalk key is carried instead, because a
+    # player-identity client is something the whole fleet needs and belongs in
+    # collector-core rather than as a third per-service copy.
+    #
+    # The spec also names `roster-transactions` (for mid-week invalidation).
+    # It is not in this file, so it cannot be listed: depends_on names
+    # REGISTERED collectors, and the gate rejects an unregistered one. Add it
+    # here when that collector merges.
+    depends_on: [player-identity]

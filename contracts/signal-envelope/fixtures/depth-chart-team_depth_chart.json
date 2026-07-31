@@ -1,0 +1,95 @@
+{
+  "captured_at": "2026-09-15T12:00:00Z",
+  "collector": "depth-chart",
+  "coverage": {
+    "expected": 160,
+    "missing": [
+      "ARI:K",
+      "ARI:QB",
+      "ARI:RB"
+    ],
+    "present": 2
+  },
+  "envelope_version": "1",
+  "errors": [],
+  "scope": {
+    "season": 2026,
+    "week": 1
+  },
+  "signal_type": "team_depth_chart",
+  "signals": [
+    {
+      "chart_hash": "a22a99b5d134503f",
+      "chart_published_at": "2026-09-08T07:00:00Z",
+      "disagreement": null,
+      "functional_rank": null,
+      "gsis_id": "00-9683606",
+      "is_starter": null,
+      "official_rank": 1,
+      "player_id": null,
+      "player_name": "Josh Allen",
+      "position": "QB",
+      "rank_source": "official",
+      "role_label": "qb1",
+      "roster_status": null,
+      "team": "BUF",
+      "weeks_at_rank": 4
+    },
+    {
+      "chart_hash": "a22a99b5d134503f",
+      "chart_published_at": "2026-09-08T07:00:00Z",
+      "disagreement": null,
+      "functional_rank": null,
+      "gsis_id": "00-1025315",
+      "is_starter": null,
+      "official_rank": 2,
+      "player_id": null,
+      "player_name": "Mitchell Trubisky",
+      "position": "QB",
+      "rank_source": "official",
+      "role_label": "qb2",
+      "roster_status": null,
+      "team": "BUF",
+      "weeks_at_rank": 4
+    },
+    {
+      "chart_hash": "7c4ca3a262808ffe",
+      "chart_published_at": "2026-09-08T07:00:00Z",
+      "disagreement": null,
+      "functional_rank": null,
+      "gsis_id": "00-7170070",
+      "is_starter": null,
+      "official_rank": 1,
+      "player_id": null,
+      "player_name": "Xavier Worthy",
+      "position": "WR",
+      "rank_source": "official",
+      "role_label": null,
+      "roster_status": null,
+      "team": "KC",
+      "weeks_at_rank": 1
+    },
+    {
+      "chart_hash": "7c4ca3a262808ffe",
+      "chart_published_at": "2026-09-08T07:00:00Z",
+      "disagreement": null,
+      "functional_rank": null,
+      "gsis_id": "00-5057091",
+      "is_starter": null,
+      "official_rank": 2,
+      "player_id": null,
+      "player_name": "Rashee Rice",
+      "position": "WR",
+      "rank_source": "official",
+      "role_label": null,
+      "roster_status": null,
+      "team": "KC",
+      "weeks_at_rank": 1
+    }
+  ],
+  "upstream": {
+    "adapter": "nflverse-depth-charts",
+    "fetched_at": "2026-09-15T12:00:00Z",
+    "source_ref": "https://github.com/nflverse/nflverse-data/releases/download/depth_charts/depth_charts_2026.csv"
+  }
+}
