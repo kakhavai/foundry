@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from collector_core.cadence import CadenceClass
+from collector_core.conditional import UpstreamUnchanged
 from collector_core.routes import DEFAULT_CAPTURE_DEADLINE, CaptureState
 from collector_core.scheduler import (
     ESCALATED_INTERVAL,
@@ -20,6 +21,7 @@ from collector_core.scheduler import (
 )
 
 NOW = datetime(2026, 9, 13, 16, 0, tzinfo=UTC)
+T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class _NullLake:
@@ -93,6 +95,52 @@ class _FakeClock:
         value = self._next
         self._next += self._step
         return value
+
+
+class _RecordingMetrics:
+    """A minimal `CollectorMetrics` stand-in for the 304 tests: records which
+    outcome fired (`"unchanged"` vs. `"failure"`) rather than caring about
+    label values, and no-ops `staleness` since `run_capture_loop` always
+    calls it once per tick regardless of outcome."""
+
+    def __init__(self, recorded: list[str]) -> None:
+        self._recorded = recorded
+
+    def staleness(self, seconds: float) -> None:
+        pass
+
+    def upstream_unchanged(self) -> None:
+        self._recorded.append("unchanged")
+
+    def capture_failure(self, exc: BaseException) -> None:
+        self._recorded.append("failure")
+
+
+async def _run_one_loop_tick(
+    state: CaptureState,
+    capture,
+    *,
+    now: datetime,
+    metrics: object | None = None,
+) -> None:
+    """Drive `run_capture_loop` for exactly one iteration with the clock
+    fixed at `now` for the whole tick -- so a test can assert the exact
+    value `state` ends up with -- reusing the `_FakeSleep`/`_StopLoop`
+    fixtures the rest of this file drives the loop with."""
+    sleep = _FakeSleep(stop_after=1)
+    with pytest.raises(_StopLoop):
+        await run_capture_loop(
+            state,
+            capture=capture,
+            lake=_NullLake(),
+            season=2026,
+            week=1,
+            cadence_class=CadenceClass.VOLATILE,
+            next_event_at=no_event,
+            metrics=metrics if metrics is not None else _RecordingMetrics([]),
+            sleep=sleep,
+            clock=lambda: now,
+        )
 
 
 def no_event(state: CaptureState, now: datetime) -> datetime | None:
@@ -517,3 +565,64 @@ async def test_loop_opens_its_client_via_the_injected_client_factory():
     assert len(opened) == 1
     assert isinstance(opened[0], _RecordingClient)
     assert seen_clients == [opened[0]]
+
+
+# --- run_capture_loop: UpstreamUnchanged (a 304 is a healthy pass) ----------
+
+
+async def test_a_304_does_not_replace_the_last_good_envelopes():
+    """The regression this whole mechanism must not cause: an unchanged
+    upstream must never cost `/signals` the data it is already serving."""
+    state = CaptureState()
+    good = {"a_signal": object()}
+    state.apply_capture(good, T0)
+
+    async def capture(season, week, **kwargs):
+        raise UpstreamUnchanged("http://x/d.csv", source_ref='W/"v1"')
+
+    await _run_one_loop_tick(state, capture, now=T0 + timedelta(minutes=15))
+
+    assert state.envelopes is good
+
+
+async def test_a_304_advances_last_capture_at():
+    """Staleness resets, because the data was confirmed current."""
+    state = CaptureState()
+    state.apply_capture({"a_signal": object()}, T0)
+
+    async def capture(season, week, **kwargs):
+        raise UpstreamUnchanged("http://x/d.csv")
+
+    await _run_one_loop_tick(state, capture, now=T0 + timedelta(minutes=15))
+
+    assert state.last_capture_at == T0 + timedelta(minutes=15)
+
+
+async def test_a_304_is_counted_as_unchanged_not_as_a_failure():
+    state = CaptureState()
+    state.apply_capture({"a_signal": object()}, T0)
+    recorded: list[str] = []
+
+    async def capture(season, week, **kwargs):
+        raise UpstreamUnchanged("http://x/d.csv")
+
+    metrics = _RecordingMetrics(recorded)
+    await _run_one_loop_tick(
+        state, capture, now=T0 + timedelta(minutes=15), metrics=metrics
+    )
+
+    assert "unchanged" in recorded
+    assert "failure" not in recorded
+
+
+async def test_a_real_failure_still_leaves_the_clock_alone():
+    """The existing contract, re-asserted: only a 304 is special."""
+    state = CaptureState()
+    state.apply_capture({"a_signal": object()}, T0)
+
+    async def capture(season, week, **kwargs):
+        raise RuntimeError("upstream exploded")
+
+    await _run_one_loop_tick(state, capture, now=T0 + timedelta(minutes=15))
+
+    assert state.last_capture_at == T0

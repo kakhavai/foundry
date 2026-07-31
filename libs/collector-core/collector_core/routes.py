@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from .cadence import CadenceClass
+from .conditional import UpstreamUnchanged
 from .envelope import ENVELOPE_VERSION, Envelope
 from .lake import LakeWriter
 from .metrics import CollectorMetrics
@@ -210,16 +211,21 @@ async def _run_capture(
             deadline = (
                 None if spec.capture_deadline is None else now + spec.capture_deadline
             )
-            async with spec.client_factory() as client:
-                envelopes = await spec.capture(
-                    season,
-                    week,
-                    client=client,
-                    lake=spec.lake,
-                    now=now,
-                    deadline=deadline,
-                )
-            spec.state.apply_capture(envelopes, now)
+            try:
+                async with spec.client_factory() as client:
+                    envelopes = await spec.capture(
+                        season,
+                        week,
+                        client=client,
+                        lake=spec.lake,
+                        now=now,
+                        deadline=deadline,
+                    )
+            except UpstreamUnchanged:
+                spec.metrics.upstream_unchanged()
+                spec.state.mark_unchanged(now)
+            else:
+                spec.state.apply_capture(envelopes, now)
     except Exception:
         logger.exception("dispatched capture failed")
 
