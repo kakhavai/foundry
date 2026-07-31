@@ -265,3 +265,119 @@ async def test_an_empty_query_list_makes_no_request():
 
     assert got == {}
     assert route.call_count == 0
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_repeated_query_is_not_re_requested():
+    route = respx.post(f"{BASE}/resolve/batch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [_result("P", True, "fdy-p")],
+                "count": 1,
+                "resolved_count": 1,
+                "unresolved_count": 0,
+            },
+        )
+    )
+    query = ResolveQuery(
+        name="P", team=None, position=None, source=None, source_id=None
+    )
+    async with httpx.AsyncClient() as client:
+        identity = IdentityClient(BASE, client, token="t", crosswalk_version="v1")
+        first = await identity.resolve_many([query])
+        second = await identity.resolve_many([query])
+
+    assert first == second == {query: "fdy-p"}
+    assert route.call_count == 1, route.call_count
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_an_unresolved_query_is_retried_rather_than_cached_as_a_refusal():
+    """A miss may become a hit when the crosswalk is republished mid-season.
+    Caching the refusal would pin the gap until a restart."""
+    route = respx.post(f"{BASE}/resolve/batch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [_result("P", False, None, "ambiguous")],
+                "count": 1,
+                "resolved_count": 0,
+                "unresolved_count": 1,
+            },
+        )
+    )
+    query = ResolveQuery(
+        name="P", team=None, position=None, source=None, source_id=None
+    )
+    async with httpx.AsyncClient() as client:
+        identity = IdentityClient(BASE, client, token="t", crosswalk_version="v1")
+        await identity.resolve_many([query])
+        await identity.resolve_many([query])
+
+    assert route.call_count == 2, route.call_count
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_new_crosswalk_version_invalidates_the_cache():
+    route = respx.post(f"{BASE}/resolve/batch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [_result("P", True, "fdy-p")],
+                "count": 1,
+                "resolved_count": 1,
+                "unresolved_count": 0,
+            },
+        )
+    )
+    query = ResolveQuery(
+        name="P", team=None, position=None, source=None, source_id=None
+    )
+    async with httpx.AsyncClient() as client:
+        await IdentityClient(
+            BASE, client, token="t", crosswalk_version="v1"
+        ).resolve_many([query])
+        await IdentityClient(
+            BASE, client, token="t", crosswalk_version="v2"
+        ).resolve_many([query])
+
+    assert route.call_count == 2, route.call_count
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_crosswalk_version_change_on_the_same_client_invalidates_the_cache():
+    """A two-instance version bump doesn't distinguish a version-keyed cache
+    from a version-blind one: a fresh IdentityClient always starts with an
+    empty `_cache`, so a mutation that drops `crosswalk_version` from the
+    key still passes a test built that way -- the version never mattered,
+    because there was nothing left in the old instance's cache to leak from.
+
+    This exercises the key itself: one client, one cache, a version bump
+    mid-lifetime. Only a cache actually keyed on the version re-requests
+    here."""
+    route = respx.post(f"{BASE}/resolve/batch").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [_result("P", True, "fdy-p")],
+                "count": 1,
+                "resolved_count": 1,
+                "unresolved_count": 0,
+            },
+        )
+    )
+    query = ResolveQuery(
+        name="P", team=None, position=None, source=None, source_id=None
+    )
+    async with httpx.AsyncClient() as client:
+        identity = IdentityClient(BASE, client, token="t", crosswalk_version="v1")
+        await identity.resolve_many([query])
+        identity._crosswalk_version = "v2"
+        await identity.resolve_many([query])
+
+    assert route.call_count == 2, route.call_count

@@ -27,10 +27,21 @@ class ResolveQuery:
 
 
 class IdentityClient:
-    def __init__(self, base_url: str, client, token: str | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        client,
+        token: str | None = None,
+        crosswalk_version: str | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._client = client
         self._token = token
+        self._crosswalk_version = crosswalk_version
+        # Per-instance, in-memory only -- no TTL, no disk, no eviction.
+        # Keyed on (crosswalk_version, query) so a republished crosswalk
+        # invalidates cleanly instead of serving stale ids for a season.
+        self._cache: dict[tuple[str | None, ResolveQuery], str] = {}
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token}"} if self._token else {}
@@ -39,10 +50,25 @@ class IdentityClient:
         self, queries: list[ResolveQuery]
     ) -> dict[ResolveQuery, str]:
         """Map only the queries player-identity RESOLVED. Unresolved ones are
-        absent from the result -- the caller counts them in coverage.missing."""
+        absent from the result -- the caller counts them in coverage.missing.
+
+        Successful resolutions are cached per instance, keyed on the
+        crosswalk version supplied at construction. Unresolved queries are
+        never cached -- a miss may become a hit once the crosswalk is
+        republished mid-season, and caching the refusal would pin that gap
+        until the process restarts.
+        """
         resolved: dict[ResolveQuery, str] = {}
-        for start in range(0, len(queries), BATCH_LIMIT):
-            chunk = queries[start : start + BATCH_LIMIT]
+        pending: list[ResolveQuery] = []
+        for query in queries:
+            cached = self._cache.get((self._crosswalk_version, query))
+            if cached is not None:
+                resolved[query] = cached
+            else:
+                pending.append(query)
+
+        for start in range(0, len(pending), BATCH_LIMIT):
+            chunk = pending[start : start + BATCH_LIMIT]
             response = await self._client.post(
                 f"{self._base_url}/resolve/batch",
                 json={"queries": [asdict(q) for q in chunk]},
@@ -53,5 +79,7 @@ class IdentityClient:
                 # `is True`, not truthiness: a missing field must not be
                 # permission, and neither must a non-empty candidate list.
                 if result.get("resolved") is True and result.get("player_id"):
-                    resolved[query] = result["player_id"]
+                    player_id = result["player_id"]
+                    resolved[query] = player_id
+                    self._cache[(self._crosswalk_version, query)] = player_id
         return resolved
