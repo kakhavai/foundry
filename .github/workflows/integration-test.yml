@@ -21,12 +21,26 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
+      platform-python: ${{ steps.filter.outputs.platform-python }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
+            # A second, narrower filter for platform-lint below. Deliberately
+            # NOT folded into `relevant`: a ruff-config edit should not spin up
+            # a Kind cluster, and `relevant` gates the heavy required job.
+            #
+            # The root pyproject.toml is in here because it is where the rule
+            # set for these two directories is declared — edit the select list
+            # and nothing else, and without this entry nothing would check the
+            # result.
+            platform-python:
+              - 'scripts/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - '.github/workflows/integration-test.yml'
             relevant:
               - 'services/**'
               # The shared collector library — auth, the five routes, the
@@ -46,6 +60,44 @@ jobs:
               # check counts as a pass. contracts/ once triggered no CI at all
               # for exactly this reason.
               - 'chaos/**'
+
+  # `scripts/` and repo-root `tests/` are the only Python in the repo that is
+  # not inside a package, and until this job existed nothing linted them:
+  # .github/actions/python-lint is only ever invoked with `working-directory`
+  # pointing at a service root or at libs/collector-core. That gap is issue #76,
+  # and it was not cosmetic — scripts/collectors.py, scripts/new-collector.py,
+  # scripts/refresh-collector.py and scripts/check-registry.py are the tooling
+  # every collector's onboarding runs through, and tests/ holds the drift gates.
+  #
+  # It cannot reuse .github/actions/python-lint: that action runs
+  # `uv sync --frozen` in the working directory, and neither of these two
+  # directories is a package with a pyproject.toml and a dev group to sync.
+  # `uv run --no-project` is the form the rest of the repo already uses for
+  # exactly this (see the integration-test job below, and CLAUDE.md's
+  # Local Stack section).
+  #
+  # The ruff version is pinned rather than floating: an unpinned `--with ruff`
+  # means a new release can red a PR that changed nothing, which is how a lint
+  # gate earns a reputation for being ignorable. 0.16.0 is what the root
+  # uv.lock already resolves for every service's dev group, so this job and the
+  # per-service `lint` legs in services.yml apply the same ruff.
+  #
+  # The rule set itself lives in the root pyproject.toml's [tool.ruff], not
+  # here, so `ruff check scripts/ tests/` run locally gives the same answer.
+  platform-lint:
+    needs: changes
+    if: needs.changes.outputs.platform-python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Lint
+        run: uv run --no-project --with ruff==0.16.0 ruff check scripts/ tests/
+      - name: Format check
+        run: uv run --no-project --with ruff==0.16.0 ruff format --check scripts/ tests/
 
   # Repo-root tests/ cover platform concerns that no per-service suite can see —
   # rollback, Argo CD deploy manifests, and the OTel collector DNS name rendered
