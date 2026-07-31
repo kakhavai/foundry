@@ -167,9 +167,8 @@ async def test_capture_never_touches_the_lake_on_the_event_loop():
     that raises on a synchronous call from the loop thread. Proving the real
     capture path survives it is what stops a readiness inversion — roster-scope
     lost a whole deploy to exactly this."""
-    from collector_core.lake import EventLoopGuardedLake
-
     import httpx
+    from collector_core.lake import EventLoopGuardedLake
 
     guarded = EventLoopGuardedLake(SpyLake())
     async with httpx.AsyncClient() as client:

@@ -302,7 +302,10 @@ def duplicate_signing_count(rows: list[dict]) -> int:
             if team is None:
                 continue
             previous = last_signing.get(team)
-            if previous is not None and (effective - previous).total_seconds() <= window:
+            if (
+                previous is not None
+                and (effective - previous).total_seconds() <= window
+            ):
                 duplicates += 1
             last_signing[team] = effective
     return duplicates

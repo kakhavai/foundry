@@ -120,9 +120,7 @@ def _row_interval_key(row: dict) -> str | None:
     except TransactionSchemaError:
         return None
     return interval_key(
-        announced.replace(
-            minute=(announced.minute // 15) * 15, second=0, microsecond=0
-        )
+        announced.replace(minute=(announced.minute // 15) * 15, second=0, microsecond=0)
     )
 
 

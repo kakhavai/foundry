@@ -165,9 +165,7 @@ async def test_an_unplaceable_row_is_named_in_missing(monkeypatch):
     `coverage.missing` with a reason — never a guess."""
     now = WEEK_START + timedelta(days=1)
     bad = _row(hours=3) | {"announced_at": "not-a-timestamp"}
-    envelopes = await capture_with(
-        monkeypatch, rows=[bad], now=now, covers_through=now
-    )
+    envelopes = await capture_with(monkeypatch, rows=[bad], now=now, covers_through=now)
 
     envelope = envelopes[SIGNAL_TYPE]
     assert envelope.signals == []

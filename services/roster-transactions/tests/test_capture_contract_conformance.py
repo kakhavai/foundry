@@ -172,9 +172,7 @@ async def test_an_ir_return_window_conforms(monkeypatch):
         "return_window_opens_at": "2026-10-01T00:00:00Z",
         "return_window_must_activate_by": "2026-10-22T00:00:00Z",
     }
-    envelopes = await capture_with(
-        monkeypatch, rows=[row], now=NOW, covers_through=NOW
-    )
+    envelopes = await capture_with(monkeypatch, rows=[row], now=NOW, covers_through=NOW)
     assert validate(envelopes) == 1
     window = envelopes[SIGNAL_TYPE].signals[0]["return_window"]
     assert window == {
@@ -195,8 +193,9 @@ def test_the_committed_fixture_matches_what_capture_emits():
     whose field names have drifted from the producer proves only that it is
     self-consistent, so this pins the two together."""
     fixture = json.loads(
-        (CONTRACTS / "fixtures" / "roster-transactions-roster_transaction.json")
-        .read_text()
+        (
+            CONTRACTS / "fixtures" / "roster-transactions-roster_transaction.json"
+        ).read_text()
     )
     assert fixture["collector"] == "roster-transactions"
     assert fixture["signal_type"] == SIGNAL_TYPE

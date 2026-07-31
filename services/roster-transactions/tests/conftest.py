@@ -6,7 +6,7 @@ locally off a shared virtualenv and fails only in CI.
 """
 
 from collections.abc import Iterable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import httpx
 import pytest
