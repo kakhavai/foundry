@@ -11,7 +11,13 @@ from fastapi.testclient import TestClient
 
 from roster_scope.main import app
 
-PROTECTED = ["/signals", "/catalog", "/scope/players", "/scope/rules"]
+PROTECTED = [
+    "/signals",
+    "/catalog",
+    "/scope/players",
+    "/scope/rules",
+    "/scope/matchups",
+]
 
 
 def anonymous() -> TestClient:
@@ -20,7 +26,7 @@ def anonymous() -> TestClient:
 
 @pytest.mark.parametrize("path", PROTECTED)
 def test_every_data_route_needs_a_token(path):
-    """Including the three routes this service adds *after*
+    """Including the four routes this service adds *after*
     `build_collector_app` returns — the whole point of enforcing in
     middleware rather than per-route."""
     response = anonymous().get(path)

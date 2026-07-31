@@ -8,6 +8,7 @@ from collector_core.app import CollectorDescriptor, build_collector_app
 from fastapi import Query
 
 from .capture import CADENCE_CLASS, COLLECTOR_NAME, SIGNAL_TYPES, capture_scope
+from .matchups import scope_matchups_view
 from .metrics import metrics
 from .scope import (
     SUPPORTED_FILTERS,
@@ -60,3 +61,10 @@ async def scope_diff(
     return await scope_diff_view(
         app.state.collector_spec, version_from=version_from, version_to=to
     )
+
+
+@app.get("/scope/matchups")
+async def scope_matchups():
+    """The resolved matchup-scope slots -- the opposing (and our own line's)
+    players who determine how our SCOPED players perform."""
+    return await scope_matchups_view(app.state.collector_spec)

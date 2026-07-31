@@ -192,3 +192,36 @@ async def resolve_matchup_slots(
         )
 
     return signals, acc
+
+
+async def scope_matchups_view(spec) -> dict:
+    """`GET /scope/matchups` -- the freshest resolved matchup slots.
+
+    Unlike `scope_players_view`, there is no `scope_version` to pin against:
+    the matchup envelope carries no version ledger (see the module and
+    `resolve_matchup_slots` docstrings -- there is no carry-forward, no
+    manual overrides, nothing to version). So this reads this process's own
+    memory only, the same way `scope_rules_view` does, with no lake fallback
+    to wire.
+
+    Before the first capture there is no envelope yet; the response still
+    carries `season`/`week` from the collector's configured default scope so
+    a caller always gets a well-shaped body rather than a 404 or a `null`.
+    """
+    envelope = spec.state.envelopes.get(MATCHUP_SIGNAL)
+    if envelope is None:
+        return {
+            "season": spec.default_scope["season"],
+            "week": spec.default_scope["week"],
+            "slots": [],
+            "count": 0,
+            "captured_at": None,
+        }
+    body = envelope.to_dict()
+    return {
+        "season": body["scope"].get("season"),
+        "week": body["scope"].get("week"),
+        "slots": body["signals"],
+        "count": len(body["signals"]),
+        "captured_at": body["captured_at"],
+    }
