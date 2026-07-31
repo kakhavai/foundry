@@ -268,7 +268,22 @@ def test_last_value_gauge_is_reusable_by_a_per_collector_subclass(scrape):
     assert read(series, "example_subclass_gauge", collector="survives-subclass") == 7.0
 
 
-def test_upstream_unchanged_is_recordable():
-    """Named `collector_upstream_unchanged`; OTel appends `_total`."""
-    metrics = CollectorMetrics("a-collector")
-    metrics.upstream_unchanged()  # must not raise
+def test_upstream_unchanged_is_recorded_as_a_counter(scrape):
+    """Named `collector_upstream_unchanged`; OTel appends `_total`. A separate
+    series from `collector_capture_failures_total` -- a 304 is a healthy
+    outcome, not a failure -- so it is pinned on its own name and label set
+    rather than folded into the failure counter's assertions."""
+    m = CollectorMetrics("survives-unchanged")
+    m.upstream_unchanged()
+
+    scrape()
+    series = scrape()
+
+    assert (
+        read(
+            series,
+            "collector_upstream_unchanged_total",
+            collector="survives-unchanged",
+        )
+        == 1.0
+    )
