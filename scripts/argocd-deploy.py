@@ -289,6 +289,23 @@ def cmd_install(args) -> None:
 
     print("\nWaiting for all Applications to be Synced + Healthy...")
     services = discover_services(env)
+    wait_only = getattr(args, "wait_only", None)
+    if wait_only:
+        # Scope the wait to what the caller actually needs ready.
+        #
+        # The ApplicationSet globs helm/values/*, so Argo manages an
+        # Application for EVERY service -- but a collector's GitOps overlay
+        # pins tag 0.1.0 until build-push publishes its first image on merge
+        # to main. On a PR branch those images do not exist, so those
+        # Applications can never reach Healthy and an unscoped wait always
+        # times out. A caller that exercises only weather should not block
+        # on collectors whose images have never been published.
+        missing = sorted(set(wait_only) - set(services))
+        if missing:
+            print(f"  Requested services not discovered: {', '.join(missing)}")
+            sys.exit(1)
+        services = [s for s in services if s in set(wait_only)]
+        print(f"  Waiting only on: {', '.join(services)}")
     if services:
         ok = poll_applications(services, env, ctx, timeout=300)
         if not ok:
@@ -505,6 +522,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     # install
     p = sub.add_parser("install", help="Install Argo CD and bootstrap app-of-apps")
+    p.add_argument(
+        "--wait-only",
+        nargs="+",
+        metavar="SERVICE",
+        help=(
+            "Wait for only these Applications. The ApplicationSet generates "
+            "one per helm/values/* dir, and a collector's overlay pins 0.1.0 "
+            "until its image is first published on merge to main -- so on a "
+            "PR branch an unscoped wait cannot pass."
+        ),
+    )
     p.add_argument(
         "--env",
         default="local",

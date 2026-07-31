@@ -117,7 +117,13 @@ jobs:
           uv run --no-project --with pyyaml==6.0.3 python3 scripts/deploy-local.py player-projections
 
       - name: Install Argo CD
-        run: python3 scripts/argocd-deploy.py install --env local
+        run: |
+          # --wait-only: the ApplicationSet generates an Application per
+          # helm/values/* dir, but an unmerged collector's overlay still pins
+          # 0.1.0 -- an image build-push has never published. Those can never
+          # go Healthy on a PR branch. Chaos only exercises weather.
+          python3 scripts/argocd-deploy.py install --env local \
+            --wait-only weather player-projections
 
       - name: Wait for workloads
         run: |
