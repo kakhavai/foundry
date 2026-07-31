@@ -53,6 +53,7 @@ from datetime import UTC, datetime
 
 import httpx
 from collector_core.cadence import CadenceClass
+from collector_core.conditional import UpstreamUnchanged
 from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
 from collector_core.failure import UNKNOWN_EXPECTED_FLOOR
@@ -257,6 +258,16 @@ async def capture_scope(
     fetch_error: Exception | None = None
     try:
         charts = await fetch_depth_charts(season, week, client, now=now)
+    except UpstreamUnchanged:
+        # NOT a failure. The generic handler below degrades the pass in
+        # place and still writes three envelopes -- correct for a genuine
+        # fetch failure, but a 304 is an upstream that is simply unchanged,
+        # and reporting that as missing every human slot would be wrong in
+        # the same way `fail_capture` warns against. `run_capture_loop`
+        # catches this above its own generic handler and marks the pass
+        # unchanged instead of calling `capture_scope` again. Must stay
+        # ABOVE the generic handler.
+        raise
     except Exception as exc:  # noqa: BLE001 — classified, not fatal
         metrics.capture_failure(exc)
         charts = {}

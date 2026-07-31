@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
+from collector_core.conditional import ETAGS, UpstreamUnchanged, conditional_headers
 
 from ..rules import ALL_RULES, MATCHUP_RULES, canonical_position, canonical_team
 
@@ -349,8 +350,25 @@ async def fetch_depth_charts(
     consumed = 0
     remainder = ""
 
-    async with client.stream("GET", url, follow_redirects=True) as response:
+    # The URL is the cache key: one ETag per season's asset. `depth_chart_url`
+    # already returns exactly the string `capture.py` records as this
+    # envelope's `upstream.source_ref`, so the key and the provenance cannot
+    # drift apart. This collector does not route through `stream_csv_dicts`
+    # (it streams and folds per-team charts itself, see the module
+    # docstring), so the same conditional-GET shape is applied here directly.
+    headers = conditional_headers(url, ETAGS)
+
+    async with client.stream(
+        "GET", url, follow_redirects=True, headers=headers
+    ) as response:
+        # Checked before `raise_for_status()` deliberately, matching
+        # `stream_csv_dicts`: httpx only treats 4xx/5xx as errors, so a 304
+        # would fall through today, but relying on that would make this
+        # correct by accident.
+        if response.status_code == 304:
+            raise UpstreamUnchanged(url, source_ref=ETAGS.get(url))
         response.raise_for_status()
+        ETAGS.set(url, response.headers.get("etag"))
         async for chunk in response.aiter_text():
             consumed += len(chunk)
             if consumed > MAX_DEPTH_CHART_CHARS:
