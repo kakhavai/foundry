@@ -41,11 +41,21 @@ the **ordered-first** split name (the same normalized-name tie-break
 declared rank, and the second name is dropped for this pass -- not
 reassigned to the next rank, and not marked missing under its own key,
 because this module has no key for "the second name in a co-listing that
-already has one." That is a real, stated gap (a co-listed player's
-opposite-number counterpart simply does not appear in a given pass), traded
-deliberately against never fabricating an identity and against not
-reinventing `scope.py`'s rank-shifting for a module whose rank source is
-different by design.
+already has one."
+
+**The drop is recorded, not silent.** A real depth chart lists contiguous
+ranks, so the rank right after a co-listing is almost always claimed by a
+*distinct* row -- the dropped name then has zero natural trace: not
+present, not missing (its slot is filled by someone else), and, without
+the `acc.add_error(...)` call below, not in `errors` either. `coverage`
+would read as fully healthy while a real player who was genuinely on the
+chart silently never appears anywhere in this envelope -- the same shape
+as a truncated upstream reporting ratio 1.0, just relocated from a slot to
+a name. So every dropped co-listed name is recorded against the
+accumulator with reason `co_listed_counterpart_dropped`, capped the same
+way every other error is (`CoverageAccumulator.errors` runs `cap_errors`
+regardless of how it was populated), so a chart full of co-listings still
+produces a bounded errors array rather than one entry per row.
 """
 
 from datetime import UTC, datetime
@@ -146,12 +156,18 @@ async def resolve_matchup_slots(
         # list for a blank raw string) -- see the module docstring for why
         # only the ordered-first candidate is taken here rather than
         # reassigning the rest to later ranks the way `scope.py` does.
-        # `split_co_listed` always returns at least one name (or an empty
-        # list for a blank raw string) -- see the module docstring for why
-        # only the ordered-first candidate is taken here rather than
-        # reassigning the rest to later ranks the way `scope.py` does.
         names = split_co_listed(row.get("name", ""))
         name = names[0] if names else ""
+
+        for dropped in names[1:]:
+            # Recorded even though the row is about to be resolved and
+            # filled normally -- the drop is real regardless of whether the
+            # ordered-first name succeeds, and it must not depend on this
+            # slot's own rank happening to come up empty to be visible.
+            acc.add_error(
+                "co_listed_counterpart_dropped",
+                f"{key}: {dropped!r} co-listed with {name!r}, not resolved",
+            )
 
         ref = PlayerRef(name, team, position)
         try:

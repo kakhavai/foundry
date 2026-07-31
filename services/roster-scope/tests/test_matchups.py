@@ -157,6 +157,37 @@ async def test_a_co_listed_row_with_a_single_name_is_unaffected():
     assert signals[0]["player_id"] == "fdy-a-corner"
 
 
+async def test_a_dropped_co_listed_counterpart_is_visible_when_the_next_rank_fills():
+    """The realistic case: real depth charts list contiguous ranks, so a
+    *distinct* row almost always claims the rank right after a co-listing.
+    Without an explicit record, the dropped name would then have zero
+    trace -- not present (its own rank was never assigned to it), not
+    missing (rank 1 reads filled, by the ordered-first name), and, absent
+    this test, not in `errors` either. `coverage` would read fully healthy
+    while a real player who was genuinely on the chart never appears
+    anywhere in the envelope -- a truncated-upstream-reads-as-1.0 bug
+    relocated from a slot to a name."""
+    rows = [
+        _row("KC", "CB", 1, "Zeta Corner OR Alpha Corner"),
+        _row("KC", "CB", 2, "Beta Corner"),
+    ]
+    signals, acc = await resolve_matchup_slots(
+        rows, season=2026, week=1, now=NOW, resolver=StubResolver()
+    )
+    coverage = acc.result()
+    assert len(signals) == 2
+    assert coverage.present == 2
+    assert "KC:cb_matchup_le_4:1" not in coverage.missing
+    assert "KC:cb_matchup_le_4:2" not in coverage.missing, (
+        "both slots read filled -- the drop cannot be seen from coverage "
+        "numbers alone, which is exactly why it must show up in errors"
+    )
+    assert any(
+        e["reason"] == "co_listed_counterpart_dropped" and "Zeta Corner" in e["detail"]
+        for e in acc.errors
+    ), acc.errors
+
+
 async def test_a_deadline_truncates_remaining_rows_rather_than_discarding_them():
     """Checked once per row -- the natural unit for a row-driven loop, where
     `resolve_membership` checks once per team. Cancelling the coroutine
