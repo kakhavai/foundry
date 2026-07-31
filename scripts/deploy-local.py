@@ -37,7 +37,7 @@ _BUILD_ENV = {**os.environ, "DOCKER_BUILDKIT": "1"}
 
 def run(cmd: list[str], env: dict | None = None) -> None:
     print(f"\n$ {' '.join(str(c) for c in cmd)}")
-    result = subprocess.run(cmd, env=env)
+    result = subprocess.run(cmd, check=False, env=env)
     if result.returncode != 0:
         sys.exit(result.returncode)
 
@@ -45,6 +45,7 @@ def run(cmd: list[str], env: dict | None = None) -> None:
 def deployment_exists(service: str) -> bool:
     result = subprocess.run(
         ["kubectl", "get", "deployment", service],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -58,12 +59,12 @@ def run_piped(render_cmd: list[str], apply_cmd: list[str]) -> None:
     apply -f -`, which is idempotent across every deploy after the first,
     unlike `kubectl create secret` alone.
     """
-    rendered = subprocess.run(render_cmd, capture_output=True, text=True)
+    rendered = subprocess.run(render_cmd, check=False, capture_output=True, text=True)
     if rendered.returncode != 0:
         print(rendered.stderr)
         sys.exit(rendered.returncode)
 
-    applied = subprocess.run(apply_cmd, input=rendered.stdout, text=True)
+    applied = subprocess.run(apply_cmd, check=False, input=rendered.stdout, text=True)
     if applied.returncode != 0:
         sys.exit(applied.returncode)
 
@@ -73,9 +74,15 @@ def ensure_collector_secret(name: str) -> None:
     print(f"\n$ kubectl create secret generic {name} | kubectl apply -f -")
     run_piped(
         [
-            "kubectl", "create", "secret", "generic", name,
+            "kubectl",
+            "create",
+            "secret",
+            "generic",
+            name,
             f"--from-literal=token={LOCAL_DEV_TOKEN}",
-            "--dry-run=client", "-o", "yaml",
+            "--dry-run=client",
+            "-o",
+            "yaml",
         ],
         ["kubectl", "apply", "-f", "-"],
     )
@@ -86,10 +93,16 @@ def ensure_lake_secret(name: str) -> None:
     print(f"\n$ kubectl create secret generic {name} | kubectl apply -f -")
     run_piped(
         [
-            "kubectl", "create", "secret", "generic", name,
+            "kubectl",
+            "create",
+            "secret",
+            "generic",
+            name,
             f"--from-literal=access-key-id={LOCAL_LAKE_ACCESS_KEY}",
             f"--from-literal=secret-access-key={LOCAL_LAKE_SECRET_KEY}",
-            "--dry-run=client", "-o", "yaml",
+            "--dry-run=client",
+            "-o",
+            "yaml",
         ],
         ["kubectl", "apply", "-f", "-"],
     )
@@ -127,11 +140,21 @@ def main() -> None:
         # actually applies, so the port the container listens on cannot drift
         # from the one the probes dial.
         run(
-            ["docker", "build", "-f", "Dockerfile.collector",
-             "--build-arg", f"SERVICE={name}",
-             "--build-arg", f"PACKAGE={service.package}",
-             "--build-arg", f"PORT={service.port}",
-             "-t", f"{name}:local", "."],
+            [
+                "docker",
+                "build",
+                "-f",
+                "Dockerfile.collector",
+                "--build-arg",
+                f"SERVICE={name}",
+                "--build-arg",
+                f"PACKAGE={service.package}",
+                "--build-arg",
+                f"PORT={service.port}",
+                "-t",
+                f"{name}:local",
+                ".",
+            ],
             env=_BUILD_ENV,
         )
     else:
@@ -148,14 +171,23 @@ def main() -> None:
     if service.lake_secret:
         ensure_lake_secret(service.lake_secret)
 
-    run([
-        "helm", "upgrade", "--install", name,
-        "helm/charts/generic-service",
-        "-f", f"helm/values/{name}/values.yaml",
-        "--set", f"image.repository={name}",
-        "--set", "image.tag=local",
-        "--set", "image.pullPolicy=Never",
-    ])
+    run(
+        [
+            "helm",
+            "upgrade",
+            "--install",
+            name,
+            "helm/charts/generic-service",
+            "-f",
+            f"helm/values/{name}/values.yaml",
+            "--set",
+            f"image.repository={name}",
+            "--set",
+            "image.tag=local",
+            "--set",
+            "image.pullPolicy=Never",
+        ]
+    )
 
     # image.tag is pinned to "local" on every deploy, so a rebuilt image (or a
     # just-updated token Secret) produces a byte-identical PodSpec and

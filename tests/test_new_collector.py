@@ -270,6 +270,7 @@ def test_the_generated_service_lints_clean(service, command):
     against the generated service's own pyproject.toml config."""
     result = subprocess.run(
         [_uv(), "run", "--no-project", "--with", "ruff", "ruff", *command, "."],
+        check=False,
         cwd=service,
         capture_output=True,
         text=True,
@@ -297,6 +298,7 @@ def test_the_generated_values_lint(root):
             "-f",
             str(root / "helm" / "values" / NAME / "values.yaml"),
         ],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -316,6 +318,7 @@ def test_the_generated_values_render_the_expected_objects(root):
             "-f",
             str(root / "helm" / "values" / NAME / "values.yaml"),
         ],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -522,6 +525,7 @@ def test_the_dockerfile_matches_the_reference_collectors_stage():
     `services/<name>/Dockerfile` output, this at least keeps the generated copy
     from drifting away from the real one.
     """
+
     def commands(text: str) -> list[str]:
         """The stage's instructions, comments and banner styling stripped.
 
@@ -643,8 +647,7 @@ def test_the_capture_tail_is_the_shared_one_not_a_hand_written_write_loop(root):
     assert "from collector_core.publish import publish_capture" in text
     assert "lake.write(" not in text
     assert "await awrite(lake," not in text, (
-        "the generated capture hand-rolls the write loop the shared tail exists "
-        "to own"
+        "the generated capture hand-rolls the write loop the shared tail exists to own"
     )
 
 
