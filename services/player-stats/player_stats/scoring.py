@@ -42,8 +42,10 @@ POINTS_PER_FUMBLE_LOST = -2.0
 POINTS_PER_TWO_POINT_CONVERSION = 2.0
 
 # Emitted points are rounded to this many places. Two, because a half-point
-# scoring system cannot express anything finer and an unrounded float would
-# make two identical box scores compare unequal in `revisions.py`.
+# scoring system cannot express anything finer — and because binary floating
+# point turns `35 * 0.04` into `1.4000000000000001`, which is what would land
+# in an append-only lake object nobody rewrites and what a scoreboard would
+# render.
 POINT_PRECISION = 2
 
 

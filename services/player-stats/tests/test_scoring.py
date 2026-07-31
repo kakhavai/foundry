@@ -95,10 +95,21 @@ def test_passing_touchdowns_are_worth_less_than_rushing_ones():
 
 
 def test_points_are_rounded_to_two_places():
-    """An unrounded float makes two identical box scores compare unequal, which
-    `revisions.py` would read as a restatement."""
-    result = points(passing={"yards": 217})
-    assert result["standard"] == 8.68
+    """Binary floating point makes `35 * 0.04` come out as `1.4000000000000001`
+    and `3 * 0.1` as `0.30000000000000004`. Unrounded, that is what lands in an
+    append-only lake object nobody rewrites, and what a scoreboard renders.
+
+    Asserted with `repr` as well as `==`, because `1.4000000000000001 == 1.4`
+    is False but `round(1.4000000000000001, 2) == 1.4` is True — an `==`
+    assertion alone would pass against a value that is merely close.
+    """
+    passing_only = points(passing={"yards": 35})["standard"]
+    assert repr(passing_only) == "1.4"
+
+    rushing_only = points(rushing={"yards": 3})["standard"]
+    assert repr(rushing_only) == "0.3"
+
+    assert points(passing={"yards": 217})["standard"] == 8.68
 
 
 def test_the_three_formats_are_the_ones_player_projections_serves():

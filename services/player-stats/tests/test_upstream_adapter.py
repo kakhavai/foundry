@@ -106,11 +106,28 @@ async def test_a_defensive_row_that_touched_the_ball_is_kept():
     assert rows[0].position == "DE"
 
 
-async def test_a_kicker_with_no_offensive_involvement_is_kept():
-    """K is a scope position and takes no offensive snap — an offence-only
-    involvement test would silently lose every kicker in the league."""
-    rows, _ = await _fetch([feed_row(position="K", fg_att=3, pat_att=2)])
+async def test_a_kicker_is_kept_on_its_position_alone():
+    """K is a scope position, so a kicker who attempted nothing is still a row
+    this collector is owed."""
+    rows, _ = await _fetch([feed_row(position="K")])
     assert len(rows) == 1
+
+
+async def test_a_kicking_attempt_qualifies_a_row_with_no_position():
+    """The feed occasionally leaves `position` blank. An offence-only
+    involvement test — attempts, carries, targets — records nothing for a
+    kicker, so such a row would be dropped and the whole slot read as missing.
+    """
+    rows, _ = await _fetch([feed_row(position="", fg_att=3, pat_att=2)])
+    assert len(rows) == 1
+    assert rows[0].position == ""
+
+
+async def test_a_row_with_no_position_and_nothing_recorded_is_dropped():
+    """The other side of the same branch: blank position AND no involvement is
+    a defensive row the feed happened to label poorly, not a box score."""
+    rows, _ = await _fetch([feed_row(position="")])
+    assert rows == []
 
 
 async def test_every_scope_position_survives_a_zero_stat_line():
