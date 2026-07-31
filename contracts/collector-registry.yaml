@@ -102,3 +102,14 @@ collectors:
     # because this is the merge-order gate that kept this PR behind
     # player-identity's, which is the gate working as designed.
     depends_on: [player-identity]
+
+  - name: depth-chart
+    path: /collectors/depth-chart
+    stage: 8B
+    cadence_class: volatile
+    envelope_version: "1"
+    signal_types: [team_depth_chart, depth_chart_stability]
+    # TYPE-CHECKED ONLY — nothing verifies this is correct. Set it true if this
+    # collector narrows to roster-scope's membership list before it fetches.
+    scope_aware: false
+    depends_on: [player-identity]
