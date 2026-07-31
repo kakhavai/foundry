@@ -124,3 +124,26 @@ collectors:
     # `injury_report/adapters/identity.py`; PLAYER_IDENTITY_URL ships empty and
     # ids are minted deterministically until it does not.
     depends_on: [player-identity]
+  - name: usage-share
+    path: /collectors/usage-share
+    stage: 8B
+    cadence_class: weekly
+    envelope_version: "1"
+    signal_types: [player_usage_weekly]
+    # TYPE-CHECKED ONLY — nothing verifies this is correct.
+    #
+    # `false`, and deliberately NOT the `true` the phase doc's plan line
+    # predicted. This describes what the code does, not what it intends: the
+    # collector captures every offensive-skill player its feed carries — a
+    # SUPERSET of the watchlist — because roster-scope's membership rows carry
+    # no name and no external id, so there is nothing to join a GSIS-keyed feed
+    # onto. Narrowing is impossible today, and claiming it here would be a lie
+    # only a human reviewer could catch.
+    #
+    # The superset is also the safer half of the trade: the spec's own second
+    # failure mode for this collector is scope drift — "a player promoted into
+    # the watchlist in week 9 has no rows for weeks 1-8, so any trailing
+    # average silently computes over a shorter denominator". Capturing everyone
+    # removes that failure entirely. Flip to true when the join exists.
+    scope_aware: false
+    depends_on: [player-identity, roster-scope]
