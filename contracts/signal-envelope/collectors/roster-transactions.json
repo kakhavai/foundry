@@ -5,11 +5,96 @@
   "signal_types": {
     "roster_transaction": {
       "type": "object",
-      "required": ["key", "observed_at", "value"],
+      "required": [
+        "transaction_id",
+        "transaction_type",
+        "player_id",
+        "position",
+        "from_team",
+        "to_team",
+        "announced_at",
+        "effective_at",
+        "eligible_from_week",
+        "return_window",
+        "elevation_count_season",
+        "confidence",
+        "is_void",
+        "void_reason",
+        "supersedes",
+        "source_ref"
+      ],
+      "additionalProperties": false,
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "observed_at": { "type": "string", "format": "date-time" },
-        "value": { "type": "number" }
+        "transaction_id": {
+          "type": "string",
+          "pattern": "^rtx-[0-9a-f]{16}$",
+          "description": "Derived from (player_id, transaction_type, effective_at, to_team), never passed through from the upstream: the same move carries different vendor ids on different feeds and a new one when upgraded from reported to official."
+        },
+        "transaction_type": {
+          "type": "string",
+          "enum": [
+            "signing",
+            "waiver_claim",
+            "waiver_release",
+            "release",
+            "trade",
+            "ps_signing",
+            "ps_elevation",
+            "ir_placement",
+            "ir_designated_return",
+            "activation",
+            "suspension",
+            "reinstatement",
+            "retirement"
+          ],
+          "description": "Closed vocabulary. An unrecognised upstream verb is refused and counted, never bucketed into the nearest known value."
+        },
+        "player_id": { "type": "string", "minLength": 1 },
+        "position": { "type": ["string", "null"], "minLength": 1 },
+        "from_team": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "Null for a free-agent signing. Never an empty string, which would read downstream as an unrecognised team code."
+        },
+        "to_team": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "Null for a release."
+        },
+        "announced_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the move was first reported. Kept separate from effective_at: the gap between them is exactly the window in which every depth chart in the platform is wrong."
+        },
+        "effective_at": { "type": "string", "format": "date-time" },
+        "eligible_from_week": { "type": ["integer", "null"], "minimum": 1 },
+        "return_window": {
+          "type": ["object", "null"],
+          "required": ["opens_at", "must_activate_by"],
+          "additionalProperties": false,
+          "properties": {
+            "opens_at": { "type": "string", "format": "date-time" },
+            "must_activate_by": { "type": "string", "format": "date-time" }
+          },
+          "description": "IR designated-to-return only. Both ends or null — a window with one end lets a consumer compute a deadline from a missing value."
+        },
+        "elevation_count_season": { "type": ["integer", "null"], "minimum": 0 },
+        "confidence": {
+          "type": "string",
+          "enum": ["reported", "official"],
+          "description": "Agent-sourced reports precede the official wire by hours and are occasionally wrong."
+        },
+        "is_void": { "type": "boolean" },
+        "void_reason": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "Required when is_void is true: an append-only lake cannot delete a rescinded move, so the retraction row is the only record of why."
+        },
+        "supersedes": {
+          "type": ["string", "null"],
+          "pattern": "^rtx-[0-9a-f]{16}$"
+        },
+        "source_ref": { "type": ["string", "null"], "minLength": 1 }
       }
     }
   }

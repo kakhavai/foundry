@@ -36,6 +36,10 @@ gateway:
     - /catalog
     - /signals
     - /refresh
+    # This collector's one route beyond the standard five. The generator
+    # resumes from a cursor rather than re-reading a week, so it needs this at
+    # the edge, not only in-cluster.
+    - /events
 
 extraEnv:
   # optional: true lets the pod start before the Secret exists. roster-transactions then
