@@ -40,23 +40,43 @@ Members here are deterministic FIXTURES, never sampled from a real feed:
 This deliberately does NOT chase any narrowed collector's own id-minting
 scheme to try to make rows "really" match in CI. Two facts rule that out:
 
-* `usage-share` and `player-stats` resolve every upstream row FORWARD through
-  `player-identity`'s live `/resolve` — but `player-identity` ships
-  `CAPTURE_ENABLED=false` too, so its crosswalk is empty in CI. No id this
-  script could pick changes that: with an empty crosswalk, every `/resolve`
-  call returns unresolved, so no row from either collector can ever land in
-  scope no matter what this fixture contains.
-* `injury-report` is the one narrowed collector whose capture actually runs
-  automatically in CI, and it mints its own ids independently of
+* `usage-share` and `player-stats` both ship `CAPTURE_ENABLED=false`
+  THEMSELVES in CI (same load reasoning as `roster-scope`'s own), so their
+  capture never runs at all in this environment — no id this fixture could
+  contain changes that, since the code path that would read it never
+  executes. (Even if it did run, both resolve every upstream row FORWARD
+  through `player-identity`'s live `/resolve`, and `player-identity` ships
+  `CAPTURE_ENABLED=false` too, so its crosswalk is empty and every `/resolve`
+  call would return unresolved regardless.)
+* `injury-report` is the one narrowed collector whose capture DOES run in
+  CI — automatically, at pod startup, before its first scheduled tick (see
+  `collector_core.scheduler.run_capture_loop`: the first pass runs
+  immediately, not after a sleep). It mints its own ids independently of
   `player-identity` when `PLAYER_IDENTITY_URL` is empty (which it is) — a
   known, documented gap, not something this script should paper over by
-  reaching into `injury_report.adapters.identity`'s private stub formula.
+  reaching into `injury_report.adapters.identity`'s private stub formula. So
+  even with this fixture seeded in time, its `player_injury_status` signal
+  narrows to empty (its ids can never intersect this fixture's), while its
+  `team_injury_report` signal — keyed by team, not by player, and therefore
+  never filtered against the scope at all — publishes normally. That is real,
+  if partial, coverage of the fail-open path: a populated scope taking the
+  `fetch_union` success branch instead of `ScopeUnavailable`.
 
-So this fixture proves the fail-CLOSED/fail-OPEN boundary — without it, every
-narrowed collector correctly reports `scope_unavailable`; with it, capture
-runs the narrow-and-filter code path instead of short-circuiting before it —
-rather than proving any particular row gets published. See the Task 6 report
-for the full reasoning.
+**Ordering matters more than content here.** Because `injury-report`'s only
+automatic capture in a CI run happens at its own pod's startup, this fixture
+is USELESS to it unless written to the lake before that pod starts — see
+`.github/workflows/integration-test.yml`'s "Seed a scope fixture into the
+lake" step, which deliberately runs before "Deploy services" rather than
+after, and the comment there for why an earlier attempt at this got that
+wrong.
+
+**Determinism is partial.** Member ids are fully deterministic (the same
+`--season`/`--week` always produces the same rows), but each invocation's
+`captured_at`/`upstream.fetched_at` come from `datetime.now(tz=UTC)`, so the
+envelope's bytes — and, for `--lake`, the object key `lake_key()` derives from
+`captured_at` — differ on every run. Re-seeding does not overwrite a prior
+run's object; it appends a new one, which `ScopeClient` picks up as the
+newest by `captured_at` ordering.
 """
 
 from __future__ import annotations
