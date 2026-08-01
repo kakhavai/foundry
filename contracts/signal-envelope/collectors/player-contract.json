@@ -4,13 +4,110 @@
   "title": "player-contract collector signal fields",
   "signal_types": {
     "player_contract_status": {
-      "$comment": "TODO(new-collector): placeholder fields. Replace these with this collector's real signal shape, then delete this $comment. Kept deliberately meaningless -- the generated build_signal agrees with them by construction, so leaving both in place would prove only that two placeholders match.",
       "type": "object",
-      "required": ["key", "observed_at", "value"],
+      "required": [
+        "player_id",
+        "team",
+        "contract_start_season",
+        "contract_end_season",
+        "is_contract_year",
+        "seasons_remaining",
+        "total_value_usd",
+        "guaranteed_total_usd",
+        "cap_hit_current_usd",
+        "guaranteed_remaining_usd",
+        "signing_bonus_proration_usd",
+        "dead_money_if_cut_usd",
+        "tag_status",
+        "void_years_count",
+        "otc_player_id",
+        "null_field_reasons"
+      ],
+      "additionalProperties": false,
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "observed_at": { "type": "string", "format": "date-time" },
-        "value": { "type": "number" }
+        "player_id": {
+          "description": "Canonical id from player-identity. The `fdy-` prefix is pinned rather than described: the upstream keys players by display NAME, so the one failure this collector must make impossible is publishing a raw upstream string as an identity. A defaulting `resolved.get(query, raw)` is positionally safe and survives end-to-end narrowing tests; it does not survive this pattern.",
+          "type": "string",
+          "pattern": "^fdy-",
+          "minLength": 5
+        },
+        "team": {
+          "description": "Canonical team abbreviation the player is under contract to, or null. Null for the 61 active rows whose upstream `team` is a slash-joined multi-club string whose ordering is not consistent, and for an unrecognised club label.",
+          "type": ["string", "null"],
+          "minLength": 2
+        },
+        "contract_start_season": {
+          "description": "First season of the current deal (upstream `year_signed`).",
+          "type": ["integer", "null"],
+          "minimum": 1920
+        },
+        "contract_end_season": {
+          "description": "Final season before free agency, excluding void years. `year_signed + years - 1` — inclusive of the signing season.",
+          "type": ["integer", "null"],
+          "minimum": 1920
+        },
+        "is_contract_year": {
+          "description": "True when scope.season equals contract_end_season. Null, never false, when the term is unknown: false is a claim that time remains.",
+          "type": ["boolean", "null"]
+        },
+        "seasons_remaining": {
+          "description": "contract_end_season - scope.season. Deliberately NOT clamped at zero: a negative value means the source's record of the deal ended before the season captured, which is the loudest available signal that the upstream document is stale.",
+          "type": ["integer", "null"]
+        },
+        "total_value_usd": {
+          "description": "Full stated contract value, in whole USD. Nominal, never the upstream's `inflated_value`.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "guaranteed_total_usd": {
+          "description": "Total guaranteed at signing, in whole USD. Zero is a real value (894 active rows) and is not null.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "cap_hit_current_usd": {
+          "description": "Current-season cap charge. Pinned to null: the free upstream carries no cap accounting, and `apy` is average annual value rather than a cap hit. Typing this `null` makes fabricating one a contract violation rather than a code review question.",
+          "type": "null"
+        },
+        "guaranteed_remaining_usd": {
+          "description": "Guarantee not yet earned. Pinned to null — see cap_hit_current_usd.",
+          "type": "null"
+        },
+        "signing_bonus_proration_usd": {
+          "description": "Current-season prorated bonus share. Pinned to null — see cap_hit_current_usd.",
+          "type": "null"
+        },
+        "dead_money_if_cut_usd": {
+          "description": "Cap charge on release. Pinned to null — see cap_hit_current_usd.",
+          "type": "null"
+        },
+        "tag_status": {
+          "description": "none | franchise_exclusive | franchise_non_exclusive | transition. Pinned to null: the free upstream carries no tag column.",
+          "type": "null"
+        },
+        "void_years_count": {
+          "description": "Void years appended to the deal. Pinned to null: the free upstream carries no void-year column, so `years` is the stated term and cannot be decomposed.",
+          "type": "null"
+        },
+        "otc_player_id": {
+          "description": "OverTheCap's own stable key for this player. Provenance and a future crosswalk seed — NOT an identity, and never usable as player_id.",
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "null_field_reasons": {
+          "description": "Why each null field is null. `unsourced_by_upstream` = this source will never supply it; `absent_in_upstream_row` = this row did not say. The six cap-accounting fields are always present here; a row-nullable field appears only when it is actually null.",
+          "type": "object",
+          "required": [
+            "cap_hit_current_usd",
+            "guaranteed_remaining_usd",
+            "signing_bonus_proration_usd",
+            "dead_money_if_cut_usd",
+            "tag_status",
+            "void_years_count"
+          ],
+          "additionalProperties": {
+            "enum": ["unsourced_by_upstream", "absent_in_upstream_row"]
+          }
+        }
       }
     }
   }

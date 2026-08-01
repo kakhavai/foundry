@@ -8,25 +8,33 @@ consulted, and that auth is mounted.
 
 import time
 
+import respx
 from collector_core.envelope import ENVELOPE_VERSION
 
 from player_contract.capture import SIGNAL_TYPES
 
-from .conftest import TEST_TOKEN
+from .conftest import (
+    CANONICAL_IDS,
+    SEASON,
+    TEST_TOKEN,
+    WEEK,
+    mock_identity,
+    mock_upstream,
+)
 
 
 def wait_for_signals(client, *, count: int, timeout: float = 10.0) -> dict:
     """Poll `/signals` until a dispatched capture has landed.
 
     **`POST /refresh` returns 202 — accepted, not done.** The capture runs as a
-    background task and lands in `CaptureState` whenever it finishes, so
-    reading `/signals` on the next line is a race. It is a race that used to be
-    won by accident, because nothing in the capture path yielded; the lake
-    write now goes through `asyncio.to_thread`, so it genuinely suspends.
+    background task and lands in `CaptureState` whenever it finishes, so reading
+    `/signals` on the next line is a race. It is a race that used to be won by
+    accident, because nothing in the capture path yielded; the lake write now
+    goes through `asyncio.to_thread`, so it genuinely suspends.
 
-    Bounded and loud: on timeout this fails with what it actually saw rather
-    than hanging or asserting against an empty envelope. Never replace it with
-    a bare `client.get("/signals")` after a refresh.
+    Bounded and loud: on timeout this fails with what it actually saw rather than
+    hanging or asserting against an empty envelope. Never replace it with a bare
+    `client.get("/signals")` after a refresh.
     """
     deadline = time.monotonic() + timeout
     body = {"count": 0}
@@ -39,6 +47,25 @@ def wait_for_signals(client, *, count: int, timeout: float = 10.0) -> dict:
         f"dispatched capture did not land within {timeout}s: "
         f"expected count >= {count}, last saw {body}"
     )
+
+
+def refresh_and_wait(client) -> dict:
+    """Dispatch a capture for the scope the fixture lake actually holds.
+
+    The `season`/`week` body is not decoration. `build_collector_app` reads its
+    default scope from `CAPTURE_SEASON`/`CAPTURE_WEEK`, which default to
+    `2026`/`1`, while the fixture publishes its `roster-scope` membership for
+    week 3. A bare `{}` therefore narrows against a week nothing was published
+    for and fails closed with `scope_unavailable` — a 202 followed by an empty
+    `/signals` forever. That is exactly the shape `wait_for_signals` exists to
+    make loud rather than to hang on.
+    """
+    with respx.mock:
+        mock_upstream(respx.mock)
+        mock_identity(respx.mock)
+        accepted = client.post("/refresh", json={"season": SEASON, "week": WEEK})
+        assert accepted.status_code == 202
+        return wait_for_signals(client, count=len(SIGNAL_TYPES))
 
 
 def test_health_is_open_and_ok(client):
@@ -59,6 +86,14 @@ def test_catalog_declares_this_collector(client):
     assert set(body["signal_types"]) == set(SIGNAL_TYPES)
 
 
+def test_catalog_declares_no_incentive_signal_type(client):
+    """The deferred half must not leave a surface behind. `player-incentives`
+    owns `player_incentive_progress`, and a generator reading this catalog has
+    to see that this collector does not."""
+    body = client.get("/catalog").json()
+    assert "player_incentive_progress" not in body["signal_types"]
+
+
 def test_signals_is_empty_before_any_capture(client):
     assert client.get("/signals").json() == {"envelopes": [], "count": 0}
 
@@ -74,32 +109,31 @@ def test_an_unknown_signal_type_is_422(client):
 
 def test_refresh_is_accepted_and_the_capture_eventually_lands(client):
     """202 means accepted. Observe it by polling — see `wait_for_signals`."""
-    accepted = client.post("/refresh", json={})
-    assert accepted.status_code == 202
+    body = refresh_and_wait(client)
 
-    body = wait_for_signals(client, count=len(SIGNAL_TYPES))
     assert body["count"] == len(SIGNAL_TYPES)
     for envelope in body["envelopes"]:
         assert envelope["collector"] == "player-contract"
         assert envelope["coverage"]["expected"] >= envelope["coverage"]["present"]
+        assert envelope["signals"], "a landed capture with no rows"
 
 
 def test_a_second_refresh_inside_the_floor_is_429(client):
-    client.post("/refresh", json={})
-    response = client.post("/refresh", json={})
+    client.post("/refresh", json={"season": SEASON, "week": WEEK})
+    response = client.post("/refresh", json={"season": SEASON, "week": WEEK})
     assert response.status_code == 429
     assert int(response.headers["Retry-After"]) > 0
 
 
 def test_a_row_filter_narrows_the_signals(client):
     """`signal_matches` is this collector's own, so prove it is consulted."""
-    client.post("/refresh", json={})
-    wait_for_signals(client, count=len(SIGNAL_TYPES))
+    refresh_and_wait(client)
 
-    body = client.get("/signals?key=placeholder-a").json()
+    target = CANONICAL_IDS["Alpha Passer"]
+    body = client.get(f"/signals?player_id={target}").json()
     rows = [row for envelope in body["envelopes"] for row in envelope["signals"]]
     assert rows, "the filter matched nothing — is ROW_FILTERS wired up?"
-    assert {row["key"] for row in rows} == {"placeholder-a"}
+    assert {row["player_id"] for row in rows} == {target}
 
 
 def test_a_data_route_without_a_token_is_401(client):

@@ -54,11 +54,34 @@ extraEnv:
     value: "http://minio.monitoring.svc.cluster.local:9000"
   - name: REFRESH_MIN_INTERVAL_SECONDS
     value: "300"
-  # Scaffolded false. Flip to "true" once the real upstream is wired AND you
-  # have decided the third-party load is acceptable: the cluster is recreated
-  # on every CI run and every pod restart re-captures, so a large or
-  # rate-limited upstream should stay false here. A dispatched POST /refresh
-  # reaches the upstream regardless of this flag.
+  # The narrowing seam. An EMPTY value is a refusal, not a stub: this feed keys
+  # players by display NAME, so without player-identity not one row can be
+  # resolved and not one row could ever be in scope. The pass fails closed with
+  # `identity_unavailable` rather than fetching 1.13 MiB to publish nothing, and
+  # rather than minting ids of its own — which would be a total join failure
+  # dressed up as a working one.
+  - name: PLAYER_IDENTITY_URL
+    value: "http://player-identity:8002"
+  # Deliberately false, and NOT merely the scaffolder's default. Three reasons,
+  # in order of weight:
+  #
+  # 1. The upstream `.csv.gz` has not been regenerated since 2022-05-29 (the
+  #    release's parquet and rds variants are refreshed daily; the CSV is not,
+  #    and the newest `year_signed` in the document is 2022). A loop that polls
+  #    a frozen document daily buys nothing and writes 2022 contracts into an
+  #    append-only lake as though they were current.
+  # 2. `broadcast-context`'s vacuous-guard exception does not apply. Nothing
+  #    here reads a prior lake snapshot back, so one dispatched POST /refresh
+  #    produces exactly what a season-long loop would; the guard is real, not
+  #    vacuous.
+  # 3. This collector reaches a THIRD PARTY from its loop, which today only
+  #    `weather` and `broadcast-context` do. It also fails closed on the scope,
+  #    so on a cluster where roster-scope has not yet published every loop pass
+  #    would write a `present: 0` envelope and count a capture failure.
+  #
+  # 1.13 MiB per changed pass with conditional GET is cheap, so cost alone would
+  # not settle it — the staleness does. A dispatched POST /refresh reaches the
+  # upstream regardless of this flag.
   - name: CAPTURE_ENABLED
     value: "false"
   - name: CAPTURE_SEASON
