@@ -1,0 +1,53 @@
+[project]
+name = "player-contract"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-grpc",
+    "opentelemetry-exporter-prometheus",
+    "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-instrumentation-httpx",
+    "prometheus-client",
+    "collector-core",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "httpx",
+    "respx",
+    "jsonschema[format]",
+]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=player_contract --cov-branch --cov-report=term --cov-fail-under=80"
+
+[tool.coverage.run]
+branch = true
+source = ["player_contract"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.uv.sources]
+collector-core = { workspace = true }
