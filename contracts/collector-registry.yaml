@@ -530,3 +530,21 @@ collectors:
     # reason on every row: network, kickoff_local_time, announced_at /
     # flex_decided_at, and regional_coverage_pct.
     depends_on: [schedule-context]
+
+  - name: coaching-scheme
+    path: /collectors/coaching-scheme
+    stage: 8E
+    cadence_class: seasonal
+    envelope_version: "1"
+    signal_types: [staff_assignment, team_scheme_profile]
+    # Set true if this collector narrows to roster-scope's membership list
+    # before it fetches. Checked structurally by
+    # tests/test_scope_aware_gate.py: declaring true requires importing
+    # collector_core.scope.ScopeClient (`from collector_core.scope import
+    # ScopeClient`) somewhere in this collector's source — that test is by
+    # AST, so an `import collector_core.scope` plus attribute access will
+    # not satisfy it. That check proves the narrowing seam is wired in, not
+    # that it behaves correctly; write this collector's own fail-closed test
+    # for that.
+    scope_aware: false
+    depends_on: [schedule-context]
