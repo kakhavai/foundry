@@ -42,6 +42,25 @@ def test_a_missing_birth_date_is_null_not_zero():
     assert age_years(None, AS_OF) is None
 
 
+def test_a_birth_date_after_the_as_of_date_yields_no_age_at_all():
+    """Not a negative, and not a clamp to 0.0.
+
+    A negative age is worse than a clamp, because it looks computed: every
+    boundary comparison in `POSITION_AGE_CURVE` puts it in `pre_peak`, and it
+    drags the position's percentile population down with it. The docstring used
+    to promise that "the caller records it" while nothing did.
+    """
+    assert age_years(date(2030, 1, 1), AS_OF) is None
+    assert position_age_curve_stage("RB", age_years(date(2030, 1, 1), AS_OF)) is None
+
+
+def test_a_birth_date_on_the_as_of_date_is_zero_not_a_refusal():
+    """The boundary. A player born today is zero years old, which is absurd but
+    is a genuine reading of the data — the refusal is for dates that cannot be
+    an age at all, not for implausible ones."""
+    assert age_years(AS_OF, AS_OF) == 0.0
+
+
 def test_age_moves_with_the_as_of_date():
     """`age_years` is defined as of `scope.as_of_date`, so it MUST move. This is
     also why the digest gate republishes biographical rows daily."""

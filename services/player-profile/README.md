@@ -110,7 +110,15 @@ two-month-old position still produces a complete, fully-covered record.
 * **`career_offensive_snaps` is a floor for pre-2012 careers.** nflverse
   publishes snap counts from 2012 only, so a player who was already in the
   league reports `career_snaps_complete: false` rather than a total that is
-  quietly short. Same flag when a season file could not be read this pass.
+  quietly short. The flag is `false` in three cases and only ever `true` on
+  evidence: a rookie season before the window, a season file this pass could not
+  read, **and an unknown rookie season** — the last one because a null is not
+  evidence that a career fits inside the window, and treating it as one
+  published a floor labelled complete.
+* **A birth date after the capture's `as_of_date` yields a null `age_years`**,
+  not a negative one, and files `birth_date_in_future` in `errors`. The null is
+  indistinguishable in the row from the spec's permitted "no adapter could
+  supply a birth date"; the error entry is what separates them.
 * **`measurement_source_id` is null for ~9% of players.** `combine.csv` carries
   no GSIS id, so the join hops gsis → pfr → combine; 122 of 1,326 recent players
   (overwhelmingly undrafted rookies) have no `pfr_id` and therefore no

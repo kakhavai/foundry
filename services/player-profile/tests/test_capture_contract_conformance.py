@@ -28,6 +28,7 @@ from player_profile.capture import (
 )
 
 from .conftest import (
+    FIXTURE_PLAYERS,
     NOW,
     SCOPED_IDS,
     SEASON,
@@ -35,6 +36,7 @@ from .conftest import (
     SpyLake,
     mock_identity,
     mock_upstreams,
+    players_csv,
     scope_envelope,
 )
 
@@ -185,6 +187,75 @@ async def test_a_degraded_snap_sweep_still_publishes_the_other_signal_types(lake
     career_rows = envelopes[CAREER_LOAD].signals
     assert len(career_rows) == len(SCOPED_IDS)
     assert all(row["career_snaps_complete"] is False for row in career_rows)
+
+
+@respx.mock
+async def test_an_unknown_rookie_season_is_not_a_complete_career(lake):
+    """`career_snaps_complete` must only ever be `True` on evidence.
+
+    nflverse publishes snap counts from 2012, so the flag is a claim that the
+    player's whole career falls inside the window. A null `rookie_season` is not
+    evidence for that claim — it used to skip the comparison and leave the flag
+    `True`, so a twelve-year veteran whose rookie season the feed omitted
+    published a 2012-onward floor labelled complete, and a consumer weighting
+    `career_snap_load_percentile` would treat it as a full total.
+
+    All three states in one pass, because a flag that is simply always `False`
+    satisfies the unknown case on its own and would look like a fix.
+    """
+    variants = [list(record) for record in FIXTURE_PLAYERS]
+    variants[1][8] = ""  # Bravo: rookie_season unknown
+    variants[2][8] = "2005"  # Charlie: rookie_season before the 2012 window
+    # Alpha keeps 2018 — known, and inside the window.
+    mock_upstreams(respx.mock, players=players_csv(variants))
+    mock_identity(respx.mock)
+
+    envelopes = await capture(lake)
+
+    rows = {row["player_id"]: row for row in envelopes[CAREER_LOAD].signals}
+    assert len(rows) == len(SCOPED_IDS)
+    assert rows["fdy-bbbb11112222"]["career_snaps_complete"] is False, "unknown"
+    assert rows["fdy-cccc11112222"]["career_snaps_complete"] is False, "pre-window"
+    assert rows["fdy-aaaa11112222"]["career_snaps_complete"] is True, "in-window"
+
+
+@respx.mock
+async def test_a_birth_date_after_the_as_of_date_is_refused_and_named(lake):
+    """A future birth date is a genuine upstream error, and it must not become
+    a number.
+
+    Left as a negative age it flowed into `position_age_curve_stage` — where
+    every boundary comparison puts it in `pre_peak` — and into the percentile
+    population, dragging the whole position's distribution down. Both are
+    silent. `age_years` refuses it, and the `errors` entry is what stops the
+    resulting null being read as the spec's permitted "no adapter could supply
+    a birth date".
+    """
+    future = [list(record) for record in FIXTURE_PLAYERS]
+    future[1][4] = "2030-01-01"  # Bravo, born four years after the capture
+    mock_upstreams(respx.mock, players=players_csv(future))
+    mock_identity(respx.mock)
+
+    envelopes = await capture(lake)
+
+    biographical = envelopes[BIOGRAPHICAL]
+    bravo = next(
+        row for row in biographical.signals if row["player_id"] == "fdy-bbbb11112222"
+    )
+    assert bravo["age_years"] is None
+    assert bravo["position_age_curve_stage"] is None, (
+        "a refused age must not still be bucketed onto a curve"
+    )
+    reasons = {error["reason"] for error in biographical.errors}
+    assert "birth_date_in_future" in reasons, reasons
+
+    # And it is out of the reference population the other players rank against.
+    ages = [
+        row["age_years"] for row in biographical.signals if row["age_years"] is not None
+    ]
+    assert ages, "every age was refused — the fixture is wrong"
+    assert all(age > 0 for age in ages)
+    validate(envelopes)
 
 
 @respx.mock

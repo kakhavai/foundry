@@ -8,6 +8,8 @@ These are the tests that fail if somebody "simplifies" `capture.py` by computing
 the expectation from the rows it resolved or from `len(scope.members)`.
 """
 
+from datetime import timedelta
+
 import httpx
 import respx
 
@@ -23,6 +25,7 @@ from player_profile.capture import (
 
 from .conftest import (
     CANONICAL_IDS,
+    FIXTURE_PLAYERS,
     NOW,
     SCOPED_IDS,
     SEASON,
@@ -31,6 +34,7 @@ from .conftest import (
     SpyLake,
     mock_identity,
     mock_upstreams,
+    players_csv,
     scope_envelope,
 )
 
@@ -157,6 +161,108 @@ async def test_athleticism_coverage_does_not_punish_an_untested_player(lake):
     assert athleticism.coverage.present == len(SCOPED_IDS)
     for row in untested:
         assert player_key(row["player_id"]) not in athleticism.coverage.missing
+
+
+@respx.mock
+async def test_biographical_needs_experience_seasons_where_athleticism_does_not(
+    lake,
+):
+    """**The spec's per-signal-type asymmetry**, which is the whole reason
+    `capture.py` has an if/else there rather than one `record` call:
+
+    > every player in the current roster-scope watchlist has a profile record
+    > with a non-null `player_id`, `position`, and `experience_seasons`;
+    > athletic measurements are explicitly optional and their absence does not
+    > count as missing.
+
+    So one player with a blank `years_of_experience` must be **missing from
+    `player_biographical` and present in `player_athleticism` at the same
+    time**. Both halves are asserted, because either alone is satisfied by a
+    collector that scores every signal type identically — which is exactly the
+    mutation that used to survive here: replacing the whole predicate with an
+    unconditional `record` left all 120 tests green.
+
+    The row is still PUBLISHED on both. A coverage hole is not a dropped row —
+    dropping it would shrink numerator and denominator together and read as a
+    perfect pass over a smaller league.
+    """
+    short = [list(record) for record in FIXTURE_PLAYERS]
+    short[2][9] = ""  # Charlie: blank years_of_experience
+    mock_upstreams(respx.mock, players=players_csv(short))
+    mock_identity(respx.mock)
+
+    envelopes = await capture(lake)
+
+    key = player_key(CANONICAL_IDS["00-0000003"])
+    biographical = envelopes[BIOGRAPHICAL]
+    athleticism = envelopes[ATHLETICISM]
+
+    # Half one: incomplete for biography.
+    assert key in biographical.coverage.missing
+    assert biographical.coverage.present == len(SCOPED_IDS) - 1
+    reasons = {error["reason"] for error in biographical.errors}
+    assert "profile_incomplete" in reasons, reasons
+
+    # Half two: the SAME player, the same pass, complete for athleticism.
+    assert key not in athleticism.coverage.missing
+    assert athleticism.coverage.present == len(SCOPED_IDS)
+
+    # And published on both, carrying the null that made it incomplete.
+    charlie = next(
+        row
+        for row in biographical.signals
+        if row["player_id"] == CANONICAL_IDS["00-0000003"]
+    )
+    assert charlie["experience_seasons"] is None
+
+
+@respx.mock
+async def test_a_deadline_records_the_remainder_as_missing_rather_than_dropping_it(
+    lake, monkeypatch
+):
+    """The truncation path: "a truncated pass that reports itself truncated is
+    useful; one that reports itself complete is not."
+
+    The clock crosses the deadline **partway through** the loop rather than
+    before it, because a fully-truncated pass cannot tell "recorded the rest as
+    missing" apart from "captured nothing" — the interesting claim is that the
+    rows which already resolved are kept while the rest become explicit misses.
+    """
+
+    class CrossingClock:
+        """`datetime.now` that steps past `deadline` after `cross_after` calls."""
+
+        def __init__(self, deadline, cross_after):
+            self.deadline = deadline
+            self.cross_after = cross_after
+            self.calls = 0
+
+        def now(self, tz=None):
+            self.calls += 1
+            offset = 1 if self.calls > self.cross_after else -1
+            return self.deadline + timedelta(seconds=offset)
+
+    deadline = NOW + timedelta(seconds=30)
+    monkeypatch.setattr(
+        "player_profile.capture.datetime", CrossingClock(deadline, cross_after=2)
+    )
+    mock_upstreams(respx.mock)
+    mock_identity(respx.mock)
+
+    envelopes = await capture(lake, deadline=deadline)
+
+    biographical = envelopes[BIOGRAPHICAL]
+    # Two rows beat the clock; the other three are recorded, not discarded.
+    assert biographical.coverage.present == 2
+    assert len(biographical.signals) == 2
+    assert len(biographical.coverage.missing) == len(SCOPED_IDS) - 2
+    reasons = {error["reason"] for error in biographical.errors}
+    assert "deadline_exceeded" in reasons, reasons
+    # Every signal type truncates together — a pass that kept a full athleticism
+    # envelope beside a truncated biographical one would be internally
+    # inconsistent about which players it saw.
+    for signal_type, envelope in envelopes.items():
+        assert envelope.coverage.present == 2, signal_type
 
 
 @respx.mock
