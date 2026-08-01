@@ -355,17 +355,16 @@ rules, and what the five generated TODOs actually ask of you. Read it before
 writing capture logic. What follows is only what a reader of *this* file needs.
 
 `scripts/new-collector.py` generates `services/<name>/` (package, `main.py`,
-`capture.py`, `metrics.py`, `signals.py`, an adapter stub, `Dockerfile`,
-`pyproject.toml`, `README.md`, three test files, optional `smoke.sh`),
+`capture.py`, `metrics.py`, `signals.py`, an adapter stub, `pyproject.toml`,
+`README.md`, three test files, optional `smoke.sh`),
 `helm/values/<name>/values.yaml`, `infra/gitops/envs/local/<name>/values.yaml`,
 `contracts/signal-envelope/collectors/<name>.json`, and **one appended registry
 entry** — which is the only shared file it touches.
 
 It deliberately generates **no** CI workflow, **no** Argo CD Application, **no**
-`telemetry.py`, **no** `auth.py`, **no** `scheduler.py`, and **no** per-member
-Dockerfile `COPY` lines, because Wave 0 made every one of those either derived
-or shared. Copying a collector by hand is how they grow back, twenty-four times
-over.
+`telemetry.py`, **no** `auth.py`, **no** `scheduler.py`, and **no**
+`Dockerfile`, because Wave 0 made every one of those either derived or shared.
+Copying a collector by hand is how they grow back, twenty-four times over.
 
 **If a new collector needs you to edit `deploy-local.py`, `stack-up.py`,
 `smoke-test.sh`, `integration-test.yml`, `services.yml`, the root

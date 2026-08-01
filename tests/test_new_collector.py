@@ -153,7 +153,6 @@ EXPECTED_FILES = (
     f"services/{NAME}/tests/test_routes.py",
     f"services/{NAME}/tests/test_capture_contract_conformance.py",
     f"services/{NAME}/tests/test_coverage_floor.py",
-    f"services/{NAME}/Dockerfile",
     f"services/{NAME}/pyproject.toml",
     f"services/{NAME}/README.md",
     f"services/{NAME}/smoke.sh",
@@ -194,6 +193,7 @@ def test_the_registry_is_the_only_shared_file_touched(scaffolded):
         f"services/{NAME}/{PACKAGE}/auth.py",
         f"services/{NAME}/{PACKAGE}/scheduler.py",
         f"services/{NAME}/uv.lock",
+        f"services/{NAME}/Dockerfile",
     ],
 )
 def test_wave_0_removals_are_not_regenerated(root, removed):
@@ -476,73 +476,36 @@ def test_the_generated_field_schema_covers_exactly_the_signal_types(root):
         jsonschema.Draft202012Validator.check_schema(field_schema), signal_type
 
 
-# ── the Dockerfile keeps the shared stage ─────────────────────────────────────
+# ── the fleet's one Dockerfile needs no edit ──────────────────────────
 
 
-def test_the_dockerfile_uses_the_shared_workspace_manifests_stage(service):
-    """Not a stylistic preference. `uv sync --package <x>` resolves the whole
-    workspace graph first, so a per-member COPY list is quadratic and the line
-    you forget breaks an UNRELATED service's image."""
-    text = _read(service / "Dockerfile")
-    assert "AS workspace-manifests" in text
-    assert "COPY --from=workspace-manifests /manifests/ ./" in text
-    per_member = re.compile(
-        r"^\s*COPY\s+(?:--\S+\s+)*services/[^/\s]+/pyproject\.toml\b", re.MULTILINE
-    )
-    assert not per_member.search(text), (
-        "the generated Dockerfile reintroduced a per-member manifest COPY"
-    )
+def test_the_shared_dockerfile_can_build_the_generated_collector(root):
+    """The scaffolder generates no Dockerfile — `Dockerfile.collector` builds
+    every collector, and the three build args that distinguish one image from
+    another are DERIVED rather than typed. This asserts the derivation actually
+    lands for a brand-new collector, so "no Dockerfile" cannot mean "no image".
 
-
-def test_the_final_sync_reinstalls_the_service_package(service):
-    """The package version never changes (0.1.0), so uv's build cache can serve
-    a previously built wheel for changed source and the image silently ships
-    stale code. Observed twice on roster-scope."""
-    joined = re.sub(r"\\\s*\n\s*", " ", _read(service / "Dockerfile"))
-    final = [
-        line
-        for line in joined.splitlines()
-        if "uv sync" in line and "--no-editable" in line
-    ]
-    assert final, "no final `uv sync --no-editable` in the generated Dockerfile"
-    for line in final:
-        assert f"--reinstall-package {NAME}" in line, line
-
-
-def test_the_dockerfile_matches_the_reference_collectors_stage():
-    """The stage is verbatim across the fleet. If the shared one changes and
-    the scaffolder's does not, every collector generated afterwards is wrong.
-
-    The reference is now the root `Dockerfile.collector` — the ONE file that
-    builds every collector — because `services/weather/Dockerfile` and its
-    eight siblings no longer exist.
-
-    Which makes this whole section a transitional check: the scaffolder should
-    stop templating a Dockerfile at all, since the file it generates would
-    immediately fail
-    `tests/test_dockerfile_workspace.py::test_no_collector_has_its_own_dockerfile`
-    once committed. Until `scripts/new-collector.py` drops `DOCKERFILE` and its
-    `services/<name>/Dockerfile` output, this at least keeps the generated copy
-    from drifting away from the real one.
+    `test_wave_0_removals_are_not_regenerated` covers the absence; this covers
+    the consequence. Both are needed: a scaffolder that stops emitting the file
+    without the shared one being able to build the result is worse than the
+    duplication it removed.
     """
+    text = _read(ROOT / "Dockerfile.collector")
+    for arg in ("SERVICE", "PACKAGE", "PORT"):
+        assert f"ARG {arg}" in text, arg
 
-    def commands(text: str) -> list[str]:
-        """The stage's instructions, comments and banner styling stripped.
+    # SERVICE and PACKAGE: the name, and the name with dashes swapped.
+    assert (root / "services" / NAME / PACKAGE).is_dir()
+    assert NAME.replace("-", "_") == PACKAGE
 
-        Compared on what it RUNS, not on how it is decorated: the collectors
-        word their explanatory banners differently and always will.
-        """
-        body = text.split("AS workspace-manifests", 1)[1].split("FROM python", 1)[0]
-        joined = re.sub(r"\\\s*\n\s*", " ", body)
-        return [
-            re.sub(r"\s+", " ", line).strip()
-            for line in joined.splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        ]
+    # PORT: read from the values file Kubernetes actually applies, which is why
+    # the port the container listens on cannot drift from the one probed.
+    values = yaml.safe_load(_read(root / "helm" / "values" / NAME / "values.yaml"))
+    assert isinstance(values["service"]["port"], int)
 
-    assert commands(new_collector.DOCKERFILE) == commands(
-        _read(ROOT / "Dockerfile.collector")
-    )
+    # The manifests stage globs services/*/pyproject.toml, so the new member
+    # enters the build context without the shared file being touched.
+    assert (root / "services" / NAME / "pyproject.toml").exists()
 
 
 # ── the two correctness patterns survive ──────────────────────────────────────
