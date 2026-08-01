@@ -32,7 +32,6 @@ is made; this module only supplies the pieces.
 import os
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from zoneinfo import ZoneInfo
 
 import httpx
 from collector_core.streaming import stream_csv_dicts
@@ -75,11 +74,19 @@ REQUIRED_COLUMNS = frozenset(
     }
 )
 
-# The feed publishes kickoff dates in this zone regardless of where the game is
-# played. Only the DATE is used here — a revision window is a date range — but
-# the zone still matters: a 20:20 Eastern kickoff is the following day in UTC,
-# and taking the UTC date would file a Sunday-night game under Monday.
-FEED_TIMEZONE = ZoneInfo("America/New_York")
+# NOTE on the feed's kickoff zone, which this module deliberately does NOT
+# convert. `schedule-context` reads the same feed and needs the kickoff
+# *instant*, so it combines `gameday` + `gametime` and converts from the feed's
+# Eastern wall clock. This collector needs only the calendar DATE the game is
+# played on, to join against a revision window that is itself a date range —
+# and `gameday` is already that date in the feed's own zone. Converting it
+# through UTC would move a 20:20 Eastern Sunday-night game onto Monday, which
+# is why `parse_kickoff_date` reads `gameday` and ignores `gametime` entirely.
+#
+# A `FEED_TIMEZONE = ZoneInfo(...)` constant used to sit here, copied from
+# `schedule-context`, referenced by nothing. Ruff could not see it was dead
+# because it kept the `zoneinfo` import "used", and its comment described
+# conversion behaviour this module does not have.
 
 # Preseason is not part of the competitive schedule. Excluded for the reason
 # `schedule-context` excludes it: those games inflate the assignment count with
@@ -110,13 +117,19 @@ class ScheduledGame:
     stadium_name: str
 
 
-def source_ref(season: int, week: int) -> str | None:
-    """The `venue_static` envelope's source_ref: the committed table."""
-    return REFERENCE_SOURCE_REF
+def schedule_source_ref() -> str | None:
+    """The `venue_game_assignment` envelope's source_ref: the game feed.
 
+    **No `season`/`week` parameters**, unlike the scaffolder's `source_ref` and
+    unlike most collectors': neither of this collector's upstreams varies by
+    scope. The game feed is one URL carrying every season, filtered as it
+    streams, and the reference table is a module. Accepting arguments and
+    ignoring them would advertise a per-week artifact that does not exist, and
+    would make a caller passing the wrong week look harmless.
 
-def schedule_source_ref(season: int, week: int) -> str | None:
-    """The `venue_game_assignment` envelope's source_ref: the game feed."""
+    `venue_static`'s counterpart is the plain `REFERENCE_SOURCE_REF` constant —
+    there is no function at all, because there is nothing to compute.
+    """
     return SCHEDULE_URL or None
 
 

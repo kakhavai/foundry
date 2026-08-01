@@ -17,6 +17,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 from collector_core.conditional import UpstreamUnchanged
+from collector_core.failure import failure_envelopes
 from jsonschema import Draft202012Validator, FormatChecker
 
 from venue import reference
@@ -28,7 +29,15 @@ from venue.capture import (
     STATIC,
 )
 
-from .conftest import SEASON_GAMES, SpyLake, run_capture
+from .conftest import (
+    NOW,
+    SEASON_GAMES,
+    SpyLake,
+    run_capture,
+    season_rows,
+    sunday_of,
+    to_csv,
+)
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts" / "signal-envelope"
 ENVELOPE_SCHEMA = json.loads((CONTRACTS / "envelope.v1.schema.json").read_text())
@@ -92,6 +101,126 @@ async def test_a_lake_outage_costs_durability_not_availability():
     inversion the shared tail exists to prevent.
     """
     envelopes = await run_capture(SpyLake(fail_write=True))
+    assert set(envelopes) == set(SIGNAL_TYPES)
+    assert envelopes[STATIC].signals
+
+
+async def test_a_failed_lake_write_does_not_suppress_the_next_pass():
+    """The bug review found, and it needs TWO passes to see.
+
+    The digest gate used to record before `publish_capture`, which by design
+    swallows a failed write. So one object-store blip meant the digest said "the
+    lake has this" when it did not — and because this collector polls once a day
+    and only publishes on change, the snapshot would never be written again
+    until the venue table itself changed. Months, for a `static reference`.
+
+    Reproduced before the fix:
+
+        pass1 (lake write fails) -> objects in lake: 0
+        pass2 (healthy lake)     -> UpstreamUnchanged, objects in lake: 0
+
+    The single-pass test above cannot see any of this: it asserts availability,
+    which was never broken.
+    """
+    lake = SpyLake(fail_write=True)
+    await run_capture(lake)
+    assert lake.objects == {}, "the fixture is not actually failing writes"
+
+    lake.fail_write = False
+    envelopes = await run_capture(lake)
+
+    assert {e.signal_type for e in lake.writes} == set(SIGNAL_TYPES), (
+        "the retry was suppressed — a digest was recorded for content the lake "
+        "never received"
+    )
+    assert len(lake.objects) == len(SIGNAL_TYPES)
+    assert set(envelopes) == set(SIGNAL_TYPES)
+
+
+async def test_a_partial_lake_failure_only_retries_the_type_that_failed():
+    """One signal type's write failing must not re-append the other's.
+
+    The digest is recorded per signal type and gated on that type's own write
+    landing, so a `venue_static` failure retries `venue_static` and leaves the
+    healthy `venue_game_assignment` object alone.
+    """
+
+    class FailStaticOnce(SpyLake):
+        def __init__(self):
+            super().__init__()
+            self.fail_static = True
+
+        def write(self, envelope):
+            if self.fail_static and envelope.signal_type == STATIC:
+                raise RuntimeError("lake unreachable")
+            return super().write(envelope)
+
+    lake = FailStaticOnce()
+    await run_capture(lake)
+    assert [e.signal_type for e in lake.writes] == [ASSIGNMENT]
+
+    lake.fail_static = False
+    await run_capture(lake)
+    # Exactly one more write, and it is the one that failed. An unconditional
+    # retry of the whole pass would append a duplicate assignment object.
+    assert [e.signal_type for e in lake.writes] == [ASSIGNMENT, STATIC]
+
+
+def test_the_write_observer_is_a_faithful_lake_delegate():
+    """It wraps the lake for a whole `publish_capture` call, so every
+    `LakeWriter` method has to keep working — `publish_capture` only writes
+    today, but a wrapper that silently dropped `read`/`list_keys` would be a
+    trap for the next person who reaches for one inside the tail."""
+    from venue.capture import _WriteObserver
+
+    inner = SpyLake()
+    observer = _WriteObserver(inner)
+
+    envelope = next(
+        iter(
+            failure_envelopes(
+                RuntimeError("x"),
+                collector="venue",
+                signal_types=(STATIC,),
+                adapter="venue-reference-table",
+                now=NOW,
+                scope={"season": 2026, "week": 1},
+            ).values()
+        )
+    )
+    key = observer.write(envelope)
+    assert observer.landed(STATIC)
+    assert observer.list_keys("venue", STATIC, 2026, 1) == [key]
+    assert observer.read(key)["signal_type"] == STATIC
+
+    failing = _WriteObserver(SpyLake(fail_write=True))
+    with pytest.raises(RuntimeError):
+        failing.write(envelope)
+    assert not failing.landed(STATIC)
+    assert failing.landed(ASSIGNMENT), "only the type that failed is marked"
+
+
+async def test_an_assignment_change_alone_does_not_re_append_venue_static():
+    """The digest is per signal type, as the spec's wording requires.
+
+    "A snapshot appended only when the content hash of a VENUE RECORD changes."
+    A flex reschedule moves one game; `venue_static` is byte-identical and must
+    not be written again. One digest spanning both types would append it.
+    """
+    lake = SpyLake()
+    await run_capture(lake)
+    assert {e.signal_type for e in lake.writes} == set(SIGNAL_TYPES)
+
+    # Same venues, one game moved to a different (still in-window) week.
+    rows = season_rows()
+    rows[0] = {**rows[0], "week": "5", "gameday": sunday_of(5)}
+    envelopes = await run_capture(lake, csv=to_csv(rows))
+
+    appended = [e.signal_type for e in lake.writes[len(SIGNAL_TYPES) :]]
+    assert appended == [ASSIGNMENT], (
+        f"venue_static was re-appended for an assignment-only change: {appended}"
+    )
+    # Both envelopes are still SERVED — only the write was skipped.
     assert set(envelopes) == set(SIGNAL_TYPES)
     assert envelopes[STATIC].signals
 

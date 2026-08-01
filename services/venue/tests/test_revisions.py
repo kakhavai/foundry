@@ -78,15 +78,6 @@ def test_a_later_revision_closes_the_earlier_one():
 def test_the_window_is_half_open_so_the_install_date_belongs_to_exactly_one():
     """Closed-closed windows would make the install date match two revisions,
     and `revision_on` would silently take whichever came first."""
-    reference.build_revisions(
-        (
-            _record("lambeau", date(2026, 1, 1)),
-            _record("lambeau", SURFACE_CHANGE_ON),
-        )
-    )
-    # Asserted through the module-level table via the fixture-free path: build
-    # a local history and check `contains` directly, which is what
-    # `revisions_containing` reduces to.
     history = reference.build_revisions(
         (_record("lambeau", date(2026, 1, 1)), _record("lambeau", SURFACE_CHANGE_ON))
     )
@@ -186,12 +177,25 @@ def test_a_kickoff_before_the_table_was_compiled_resolves_to_nothing():
 
 
 async def test_no_game_resolves_to_a_revision_whose_window_excludes_its_kickoff():
-    """The spec's first assertion, over the real captured output.
+    """The spec's first assertion, checked as a read-time join over real output.
 
-    Every published assignment carries the window it was resolved against, so
-    the join is a field comparison rather than a scan. The length assertion is
-    not decoration: `all([])` is `True`, so without it a capture that published
-    nothing would satisfy this test perfectly.
+    **What this test can and cannot catch, stated honestly** — review noted the
+    docstring used to imply more than the test does. The capture already
+    enforces the same rule at WRITE time (`revision_on` cannot return a window
+    excluding the day), so this is close to tautological as a check on the join
+    itself. What it genuinely guards is `build_assignment_row` writing a
+    DIFFERENT revision's window onto the row than the one the join selected —
+    a transcription bug that write-time enforcement would not notice and that
+    would make every downstream read-time join silently wrong.
+
+    The substantive coverage of the spec's assertion is mutation M15 (the
+    capture ignoring the window and taking the newest revision) together with
+    `test_a_mid_season_surface_change_is_not_applied_retroactively`, which uses
+    a two-revision fixture. This test is the cheap consistency check over the
+    full real season alongside them, not the assertion's main proof.
+
+    The length assertion is not decoration: `all([])` is `True`, so without it a
+    capture that published nothing would satisfy this perfectly.
     """
     envelopes = await run_capture(SpyLake())
     rows = envelopes[ASSIGNMENT].signals

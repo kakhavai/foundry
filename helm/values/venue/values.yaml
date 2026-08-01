@@ -1,3 +1,10 @@
+# Port 8018 follows the documented Phase 8 stage allocation rather than being
+# the next free number: 8A-8B occupy 8000-8009, 8C is reserved 8010-8013 and 8D
+# 8014-8017. Both of those stages are blocked on a paid vendor, so their ports
+# are unclaimed today and will stay that way for a while — taking 8010 here
+# would put this collector inside another stage's block and make the eventual
+# 8C branch collide with an occupied port on a service it has nothing to do
+# with. The gap is deliberate; do not close it.
 service:
   name: venue
   port: 8018

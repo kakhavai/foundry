@@ -91,7 +91,6 @@ from .adapters.upstream import (
     ScheduledGame,
     fetch_season_games,
     schedule_source_ref,
-    source_ref,
     utc_today,
 )
 from .metrics import metrics
@@ -143,9 +142,62 @@ REASON_KICKOFF_DATE_MISSING = "kickoff_date_missing"
 REASON_REVISION_WINDOW_EXCLUDES_KICKOFF = "revision_window_excludes_kickoff"
 REASON_SCHEDULE_UNAVAILABLE = "schedule_unavailable"
 
-# `(season, week) -> the digest THIS process last published`. See the module
-# docstring for why it is not read back from the lake.
-_PUBLISHED_DIGESTS: dict[tuple[int, int], str] = {}
+# `(season, week, signal_type) -> the digest THIS process last published AND
+# saw land in the lake`. See the module docstring for why it is not read back
+# from the lake, and `_WriteObserver` for why "saw land" is part of the key's
+# meaning rather than an aspiration.
+_PUBLISHED_DIGESTS: dict[tuple[int, int, str], str] = {}
+
+
+class _WriteObserver:
+    """A `LakeWriter` that delegates and remembers which writes landed.
+
+    `publish_capture` is right to swallow a failed lake write — availability
+    beats durability, the envelopes are already built and correct, and the next
+    successful pass writes a superseding object. But it reports nothing back,
+    and this collector needs to know, for one reason that is specific to its
+    cadence:
+
+    **A `static reference` collector's "next successful pass" may be months
+    away.** The digest gate suppresses a pass whose content is unchanged, so
+    recording a digest for content the lake never received means the snapshot is
+    never written again until the venue table itself changes. One object-store
+    blip on the single daily pass would cost the season's `venue_static` object.
+    Reproduced before this class existed: pass 1 with a failing lake wrote
+    nothing, pass 2 with a healthy lake raised `UpstreamUnchanged` and still
+    wrote nothing.
+
+    This is the same reasoning `_capture_without_schedule` already applied to a
+    degraded pass — "a degraded pass must not suppress the next healthy one" —
+    carried to the case where the degradation is the write rather than the read.
+
+    It observes rather than replaces: `publish_capture` still does the writing,
+    the coverage gauges and the failure counter. This only watches, so nothing
+    about the shared tail is re-implemented here.
+    """
+
+    def __init__(self, inner: LakeWriter) -> None:
+        self.inner = inner
+        self._failed: set[str] = set()
+
+    def landed(self, signal_type: str) -> bool:
+        return signal_type not in self._failed
+
+    def write(self, envelope: Envelope) -> str:
+        # Runs on a worker thread (`publish_capture` -> `awrite` ->
+        # `asyncio.to_thread`), so delegating to the guarded lake is safe: there
+        # is no running event loop in this thread for it to object to.
+        try:
+            return self.inner.write(envelope)
+        except Exception:
+            self._failed.add(envelope.signal_type)
+            raise
+
+    def list_keys(self, *args, **kwargs) -> list[str]:
+        return self.inner.list_keys(*args, **kwargs)
+
+    def read(self, key: str) -> dict:
+        return self.inner.read(key)
 
 
 def reset_published_digests() -> None:
@@ -289,18 +341,32 @@ def _assignment_envelope(
     now: datetime,
     scope: dict,
     deadline: datetime | None,
-) -> tuple[Envelope, list[dict], dict[str, str]]:
-    """Build `venue_game_assignment`, and report each game's resolved venue.
+) -> tuple[Envelope, list[dict], set[str]]:
+    """Build `venue_game_assignment`, and report the venues the season uses.
 
-    The returned mapping is `game_id -> venue_id` for the games that resolved,
-    and it is what tells the static pass which venues the season actually uses.
-    A game that did NOT resolve is absent from it and present in
-    `coverage.missing` — dropping it instead would shrink the numerator and the
-    denominator together and read as perfect coverage.
+    The returned set is every venue a listed game **names**, which is what the
+    coverage rule means by "every venue hosting at least one game in the current
+    season". It is deliberately NOT the set of venues whose assignment rows were
+    built successfully.
+
+    That distinction was a real bug, and it is the subtle form of the failure
+    `EXPECTED_FLOOR` exists to prevent. This set used to be populated at the
+    bottom of the loop, after the kickoff-presence check and the window join had
+    both passed — so a venue whose every game failed the window join simply
+    vanished from `venue_static`, taking its own coverage expectation with it.
+    The envelope then reported ratio 1.0 with an empty `errors` array while two
+    venues the season uses were missing entirely: expectation derived from
+    success, wearing a floor as a disguise. The floor of 30 hid it until fewer
+    than 30 venues resolved.
+
+    Resolving a venue id is a fact about the SCHEDULE — this game is played at
+    that building. Whether the table can then describe the building on that date
+    is a separate question, and the answer to it belongs in coverage as a miss,
+    never as a silently smaller universe.
     """
     acc = CoverageAccumulator(floor=EXPECTED_FLOOR[ASSIGNMENT])
     rows: list[dict] = []
-    resolved: dict[str, str] = {}
+    season_venues: set[str] = set()
     window_misses = 0
     unresolved = 0
 
@@ -329,6 +395,12 @@ def _assignment_envelope(
             acc.fail(game.game_id, REASON_VENUE_UNRESOLVED)
             continue
 
+        # HERE, not at the bottom of the loop. The season uses this venue the
+        # moment a game names it; everything below can still fail, and each of
+        # those failures is a coverage miss rather than a reason to forget the
+        # venue was owed. See this function's docstring.
+        season_venues.add(venue_id)
+
         if game.kickoff_on is None:
             acc.fail(game.game_id, REASON_KICKOFF_DATE_MISSING)
             continue
@@ -345,7 +417,6 @@ def _assignment_envelope(
             continue
 
         rows.append(build_assignment_row(game, revision))
-        resolved[game.game_id] = venue_id
         acc.record(game.game_id)
 
     metrics.revision_window_misses(window_misses)
@@ -361,7 +432,7 @@ def _assignment_envelope(
             upstream=Upstream(
                 adapter=UPSTREAM_ADAPTER,
                 fetched_at=now,
-                source_ref=schedule_source_ref(scope["season"], scope["week"]),
+                source_ref=schedule_source_ref(),
             ),
             scope=dict(scope),
             coverage=acc.result(),
@@ -369,7 +440,7 @@ def _assignment_envelope(
             signals=rows,
         ),
         rows,
-        resolved,
+        season_venues,
     )
 
 
@@ -412,18 +483,20 @@ async def capture_venue(
         )
 
     try:
-        assignment_envelope, assignment_rows, resolved = _assignment_envelope(
+        assignment_envelope, assignment_rows, season_venues = _assignment_envelope(
             games, now=now, scope=scope, deadline=deadline
         )
-        # The season's venue universe, derived from the games — which is
-        # legitimate, and worth stating because it looks like the forbidden
-        # derivation: this is exactly what the coverage rule MEANS by "every
-        # venue hosting at least one game in the current season". What would be
-        # wrong is deriving it from the static lookups that SUCCEEDED, and that
-        # is not what `resolved` holds.
-        venue_ids = sorted(set(resolved.values()))
+        # The season's venue universe, derived from the games the feed LISTED —
+        # which is legitimate, and worth stating because it looks like the
+        # forbidden derivation: this is exactly what the coverage rule means by
+        # "every venue hosting at least one game in the current season".
+        #
+        # What would be wrong is deriving it from the games whose assignment
+        # rows were successfully BUILT, and `season_venues` deliberately is not
+        # that — see `_assignment_envelope`'s docstring for the bug this used
+        # to be.
         static_envelope, static_rows = _static_envelope(
-            venue_ids, today=today, now=now, scope=scope
+            sorted(season_venues), today=today, now=now, scope=scope
         )
     except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
         # The reference table is imported code, so a failure building from it
@@ -441,23 +514,55 @@ async def capture_venue(
             lake=lake,
             metrics=metrics,
             expected=EXPECTED_FLOOR,
-            source_ref=source_ref(season, week),
+            source_ref=REFERENCE_SOURCE_REF,
         )
 
-    digest = _digest({"static": static_rows, "assignments": assignment_rows})
-    if _PUBLISHED_DIGESTS.get((season, week)) == digest:
-        raise UpstreamUnchanged(REFERENCE_SOURCE_REF, source_ref=digest)
-    _PUBLISHED_DIGESTS[(season, week)] = digest
+    envelopes = {STATIC: static_envelope, ASSIGNMENT: assignment_envelope}
+    digests = {
+        STATIC: _digest(static_rows),
+        ASSIGNMENT: _digest(assignment_rows),
+    }
 
-    # The shared tail: writes every envelope off the event loop, records each
+    # PER SIGNAL TYPE, not per pass. The spec says a snapshot is appended "only
+    # when the content hash of a VENUE RECORD changes", and one digest spanning
+    # both types breaks that: a flex reschedule moves one game, the combined
+    # digest changes, and a byte-identical `venue_static` envelope is appended
+    # alongside the assignment envelope that genuinely changed.
+    changed = {
+        signal_type: envelope
+        for signal_type, envelope in envelopes.items()
+        if _PUBLISHED_DIGESTS.get((season, week, signal_type)) != digests[signal_type]
+    }
+    if not changed:
+        raise UpstreamUnchanged(REFERENCE_SOURCE_REF, source_ref=digests[STATIC])
+
+    # The shared tail: writes each envelope off the event loop, records its
     # coverage gauge, and records `collector_capture_failures_total` if a write
     # fails — then returns the envelopes ANYWAY, because the capture succeeded
     # and only its archival copy did not.
-    return await publish_capture(
-        {STATIC: static_envelope, ASSIGNMENT: assignment_envelope},
-        lake=lake,
-        metrics=metrics,
-    )
+    #
+    # Wrapped so this collector can tell whether the write actually landed.
+    # `publish_capture` deliberately swallows a failed write and reports nothing
+    # back, which is right for availability and wrong for a digest gate: record
+    # a digest for content the lake never received and the single daily pass
+    # never retries it. See `_WriteObserver`.
+    observer = _WriteObserver(lake)
+    await publish_capture(changed, lake=observer, metrics=metrics)
+
+    for signal_type in changed:
+        if observer.landed(signal_type):
+            _PUBLISHED_DIGESTS[(season, week, signal_type)] = digests[signal_type]
+
+    # An unchanged envelope is not written, but its coverage gauge is still
+    # recorded — `publish_capture` only records the ones it was handed. "Record
+    # every pass, including zero" is what makes the series alertable, and a
+    # gauge that went quiet whenever the data was stable would read exactly like
+    # a collector that had stopped.
+    for signal_type, envelope in envelopes.items():
+        if signal_type not in changed:
+            metrics.coverage(signal_type, envelope.coverage.ratio)
+
+    return envelopes
 
 
 async def _capture_without_schedule(
@@ -511,7 +616,7 @@ async def _capture_without_schedule(
         scope=scope,
         reason=REASON_SCHEDULE_UNAVAILABLE,
         expected=EXPECTED_FLOOR,
-        source_ref=schedule_source_ref(scope["season"], scope["week"]),
+        source_ref=schedule_source_ref(),
     )[ASSIGNMENT]
 
     return await publish_capture(

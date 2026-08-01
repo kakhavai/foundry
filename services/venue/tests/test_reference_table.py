@@ -205,6 +205,125 @@ def test_the_fields_documented_as_unsourced_are_null_everywhere(field_name):
     )
 
 
+# ── provenance: a POPULATED value must be falsifiable too ────────────────────
+#
+# Everything above this line asserts which fields are NULL. That is half an
+# honesty claim, and the missing half let a real error through: `wembley`
+# shipped as `retractable` because nothing in the table, the tests or CI could
+# contradict a populated value. These tests are the other half. They are
+# deliberately not exhaustive — the goal is that a wrong value is CATCHABLE,
+# not that every value is proved.
+
+
+def _roof(venue_id: str) -> str:
+    return reference.REVISIONS[venue_id][0].record.roof_type
+
+
+# Venues whose PITCH is open to the sky, whatever is over the stands. The rule
+# `roof_type` encodes is "describes the pitch, not the building", and this is
+# the list Wembley belonged on and was missing from. Several of these carry
+# substantial spectator roofs — Wembley's sliding sections, Allianz Arena's
+# membrane, the cantilevered rings at Stade de France, Maracanã, Croke Park and
+# the MCG, Lumen Field's and Hard Rock's canopies — and none of them enclose
+# the playing surface.
+OPEN_PITCH_VENUES = (
+    "wembley",
+    "allianz",
+    "stade-de-france",
+    "maracana",
+    "twickenham",
+    "croke-park",
+    "mcg",
+    "tottenham",
+    "azteca",
+    "neo-quimica",
+    "lumen",
+    "hard-rock",
+)
+
+# Roofs that can close OVER THE PITCH.
+TRUE_RETRACTABLES = (
+    "att",
+    "state-farm",
+    "mercedes-benz",
+    "nrg",
+    "lucas-oil",
+    "frankfurt",
+    "bernabeu",
+    "rogers-centre",
+)
+
+# Roofs permanently enclosing the pitch.
+FIXED_DOMES = ("ford-field", "us-bank", "caesars-superdome", "allegiant", "sofi")
+
+
+def test_roof_type_describes_the_pitch_not_the_seating_bowl():
+    """The rule `wembley` was decided against wrongly.
+
+    A roof over the stands leaves the playing surface outdoors, so the venue is
+    `open` however much steel is overhead. Getting this wrong is worse than a
+    null: `weather` resolves `environment` from it BEFORE populating any
+    meteorological field, so a mis-set venue produces a confident forecast for
+    the wrong kind of place.
+    """
+    assert len(OPEN_PITCH_VENUES) == 12
+    wrong = {v: _roof(v) for v in OPEN_PITCH_VENUES if _roof(v) != "open"}
+    assert wrong == {}, (
+        f"{wrong} have roofs over the seating bowl only; roof_type describes the PITCH"
+    )
+
+
+def test_the_true_retractables_and_fixed_domes_are_pinned():
+    """The other direction. Without this, `open` everywhere would pass the test
+    above perfectly."""
+    assert len(TRUE_RETRACTABLES) == 8
+    assert len(FIXED_DOMES) == 5
+    assert {v: _roof(v) for v in TRUE_RETRACTABLES} == dict.fromkeys(
+        TRUE_RETRACTABLES, "retractable"
+    )
+    assert {v: _roof(v) for v in FIXED_DOMES} == dict.fromkeys(
+        FIXED_DOMES, "fixed_dome"
+    )
+
+
+def test_every_neutral_site_venue_is_open_or_a_pinned_retractable():
+    """No neutral-site venue may quietly acquire a roof classification that
+    neither list above covers — which is exactly how `wembley` drifted."""
+    club_venues = set(reference._HOME_VENUE_IDS.values())
+    neutral = sorted(set(reference.REVISIONS) - club_venues)
+    assert len(neutral) == 13
+    unaccounted = [
+        v for v in neutral if v not in OPEN_PITCH_VENUES and v not in TRUE_RETRACTABLES
+    ]
+    assert unaccounted == [], (
+        f"{unaccounted} carry an unreviewed roof classification; add each to "
+        "OPEN_PITCH_VENUES or TRUE_RETRACTABLES with a provenance note"
+    )
+
+
+def test_a_handful_of_surface_classifications_are_pinned():
+    """`surface_class` is the weaker of the two judgement fields, but an
+    unfalsifiable value is still unfalsifiable. These are the ones this table
+    is most confident about: a fixed dome is not natural grass without a
+    retractable tray, and Lambeau's hybrid system is long-standing."""
+
+    def surface(venue_id: str) -> str | None:
+        return reference.REVISIONS[venue_id][0].record.surface_class
+
+    pinned = {
+        "lambeau": "hybrid",
+        "ford-field": "synthetic_turf",
+        "us-bank": "synthetic_turf",
+        "caesars-superdome": "synthetic_turf",
+        "metlife": "synthetic_turf",
+        "lincoln-financial": "natural_grass",
+        "arrowhead": "natural_grass",
+        "empower-field": "natural_grass",
+    }
+    assert len(pinned) == 8
+    assert {v: surface(v) for v in pinned} == pinned
+
+
 def test_altitude_is_populated_only_where_it_is_unambiguous_and_matters():
     records = _all_records()
     with_altitude = {r.venue_id: r.altitude_ft for r in records if r.altitude_ft}

@@ -131,6 +131,39 @@ Null on every record, and the reason each one is null rather than filled in:
                         `enclosure_class`, `home_false_start_index`), not
                         reference data. It belongs to whatever measures it.
 
+--------------------------------------------------------------------------
+Provenance: how a POPULATED value is decided, and how a wrong one is caught
+--------------------------------------------------------------------------
+
+Everything above says which fields are null. That is only half of an honesty
+claim, and the missing half let a real error through: `wembley` shipped as
+`retractable` because nothing in the table, the tests or CI could contradict a
+populated value. The tests asserted which fields were *absent* and never that a
+*present* one was right, so `roof_type` and `surface_class` were unfalsifiable.
+
+So the two populated judgement fields now carry an explicit decision rule, and
+`tests/test_reference_table.py` pins a set of buildings against it. The point is
+not exhaustive verification — it is that a wrong value is now **catchable**.
+
+**`roof_type` describes the PITCH, not the building.** A roof that covers only
+the seating bowl leaves the playing surface outdoors, so the venue is `open` no
+matter how much steel is overhead. This is the rule Wembley was decided
+against wrongly, and it is why Allianz Arena, Stade de France, Maracanã,
+Twickenham, Croke Park and the Melbourne Cricket Ground — all of which have
+substantial spectator roofs — are `open`. `retractable` is reserved for a roof
+that can close **over the pitch**; `fixed_dome` for one permanently enclosing
+it. The three-state enum is `weather`'s input for resolving `environment`
+before it populates any meteorological field, which is why a wrong value here
+is worse than a null one: it produces a confident forecast for the wrong kind
+of place.
+
+**`surface_class` is asserted only where the surface has been stable through
+the compile date**, and null wherever this table cannot confirm the current
+state (see the two league buildings and every neutral site below). It is
+deliberately the weaker of the two claims — a surface changes on a timescale of
+seasons, a roof on a timescale of decades — which is also why an undated
+`surface_class` is acceptable while an undated `surface_installed_on` is not.
+
 One classification limitation, stated rather than buried: `sofi` is recorded as
 `fixed_dome`. It has a fixed translucent canopy over an open-sided bowl, so it
 is rain-proof but not wind-proof, and the spec's three-value enum
@@ -459,8 +492,30 @@ _CLUB_RECORDS: tuple[VenueRecord, ...] = (
         -78.7870,
         "America/New_York",
         "open",
-        # surface_class deliberately null: this building has had a recent
-        # change this table cannot confirm as of TABLE_COMPILED_ON.
+        # PROVENANCE, and the two halves of it have to agree — review caught
+        # that they did not.
+        #
+        # These are the coordinates of the club's LONG-STANDING Orchard Park
+        # site, carried from `schedule_context/venues.py`. The uncertainty here
+        # is a possible new building on an adjacent parcel: if that is what
+        # happened, the surface is unknown AND so is the exact location. It
+        # was inconsistent to null `surface_class` for a building change while
+        # asserting coordinates to four decimal places as though nothing had
+        # moved.
+        #
+        # The coordinates are kept rather than nulled, because they are not
+        # optional — `latitude`/`longitude` are the forecast point and the
+        # travel-distance anchor, and `weather` and `schedule-context` have no
+        # null-safe path for them. The two candidate sites are adjacent, so the
+        # error is bounded at a few hundred metres: immaterial for a forecast
+        # grid cell and for great-circle travel, material for nothing this
+        # fleet computes. That is a stated approximation rather than a silent
+        # one.
+        #
+        # `surface_class` stays null because there the error is NOT bounded:
+        # natural grass and synthetic turf are a categorical difference that
+        # moves rushing efficiency and injury risk, and there is no "close
+        # enough" between them.
     ),
     _club_venue(
         "bank-of-america",
@@ -776,7 +831,20 @@ _NEUTRAL_RECORDS: tuple[VenueRecord, ...] = (
         51.5560,
         -0.2795,
         "Europe/London",
-        "retractable",
+        # `open`, NOT `retractable`, and this was wrong here until review caught
+        # it. Wembley's sliding roof sections extend over the SEATING BOWL; the
+        # pitch is never enclosed, so the playing surface is permanently
+        # outdoors. `roof_type` describes the pitch, because that is the only
+        # thing a weather model cares about.
+        #
+        # The consequence of getting it wrong is not cosmetic: `weather`
+        # resolves `environment` BEFORE populating any meteorological field, so
+        # a `retractable` Wembley would become `retractable_open` /
+        # `retractable_closed` / `retractable_undecided` for a stadium that has
+        # exactly one state. This table's own Allianz Arena, Stade de France
+        # and Maracanã have the same seating-bowl-only architecture and were
+        # always `open`; Wembley was the outlier.
+        "open",
     ),
     _neutral_venue(
         "twickenham",
