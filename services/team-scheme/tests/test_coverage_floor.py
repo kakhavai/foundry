@@ -111,6 +111,27 @@ async def test_a_team_that_played_and_passed_is_present(lake: SpyLake):
     assert not set(coverage.missing) & set(TEAMS)
 
 
+async def test_a_team_with_exactly_one_game_is_present(lake: SpyLake):
+    """**Week 1 — the most common real state this collector will ever be in.**
+
+    Every team has played once. `games_sampled` is 1, which is a complete and
+    correct profile of a one-game season, and all four teams are present.
+
+    This pins the clause's **threshold**, which the zero case cannot: raising
+    it from `<= 0` to `<= 1` files every team missing in week 1 and every
+    interim's first game thereafter, and that mutation survived the whole
+    suite until this fixture existed. `min_games_sampled` reads 1 here, which
+    is the value its own docstring says is normal in week 1 and suspicious in
+    week 12.
+    """
+    envelopes = await run_capture(Feeds(proe=flat_proe(weeks=1)), lake=lake)
+    profile = envelopes[PROFILE]
+    assert {row["games_sampled"] for row in profile.signals} == {1}
+    assert profile.coverage.present == len(TEAMS)
+    assert not set(profile.coverage.missing) & set(TEAMS)
+    assert REASON_NO_GAMES_SAMPLED not in {error["reason"] for error in profile.errors}
+
+
 async def test_a_team_with_no_games_is_expected_and_missing(lake: SpyLake):
     """Clause one of the predicate: `games_sampled` must be non-null, and a
     zero is the honest reading of a team that has not played.
@@ -165,6 +186,48 @@ async def test_a_team_that_played_only_lopsided_football_is_missing(lake: SpyLak
     assert "CCC" in profile.coverage.missing
     assert REASON_NO_NEUTRAL_SNAPS in {error["reason"] for error in profile.errors}
     assert profile.coverage.present == len(TEAMS) - 1
+
+
+async def test_a_measured_zero_neutral_pass_rate_is_present_not_missing(
+    lake: SpyLake,
+):
+    """**`is None`, never falsy** — and `0.0` is falsy.
+
+    BBB runs on every one of its neutral snaps. `neutral_pass_rate` is a
+    *measured* `0.0`: twelve games, ten neutral snaps a week, zero of them
+    passes. That is a real and complete measurement of an extreme tendency,
+    and the team is present.
+
+    Score the clause as `if not profile.neutral_pass_rate` and the row is
+    filed missing with reason `no_neutral_script_snaps_for_this_team`, which
+    is affirmatively false — it says the team never reached neutral script
+    when in fact it reached it 120 times.
+
+    `rates.py`'s `_rate` docstring states exactly this invariant two files
+    away (*"reporting 0.0 would say it ran on every one of them"*), and until
+    this test nothing pinned it at the one place that consumes it. The
+    falsy-vs-`is None` mutation survived all 131 tests.
+
+    Not reachable on a full season of real data — every team throws in
+    neutral script at least once — but reachable on a truncated or
+    single-week document, which is the same scenario `min_games_sampled`
+    exists for.
+    """
+    feeds = Feeds()
+    for play in feeds.plays:
+        if play["posteam"] == "BBB":
+            play["pass"] = 0
+            play["play_type"] = "run"
+
+    envelopes = await run_capture(feeds, lake=lake)
+    profile = envelopes[PROFILE]
+    row = next(r for r in profile.signals if r["team_id"] == "BBB")
+
+    assert row["neutral_pass_rate"] == 0.0
+    assert row["games_sampled"] == 12
+    assert "BBB" not in profile.coverage.missing
+    assert profile.coverage.present == len(TEAMS)
+    assert REASON_NO_NEUTRAL_SNAPS not in {error["reason"] for error in profile.errors}
 
 
 async def test_a_degraded_charting_feed_costs_no_coverage(lake: SpyLake):

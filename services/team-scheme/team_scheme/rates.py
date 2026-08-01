@@ -88,21 +88,25 @@ from .adapters.participation import GROUPING_KEYS, PersonnelBucket
 from .adapters.pbp import WeeklyBucket
 
 __all__ = [
+    "DISPERSION_FIELDS",
+    "MIN_DISPERSION_POPULATION",
     "RATE_PRECISION",
     "REASON_FOREIGN_TEAM_IN_WINDOW",
     "REASON_GAMES_EXCEED_WEEKS",
     "REASON_WEEK_OUTSIDE_SEASON",
     "REGULAR_SEASON_MAX_WEEK",
+    "RateOutlier",
     "TeamSeasonRates",
     "WindowIsNotTheTeamSeason",
     "aggregate",
     "assert_window_is_the_team_season",
+    "flag_dispersion_outliers",
     "weeks_in_team_season",
 ]
 
 REASON_FOREIGN_TEAM_IN_WINDOW = "rate_window_includes_another_team"
 REASON_WEEK_OUTSIDE_SEASON = "rate_window_includes_a_week_outside_the_season"
-REASON_GAMES_EXCEED_WEEKS = "games_sampled_exceeds_weeks_folded"
+REASON_GAMES_EXCEED_WEEKS = "games_sampled_exceeds_weeks_sampled"
 
 # The NFL regular season has run to 18 weeks since 2021 and to 17 before that.
 # A ceiling rather than an exact length: a 17-week season simply never produces
@@ -347,3 +351,119 @@ def aggregate(
         personnel_rates=personnel,
         fourth_down_go_rate=_rate(fourth_gos, fourth_decisions),
     )
+
+
+# --------------------------------------------------------------------------
+# Plausibility: report an outlier, never refuse one
+# --------------------------------------------------------------------------
+#
+# WHY THIS EXISTS. Run against live 2025, `no_huddle_rate` publishes **0.6223
+# for WAS** against a league median of 0.0748 and a second-highest of 0.2264.
+# A 62% no-huddle rate is not a thing an NFL offense does. The arithmetic here
+# is correct; nflfastR's `no_huddle` column for that team-season almost
+# certainly is not. **The collector could not tell, and neither could its
+# tests** — there was no plausibility statement anywhere, and no mutation can
+# express "this number is implausible", so nothing in the harness would ever
+# have found it.
+#
+# WHY IT REPORTS RATHER THAN REFUSES. Three reasons, in order of weight:
+#
+#   1. A refusal asserts the upstream is wrong. This collector cannot support
+#      that claim — it has one source for the field and no second opinion. It
+#      can support "one team is unlike the other thirty-one", which is a
+#      statement about *this pass* and is checkable.
+#   2. A bound tuned to today's distribution becomes a filter on tomorrow's
+#      signal. A rule change, or a genuine tactical shift, would be dropped
+#      exactly when it is most interesting. That is the changepoint detector's
+#      pathology in a different costume, and the phase doc already records
+#      what it cost to learn once.
+#   3. The collector's stated discipline everywhere else is *surface it, do
+#      not silently correct it*. `degraded_upstreams` names a field whose feed
+#      was missing so a null is attributable; this names a field whose value
+#      is extreme so a number is attributable. Neither drops a row and neither
+#      moves coverage.
+#
+# WHY THE RULE ASSERTS NO LEAGUE PRIOR. "Eight times the median is suspicious"
+# needs a number nobody here can source, and it goes stale. So the statistic
+# is leave-one-out and scale-free: **a value is reported when it sits further
+# outside the other teams' range than that range is wide.** The only tuned
+# quantity is the multiplier, and it is 1.0 — the point at which the statement
+# stops being about the value's size and starts being about the shape of the
+# distribution it came from.
+#
+# On the live 2025 document that reports WAS and nothing else: WAS's gap
+# (0.6223 against a pack ending at 0.2264, ~0.21 wide) exceeds the pack width,
+# while NO at 0.2264 does not, because WAS's own presence widens the pack for
+# everyone else. That self-consistency is the leave-one-out property working.
+#
+# A pack of zero width has no shape, so the rule stays silent rather than
+# firing on the first hundredth of a point — the hair-trigger a
+# gap-against-nothing comparison would produce.
+#
+# Not in `collector_core`: exactly one collector needs it. Move it there when
+# a second one does, on the same rule every other shared thing in this repo
+# followed.
+
+# The bounded per-team rates. `pass_rate_over_expected` is deliberately
+# absent: it is signed and centred near zero, so "outside the pack" says
+# nothing useful about it and a pack straddling zero makes the comparison
+# meaningless rather than merely noisy. `personnel_rates` is absent because it
+# is an object rather than a scalar.
+DISPERSION_FIELDS: tuple[str, ...] = (
+    "neutral_pass_rate",
+    "sec_per_play_neutral",
+    "no_huddle_rate",
+    "shotgun_rate",
+    "play_action_rate",
+    "pre_snap_motion_rate",
+    "fourth_down_go_rate",
+)
+
+# Below this many teams there is no "pack" to be outside of, and the rule says
+# nothing. Eight is a quarter of the league: enough that a range means
+# something, low enough that a badly truncated document still gets checked.
+MIN_DISPERSION_POPULATION = 8
+
+
+@dataclass(frozen=True)
+class RateOutlier:
+    """One published rate that sits outside the shape of its own pass.
+
+    Carries the band it fell outside so the error message states the evidence
+    rather than a verdict — a reader can disagree with the rule and still see
+    the numbers.
+    """
+
+    team_id: str
+    field: str
+    value: float
+    low: float
+    high: float
+
+
+def flag_dispersion_outliers(rows: Sequence[dict]) -> list[RateOutlier]:
+    """Rows whose rate sits further outside the pack than the pack is wide.
+
+    Pure and side-effect free: it neither drops a row nor touches coverage.
+    The caller turns each result into an entry in `errors`, which is the whole
+    of the mechanism — see the module comment above for why it is a report
+    rather than a refusal.
+    """
+    outliers: list[RateOutlier] = []
+    for field in DISPERSION_FIELDS:
+        observed = [
+            (row["team_id"], row[field]) for row in rows if row.get(field) is not None
+        ]
+        if len(observed) < MIN_DISPERSION_POPULATION:
+            continue
+        for team_id, value in observed:
+            others = [other for team, other in observed if team != team_id]
+            spread = max(others) - min(others)
+            if spread <= 0:
+                # A pack with no width has no shape to be outside of.
+                continue
+            high = max(others) + spread
+            low = min(others) - spread
+            if value > high or value < low:
+                outliers.append(RateOutlier(team_id, field, value, low, high))
+    return sorted(outliers, key=lambda outlier: (outlier.field, outlier.team_id))

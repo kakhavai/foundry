@@ -53,7 +53,12 @@
           "minimum": 0,
           "description": "Mean inter-snap clock delta within a drive, neutral script only, bounded to 1-60s. UNVALIDATED against any published pace figure -- see the service README. Live 2025 through this adapter gives a 32.37s league mean with a 4.64s inter-team spread over 13,945 samples: plausible, internally consistent, and not the published statistic."
         },
-        "no_huddle_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "no_huddle_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Share of offensive snaps run without a huddle. KNOWN UPSTREAM OUTLIER: live 2025 through this adapter publishes 0.6223 for WAS against a 0.0748 league median and a 0.2264 second-highest. A 62% no-huddle rate is not a thing an NFL offense does; the arithmetic here is correct and nflfastR's no_huddle column for that team-season almost certainly is not. The value is published unchanged -- this collector has one source for the field and cannot support the claim that the upstream is wrong -- but the pass reports it: errors carries a rate_outside_the_shape_of_this_pass entry naming the team, the value and the band, and team_scheme_rate_outliers counts them. Treat any single team-season's no_huddle_rate as the least trustworthy share on this row."
+        },
         "personnel_rates": {
           "type": ["object", "null"],
           "required": ["p11", "p12", "p21", "p13", "heavy"],

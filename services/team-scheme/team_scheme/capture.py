@@ -119,6 +119,25 @@ One failure it structurally cannot see: a document truncated in the **week**
 direction. Every team is present, ratio 1.0, and every rate is computed over
 three weeks instead of twelve. `team_scheme_min_games_sampled` is the gauge
 for that; see `metrics.py`.
+
+--------------------------------------------------------------------------
+5. Plausibility: a rate is reported, never refused
+--------------------------------------------------------------------------
+
+Coverage cannot see an *implausible* value either — the team is present, the
+schema validates, the four-decimal contract holds, and the number is wrong.
+Live 2025 publishes `no_huddle_rate = 0.6223` for WAS against a 0.0748 league
+median, which is almost certainly an artefact in nflfastR's column rather than
+a tendency.
+
+So after every row is built, `rates.flag_dispersion_outliers` names the rates
+sitting further outside the other teams' range than that range is wide, and
+each becomes an `errors` entry quoting the band. **Nothing is dropped and
+coverage does not move.** That module carries the argument for reporting
+rather than refusing, and the reason the rule asserts no league prior; the
+short version is that this collector has one source per field and cannot
+support the claim that its upstream is wrong, while it can support "one team
+is unlike the other thirty-one".
 """
 
 import hashlib
@@ -141,6 +160,7 @@ from .adapters import ftn as ftn_adapter
 from .adapters import participation as participation_adapter
 from .adapters import pbp as pbp_adapter
 from .metrics import metrics
+from .rates import RATE_PRECISION
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +192,7 @@ EXPECTED_FLOOR: dict[str, int] = {PROFILE: 32}
 
 REASON_NO_GAMES_SAMPLED = "no_games_sampled_for_this_team"
 REASON_NO_NEUTRAL_SNAPS = "no_neutral_script_snaps_for_this_team"
+REASON_RATE_OUTLIER = "rate_outside_the_shape_of_this_pass"
 REASON_CHARTING_UNAVAILABLE = "ftn_charting_unavailable"
 REASON_PARTICIPATION_UNAVAILABLE = "participation_unavailable"
 
@@ -341,6 +362,14 @@ def _profile_envelope(
         games_sampled_per_team.append(profile.games_sampled)
 
         # The phase doc's coverage sentence, both clauses, scored separately.
+        #
+        # `<= 0` rather than `== 0` or `not`: `games_sampled` is a `len()`, so
+        # all three are the same function today and rewriting between them is
+        # an equivalent mutation that no test can kill. `<= 0` is kept because
+        # it stays correct if this ever stops being a `len()`. The *threshold*
+        # is not equivalent and is pinned — raising it to `<= 1` files every
+        # team missing in week 1, which
+        # `test_a_team_with_exactly_one_game_is_present` refuses.
         if profile.games_sampled <= 0:
             # A team that has not played is expected and missing, not
             # present-with-nulls. Its row still publishes.
@@ -350,6 +379,23 @@ def _profile_envelope(
             acc.fail(team_id, REASON_NO_NEUTRAL_SNAPS)
             continue
         acc.record(team_id)
+
+    # Plausibility, AFTER every row is built and never as a filter on one.
+    # An outlier is reported and published: the row stays, coverage does not
+    # move, and `errors` names the team, the field, the value and the band it
+    # fell outside. `rates.flag_dispersion_outliers` carries the argument for
+    # reporting rather than refusing, and the reason the rule asserts no
+    # league-average prior.
+    outliers = rates_module.flag_dispersion_outliers(rows)
+    for outlier in outliers:
+        acc.add_error(
+            REASON_RATE_OUTLIER,
+            f"{outlier.team_id}.{outlier.field} = {outlier.value} lies outside "
+            f"[{round(outlier.low, RATE_PRECISION)}, "
+            f"{round(outlier.high, RATE_PRECISION)}], the band the other teams "
+            "in this pass describe; the row is published unchanged",
+        )
+    metrics.rate_outliers(len(outliers))
 
     metrics.window_refusals(refusals)
     metrics.degraded_upstreams(len(degraded_tuple))

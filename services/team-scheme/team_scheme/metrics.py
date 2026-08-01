@@ -46,6 +46,14 @@ class TeamSchemeMetrics(CollectorMetrics):
                 "Optional upstreams missing in the last pass (0, 1 or 2), by collector."
             ),
         )
+        self._rate_outliers = LastValueGauge(
+            meter,
+            "team_scheme_rate_outliers",
+            description=(
+                "Published rates sitting further outside the other teams' "
+                "range than that range is wide, in the last pass, by collector."
+            ),
+        )
 
     def window_refusals(self, count: int) -> None:
         """The guard's firing count. **Zero is the expected value.**
@@ -91,6 +99,26 @@ class TeamSchemeMetrics(CollectorMetrics):
         whether the current state is degraded.
         """
         self._degraded_upstreams.set(count, {"collector": self.collector})
+
+    def rate_outliers(self, count: int) -> None:
+        """Published rates that sit outside the shape of their own pass.
+
+        **The third failure coverage cannot see, and the one no mutation can
+        express.** An implausible value is a perfectly present team with a
+        perfectly valid row: coverage reads 1.0, the schema validates, the
+        four-decimal contract holds, and the number is wrong. Live 2025
+        publishes `no_huddle_rate = 0.6223` for WAS against a 0.0748 league
+        median — arithmetically correct here, and almost certainly an
+        artefact in nflfastR's `no_huddle` column for that team-season.
+
+        **A non-zero value here does not mean the collector is broken**, and
+        that is the difference between this gauge and `window_refusals`. It
+        means one team's number is unlike the other thirty-one's and a human
+        should look at which. The row publishes either way — see
+        `rates.flag_dispersion_outliers` for why this reports rather than
+        refuses. Alert on a *sustained* non-zero, not on a single pass.
+        """
+        self._rate_outliers.set(count, {"collector": self.collector})
 
 
 metrics = TeamSchemeMetrics()

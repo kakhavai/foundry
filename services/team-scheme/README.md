@@ -127,6 +127,34 @@ It is the largest unverified numeric claim in this collector.
 share it is off by 100x and every value still looks plausible. The contract
 schema says so on the field.
 
+**`no_huddle_rate` has a known upstream outlier.** Live 2025 through this
+adapter publishes **0.6223 for WAS** against a league median of **0.0748** and
+a second-highest of **0.2264** — eight times the median and 2.7x the next team.
+A 62% no-huddle rate is not a thing an NFL offense does. The arithmetic here is
+correct; nflfastR's `no_huddle` column for that team-season almost certainly is
+not.
+
+It is **published unchanged, and reported**. This collector has one source for
+the field and no second opinion, so it cannot support the claim that the
+upstream is wrong — but it can support "one team is unlike the other
+thirty-one", which is a statement about the pass and is checkable. So the
+envelope's `errors` carries a `rate_outside_the_shape_of_this_pass` entry
+naming the team, the field, the value and the band, and
+`team_scheme_rate_outliers` counts them. Nothing is dropped and coverage does
+not move.
+
+The rule asserts **no league-average prior**: a rate is reported when it sits
+further outside the other teams' range than that range is wide. The only tuned
+quantity is the multiplier, and it is 1.0. See the reasoning block above
+`flag_dispersion_outliers` in `rates.py`, including why a *refusing* bound was
+rejected — a threshold tuned to today's distribution becomes a filter on
+tomorrow's signal, which is the changepoint detector's pathology in a different
+costume.
+
+Note this is a different problem from the `no_huddle_rate` **denominator**
+question (every offensive snap rather than every pre-snap opportunity), which
+is a definitional choice. The WAS value survives any denominator.
+
 ## What is deliberately not built
 
 **The changepoint detector.** The original spec required a test on each team's

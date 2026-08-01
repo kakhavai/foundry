@@ -40,6 +40,7 @@ GAUGES = (
     "team_scheme_window_refusals",
     "team_scheme_min_games_sampled",
     "team_scheme_degraded_upstreams",
+    "team_scheme_rate_outliers",
 )
 
 
@@ -60,6 +61,45 @@ async def test_a_quiet_pass_reports_no_refusals_and_no_degradation(lake: SpyLake
     await run_capture(lake=lake)
     assert sample("team_scheme_window_refusals") == 0
     assert sample("team_scheme_degraded_upstreams") == 0
+    assert sample("team_scheme_rate_outliers") == 0
+
+
+async def test_the_outlier_gauge_counts_what_the_pass_reported(lake: SpyLake):
+    """**Coverage cannot see an implausible value, and neither can a mutation.**
+
+    An outlier is a present team with a valid row: the ratio reads 1.0, the
+    schema validates, the four-decimal contract holds, and the number is
+    wrong. This gauge is the only series that moves — so pinning it to a
+    constant is a mutation the rest of the suite cannot feel, which is
+    precisely why it needs its own test rather than being read off the
+    `errors` array.
+
+    Ten teams, one of them running no-huddle on 8 of 10 snaps against a pack
+    that tops out at 0.2. The gauge is 1 and the coverage ratio is unchanged
+    from the pass where nobody is an outlier.
+    """
+    from .test_rate_plausibility import TEN_TEAMS, _no_huddle_by_team
+
+    ordinary = Feeds(proe=flat_proe(TEN_TEAMS))
+    _no_huddle_by_team(
+        ordinary, {team: index % 3 for index, team in enumerate(TEN_TEAMS)}
+    )
+    quiet = await run_capture(ordinary, lake=lake)
+    assert sample("team_scheme_rate_outliers") == 0
+
+    extreme = Feeds(proe=flat_proe(TEN_TEAMS))
+    _no_huddle_by_team(
+        extreme,
+        {
+            "T00": 8,
+            **{team: index % 3 for index, team in enumerate(TEN_TEAMS[1:])},
+        },
+    )
+    flagged = await run_capture(extreme, lake=SpyLake(), now=LATER)
+    assert sample("team_scheme_rate_outliers") == 1
+    # The failure coverage cannot see: identical ratio, identical present.
+    assert flagged[PROFILE].coverage.ratio == quiet[PROFILE].coverage.ratio
+    assert flagged[PROFILE].coverage.present == quiet[PROFILE].coverage.present
 
 
 async def test_the_refusal_gauge_moves_when_the_guard_fires(lake: SpyLake, monkeypatch):

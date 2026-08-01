@@ -460,9 +460,22 @@ def test_the_collectors_source_names_no_staff_concept():
 
     A restoration that reads a coach feed but has not yet reached the row
     shape would pass the two tests above while the coupling is already half
-    back. `docstrings` and prose are excluded — this file, `rates.py` and
-    `capture.py` all discuss the removal at length, and a gate that forbade
-    the words would forbid explaining them.
+    back.
+
+    **The match is exact identifier equality**, over `Name`, `Attribute`,
+    `arg` and string-constant nodes — not a substring search. Two consequences,
+    both deliberate and neither of them "docstrings are excluded":
+
+    * Prose does not trip it. A docstring *containing* `revision_id` is one
+      string constant that is not *equal* to it, which is why this file,
+      `rates.py` and `capture.py` can all discuss the removal at length. A
+      gate that forbade the words would forbid explaining them.
+    * A determined rename passes. `revision_id_v2`, `rev_id`, or an f-string
+      assembling the value under some other key would all get through. That is
+      an accepted bound — no gate catches a rename — and it is why this test
+      is the third layer rather than the only one: the row-shape assertion
+      above and the schema's `additionalProperties: false` catch the value
+      arriving on the wire whatever it is called.
     """
     import ast
     from pathlib import Path
