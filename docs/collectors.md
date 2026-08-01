@@ -654,12 +654,57 @@ carry is simply absent from the rows — say `required_columns` when you need it
 to exist. This buys CPU and allocation churn, not headroom: rows are yielded
 one at a time either way.
 
+### Before format, check FRESHNESS: an artifact can be abandoned
+
+**Compare `updated_at` across an nflverse release's formats before you compare
+their sizes.** They are built by separate steps and one can silently stop being
+regenerated while the release around it is rebuilt daily. When that happens the
+size rule below does not apply at all — the choice is between a live document
+and a dead one, and there is nothing to trade off.
+
+    curl -s https://api.github.com/repos/nflverse/nflverse-data/releases/tags/<tag> \
+      | python3 -c "import json,sys; [print(a['name'], a['updated_at']) for a in json.load(sys.stdin)['assets']]"
+
+`contracts` is the case that found this, on 2026-08-01:
+
+| asset | updated |
+|---|---|
+| `historical_contracts.csv.gz` | **2022-05-29** |
+| `historical_contracts.parquet` | 2026-08-01 |
+| `historical_contracts.rds` | 2026-08-01 |
+| `timestamp.json` | 2026-08-01 |
+
+The CSV had not been rebuilt in four years. Its newest `year_signed` was 2022
+and **2,869 of its 2,887 "active" contracts had already expired**; the parquet's
+newest was 2026. Nothing raises on a stale document — `player-contract` read the
+CSV, passed 146 tests and published four-year-old contracts as current. So it
+reads the parquet, with `pyarrow` in **its own** `pyproject.toml` and nowhere
+else, and `docs/architecture/phase-8-data-source-collectors.md` records the
+deviation.
+
+**The whole dependency set was audited when this surfaced** — pbp,
+ftn_charting, pbp_participation, officials, players, snap_counts, injuries,
+combine, depth_charts and rosters. `contracts` is the **only** release with
+format-divergent staleness; everywhere else every format shares a timestamp. So
+this is a landmine rather than a pattern, and the rule below stands unchanged
+for every other feed.
+
+Two things keep the exception from becoming the rule. `pyproject.toml` is
+per-service, so a wheel added for one collector is not added to the fleet. And
+parquet's footer-at-the-end layout still costs a full buffer before the first
+row — tolerable at 6.44 MiB, not at 93 MiB. A collector taking this exception
+must also filter in Arrow *before* `to_pylist()`; see
+`services/player-contract/player_contract/adapters/upstream.py`, where doing it
+the other way measured 157.6 MB peak RSS against a 268 MB limit.
+
 ### Format: take `.csv.gz` where it exists, plain CSV otherwise — not parquet
 
 **Decided once, fleet-wide, with live measurements. Do not re-litigate it per
-collector.** nflverse publishes most release assets four ways, and the parquet
-variants look dramatically smaller until you check the one that matters.
-Measured over the wire on 2026-08-01 with `Accept-Encoding: gzip` offered:
+collector** — but do check the freshness question above first, because this
+rule assumes both formats are current. nflverse publishes most release assets
+four ways, and the parquet variants look dramatically smaller until you check
+the one that matters. Measured over the wire on 2026-08-01 with
+`Accept-Encoding: gzip` offered:
 
 | artifact | csv | csv.gz | parquet |
 |---|---|---|---|
@@ -695,6 +740,11 @@ Revisit this rule only for a collector needing an nflverse asset that (a) has
 no `.gz` variant, (b) exceeds ~40 MiB, **and** (c) ships
 `CAPTURE_ENABLED=true`. All three, not any one — a large feed behind a
 disabled loop costs image size and no bandwidth.
+
+That test is about **size**, and it is not the only way past this rule. A
+`.csv.gz` that the upstream has stopped regenerating fails the rule's own
+premise rather than its threshold — see the freshness section above, and
+`player-contract` for the one collector that takes that exception.
 
 **Scope of the `play_by_play` finding:** it settles the pbp document for every
 collector that reads it, `defense-vs-position` included. It does **not** settle

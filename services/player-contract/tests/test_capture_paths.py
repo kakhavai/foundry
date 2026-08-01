@@ -5,7 +5,6 @@ failure, a truncated pass reporting itself complete, or two upstream records for
 one person publishing two contradictory contracts for the same `player_id`.
 """
 
-import gzip
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -21,9 +20,10 @@ from .conftest import (
     NOW,
     SEASON,
     WEEK,
-    contracts_csv,
+    contracts_parquet,
     mock_identity,
     mock_upstream,
+    row,
 )
 
 
@@ -96,10 +96,12 @@ async def test_two_upstream_records_for_one_person_publish_ONE_row(lake):
     — a shape the schema permits and a generator would silently average.
     """
     rows = [
-        ("11", "Alpha Passer", "QB", "Packers", "TRUE", 2025, 5, 150000000, 1),
-        ("12", "Alpha Passer", "QB", "Packers", "TRUE", 2019, 3, 30000000, 1),
-    ]
-    mock_upstream(respx.mock, body=gzip.compress(contracts_csv(rows).encode()))
+        row("Alpha Passer", otc_id=11, team="Packers", year_signed=2025,
+            years=5, value=150.0, gsis_id="00-0000001"),
+        row("Alpha Passer", otc_id=12, team="Packers", year_signed=2019,
+            years=3, value=30.0, gsis_id="00-0000001"),
+    ]  # fmt: skip
+    mock_upstream(respx.mock, body=contracts_parquet(rows))
     mock_identity(respx.mock)
 
     envelope = (await capture(lake))[CONTRACT_STATUS]
@@ -120,10 +122,12 @@ async def test_a_discarded_duplicate_active_row_is_reported(lake):
     Counting it is what makes an upstream that started emitting duplicates
     visible before it becomes a mystery."""
     rows = [
-        ("11", "Alpha Passer", "QB", "Packers", "TRUE", 2025, 5, 150000000, 1),
-        ("11", "Alpha Passer", "LT", "Packers", "TRUE", 2025, 5, 150000000, 1),
-    ]
-    mock_upstream(respx.mock, body=gzip.compress(contracts_csv(rows).encode()))
+        row("Alpha Passer", otc_id=11, position="QB", team="Packers",
+            year_signed=2025, years=5, value=150.0, gsis_id="00-0000001"),
+        row("Alpha Passer", otc_id=11, position="LT", team="Packers",
+            year_signed=2025, years=5, value=150.0, gsis_id="00-0000001"),
+    ]  # fmt: skip
+    mock_upstream(respx.mock, body=contracts_parquet(rows))
     mock_identity(respx.mock)
 
     envelope = (await capture(lake))[CONTRACT_STATUS]

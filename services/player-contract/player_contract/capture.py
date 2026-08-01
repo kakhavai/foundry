@@ -11,11 +11,11 @@ Six things here are correctness rather than style.
 
 `fetch_scope_or_fail` resolves both narrowing seams — the membership list out of
 the lake and the `player-identity` client the forward join runs through — before
-`historical_contracts.csv.gz` is touched. That ordering *is* failing closed. A
-pass that cannot narrow costs zero upstream calls rather than 1.13 MiB fetched
-to publish nothing, and there is deliberately no unnarrowed fallback: one would
-spend the whole budget precisely during the incident that took `roster-scope`
-out.
+`historical_contracts.parquet` is touched. That ordering *is* failing closed. A
+pass that cannot narrow costs zero upstream calls rather than 6.44 MiB fetched
+and 51,785 rows decoded to publish nothing, and there is deliberately no
+unnarrowed fallback: one would spend the whole budget precisely during the
+incident that took `roster-scope` out.
 
 --------------------------------------------------------------------------
 2. `coverage.expected` is the SCOPE SLOT, never the upstream row
@@ -58,20 +58,39 @@ declared or not. The only difference is that this way the slot is *named* in
 README.
 
 --------------------------------------------------------------------------
-4. Six fields are null because the SOURCE lacks them, not because the row does
+4. Why a field is null is itself published, and there are THREE reasons
 --------------------------------------------------------------------------
 
-`cap_hit_current_usd`, `guaranteed_remaining_usd`, `signing_bonus_proration_usd`,
-`dead_money_if_cut_usd`, `tag_status` and `void_years_count` are cap-accounting
-derivations the free feed does not carry. They are emitted **present and null**
-with a machine-readable reason, never omitted and never fabricated — and never
-derived from `apy`, which is average annual value and is not read at all
-(`adapters/upstream.COLUMNS`).
+The phase doc lists six cap-accounting fields as null by necessity. That was
+true of the CSV artifact. The parquet carries a populated per-season cap table
+(`adapters/upstream`, `cols`), so **two of the six are now sourced** —
+`cap_hit_current_usd` from `cap_number` and `signing_bonus_proration_usd` from
+`prorated_bonus`, both direct lookups keyed by year, no derivation.
 
-`null_field_reasons` keeps that separate from the *other* kind of null: a row
-whose `value`, `guaranteed` or `years` the upstream left blank. "This source
-will never supply it" and "this row did not say" call for different consumer
-behaviour, and an absent key cannot express either.
+That is a deliberate expansion of the spec's field set and it is disclosed in
+the service README. The reason it is not optional: `null_field_reasons` makes a
+**machine-readable claim about the source**, and continuing to emit
+`unsourced_by_upstream` for a field the document supplies on 2,219 rows would
+write a falsehood into an append-only lake that is never rewritten. A wrong
+reason is worse than a missing field.
+
+So three reasons, and the distinction is the point — each implies a different
+action for a consumer deciding whether to buy a cap-accounting feed:
+
+* `unsourced_by_upstream` — this source will never supply it. Three fields:
+  `dead_money_if_cut_usd`, `tag_status`, `void_years_count`. No column exists.
+* `requires_undefined_derivation` — the components are present but the
+  definition is not settled by the source. One field:
+  `guaranteed_remaining_usd`. The per-season table carries `guaranteed_salary`,
+  but "not yet earned" needs a rule about the in-progress season that the feed
+  does not state, and inventing one would be the same fabrication the adapter
+  notes forbid.
+* `absent_in_upstream_row` — this row did not say. Any row-nullable field,
+  including the two sourced cap fields on the 24% of active rows carrying no
+  entry for the capture season.
+
+Nothing is ever derived from `apy`, which is average annual value and is not
+read at all (`adapters/upstream.COLUMNS`).
 
 --------------------------------------------------------------------------
 5. A `seasonal` cadence must not append an identical snapshot daily
@@ -98,17 +117,27 @@ its own envelopes — every failure here either ends the pass or is a coverage
 entry.
 
 --------------------------------------------------------------------------
-The failure mode the phase doc names: a restructured deal
+The failure mode the phase doc names: a restructured deal. It is now LIVE.
 --------------------------------------------------------------------------
 
 A mid-season restructure changes proration and dead money retroactively. The
 lake is append-only, so an old snapshot stays correct-as-of its `captured_at`
-and **must not be reconciled backward**. With the cap fields null this is latent
-rather than active — but it becomes live the moment a paid feed supplies them,
-so nothing here reads a prior envelope back and no reconcile-backward path is
-built "for later". The only prior state this module keeps is
-`_PUBLISHED_DIGESTS`, which is in-memory, forward-only, and never rewrites an
-object.
+and **must not be reconciled backward**.
+
+The phase doc calls this latent "with the cap fields null", and says it "becomes
+live the moment a paid feed supplies them, so the append-only discipline must be
+in place before that happens". **That moment has arrived** — not via a paid feed
+but via the parquet's per-season cap table, which supplies `cap_hit_current_usd`
+and `signing_bonus_proration_usd` (section 4). A restructure in week 8 rewrites
+week 8's proration in the upstream, and week 3's published envelope must keep
+saying what was true in week 3.
+
+The discipline is in place and is structural rather than a convention: nothing
+in this module reads a prior envelope back, and no reconcile-backward path
+exists to be reached for. The only prior state kept is `_PUBLISHED_DIGESTS` —
+in-memory, forward-only, and never rewriting an object. A restructure changes
+the digest, which publishes a NEW object alongside the old one; that is the
+append-only behaviour working, not a duplicate.
 """
 
 import hashlib
@@ -149,7 +178,9 @@ __all__ = [
     "CONTRACT_STATUS",
     "EXPECTED_FLOOR",
     "ROW_NULLABLE_FIELDS",
+    "SEASON_CAP_FIELDS",
     "SIGNAL_TYPES",
+    "UNDERIVED_FIELDS",
     "UNSOURCED_FIELDS",
     "build_signal",
     "capture_player_contract",
@@ -196,27 +227,36 @@ REASON_DUPLICATE_ACTIVE = "duplicate_active_contract"
 # that survives the 50-entry cap.
 REASON_CONTRACT_EXPIRED = "contract_end_season_precedes_capture_season"
 
-# Why a field is null. Two values, and the distinction is the point: a consumer
-# retrying against a paid feed cares about the first and can do nothing about
-# the second.
+# Why a field is null. Three values — see the module docstring, section 4. Each
+# implies a different consumer action, which is the whole reason they are not
+# collapsed into one "no data" marker.
 UNSOURCED = "unsourced_by_upstream"
+UNDERIVED = "requires_undefined_derivation"
 ABSENT_IN_ROW = "absent_in_upstream_row"
 
-# The six cap-accounting fields the free feed does not carry, in the phase doc's
-# order. Emitted present-and-null on every row, with `UNSOURCED` recorded for
-# each in `null_field_reasons`.
+# Null on every row, always, because no column in the document carries them.
 UNSOURCED_FIELDS: tuple[str, ...] = (
-    "cap_hit_current_usd",
-    "guaranteed_remaining_usd",
-    "signing_bonus_proration_usd",
     "dead_money_if_cut_usd",
     "tag_status",
     "void_years_count",
 )
 
-# The fields that can be null because a particular ROW was blank. Kept as a
-# tuple next to the one above so the two classes stay visibly different things
-# rather than one dict a later edit can quietly merge.
+# Null on every row because the components exist and the DEFINITION does not.
+# `cols[].guaranteed_salary` is right there; "guarantee not yet earned" needs a
+# rule about the in-progress season the feed never states.
+UNDERIVED_FIELDS: tuple[str, ...] = ("guaranteed_remaining_usd",)
+
+# Read from the parquet's nested per-season cap table for the capture season.
+# Null when this row has no entry for that season — which is `ABSENT_IN_ROW`,
+# a different fact from the source not carrying cap accounting at all.
+SEASON_CAP_FIELDS: tuple[str, ...] = (
+    "cap_hit_current_usd",
+    "signing_bonus_proration_usd",
+)
+
+# The fields that can be null because a particular ROW was blank. Kept as its
+# own tuple so the classes stay visibly different things rather than one dict a
+# later edit can quietly merge.
 ROW_NULLABLE_FIELDS: tuple[str, ...] = (
     "team",
     "contract_start_season",
@@ -225,6 +265,7 @@ ROW_NULLABLE_FIELDS: tuple[str, ...] = (
     "seasons_remaining",
     "total_value_usd",
     "guaranteed_total_usd",
+    *SEASON_CAP_FIELDS,
 )
 
 # `(season, week, signal_type) -> the digest THIS process last published AND saw
@@ -275,8 +316,9 @@ def build_signal(row: ContractRow, *, player_id: str, season: int) -> dict:
     pins `player_id` to `^fdy-` so an attempt to swap the two fails the
     conformance test rather than the generator.
 
-    Money is emitted as the feed's **nominal** whole-dollar integers. Not
-    re-scaled, and not the `inflated_*` variants — see `adapters/upstream.py`.
+    Money is **whole USD**, converted from the document's millions by
+    `adapters.upstream.to_usd` before it ever reaches this function. Nominal,
+    never the `inflated_*` variants — see `adapters/upstream.py` for both.
     """
     end_season = derive.contract_end_season(row.year_signed, row.years)
 
@@ -289,14 +331,20 @@ def build_signal(row: ContractRow, *, player_id: str, season: int) -> dict:
         "seasons_remaining": derive.seasons_remaining(season, end_season),
         "total_value_usd": row.total_value_usd,
         "guaranteed_total_usd": row.guaranteed_total_usd,
+        # Sourced from the parquet's per-season cap table. Null when this row
+        # carries no entry for `season`.
+        "cap_hit_current_usd": row.cap_hit_current_usd,
+        "signing_bonus_proration_usd": row.signing_bonus_proration_usd,
         "otc_player_id": row.otc_id or None,
     }
-    # Present and null, every row, always. `dict.fromkeys` rather than six
-    # literal lines so a field added to `UNSOURCED_FIELDS` cannot be declared in
-    # one place and forgotten in the other.
+    # Present and null, every row, always. `dict.fromkeys` rather than literal
+    # lines so a field added to either tuple cannot be declared in one place and
+    # forgotten in the other.
     signal.update(dict.fromkeys(UNSOURCED_FIELDS))
+    signal.update(dict.fromkeys(UNDERIVED_FIELDS))
 
     reasons = dict.fromkeys(UNSOURCED_FIELDS, UNSOURCED)
+    reasons.update(dict.fromkeys(UNDERIVED_FIELDS, UNDERIVED))
     for name in ROW_NULLABLE_FIELDS:
         if signal[name] is None:
             reasons[name] = ABSENT_IN_ROW
@@ -428,7 +476,7 @@ async def capture_player_contract(
 
     if identity_failures.rows:
         # One summarised entry, never one per row: a `player-identity` outage
-        # against a 2,908-row feed would otherwise fill the 50-entry cap by
+        # against a 2,931-row feed would otherwise fill the 50-entry cap by
         # itself and push every other reason off the list.
         acc.add_error(IDENTITY_UPSTREAM_ERROR, identity_failures.detail())
     if read.malformed:

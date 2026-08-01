@@ -595,45 +595,60 @@ collectors:
     signal_types: [player_contract_status]
     # ONE signal type. The spec originally paired this with
     # `player_incentive_progress`; that half is DEFERRED to a `player-incentives`
-    # collector and is not built. The free contracts feed carries no incentive
-    # data of any kind — verified against all 31,893 rows: `season_history` is
-    # empty on every one, and no column or value anywhere mentions incentive,
-    # escalator, LTBE, NLTBE or bonus. The spec's own thesis is that
-    # distance-to-threshold is the load-bearing signal, and thresholds have no
-    # free source, so a collector that can compute progress against thresholds
-    # it does not have emits nothing. Do not expect an incentive route here.
+    # collector and is not built. The feed carries bonus AMOUNTS
+    # (prorated/roster/workout/option/other/per-game, in the per-season table)
+    # but no thresholds and no LTBE/NLTBE classification — and the spec's own
+    # thesis is that distance-to-threshold is the load-bearing signal. A
+    # collector that can compute progress against thresholds it does not have
+    # emits nothing. Do not expect an incentive route here.
     #
-    # CAPTURE_ENABLED=false, and NOT merely as the scaffolder's default. The
-    # upstream `.csv.gz` was last regenerated 2022-05-29 while the release
-    # around it is refreshed daily (the parquet and rds variants moved
-    # 2026-08-01); the newest `year_signed` in the document is 2022. A loop
-    # therefore buys no freshness and writes four-year-old contracts into an
-    # append-only lake. `broadcast-context`'s vacuous-guard exception does not
-    # apply: nothing here reads back a prior lake snapshot, so one dispatched
-    # /refresh produces exactly what a season-long loop would. Cost is not the
-    # binding constraint — 1.13 MiB per changed pass with conditional GET is
-    # cheap — the staleness is.
+    # READS THE PARQUET, NOT THE CSV. The release's `.csv.gz` artifact was last
+    # regenerated 2022-05-29 while the release itself rebuilds daily; its newest
+    # `year_signed` is 2022 and 2,869 of its 2,887 "active" contracts had
+    # already expired. `historical_contracts.parquet` is 6.44 MiB, 51,785 rows,
+    # 2,931 active, current. `pyarrow` is in THIS service's pyproject.toml only
+    # — docs/collectors.md's CSV-over-parquet rule is a size argument and has
+    # been amended to say "compare updated_at across formats first".
     #
-    # SIX FIELDS ARE NULL BY NECESSITY on every row and always will be from this
-    # source: cap_hit_current_usd, guaranteed_remaining_usd,
-    # signing_bonus_proration_usd, dead_money_if_cut_usd, tag_status,
-    # void_years_count. They are emitted present-and-null with a
-    # machine-readable reason in `null_field_reasons`, so a consumer can tell
-    # "this source will never supply it" (`unsourced_by_upstream`) from "this
-    # row did not say" (`absent_in_upstream_row`). None is derived from `apy`,
-    # which is average annual value and is not a cap hit.
+    # MONEY IS IN MILLIONS in the parquet (the CSV's was whole dollars) and is
+    # converted once in the adapter. Published values are whole USD.
+    #
+    # CAPTURE_ENABLED=false. 6.44 MiB per changed pass with conditional GET is
+    # cheap, so cost is not the constraint. Two things are: nothing here reads
+    # back a prior lake snapshot, so `broadcast-context`'s vacuous-guard
+    # exception does not apply and one dispatched /refresh produces exactly what
+    # a season-long loop would; and this collector fails closed on the scope, so
+    # on a cluster where roster-scope has not published every loop pass would
+    # write a `present: 0` envelope and count a capture failure.
+    #
+    # FOUR FIELDS ARE NULL on every row, and for two different reasons.
+    # `dead_money_if_cut_usd`, `tag_status` and `void_years_count` have no
+    # column at all (`unsourced_by_upstream`). `guaranteed_remaining_usd` has
+    # its components in the per-season table but the source does not settle what
+    # "not yet earned" means mid-season (`requires_undefined_derivation`), and
+    # inventing a rule would be fabrication. `cap_hit_current_usd` (75.7% of
+    # active rows) and `signing_bonus_proration_usd` (59.8%) ARE sourced, from
+    # that table — the spec listed them as null-by-necessity against the dead
+    # CSV. A row missing the capture season carries `absent_in_upstream_row`,
+    # which is a different claim from either of the above. Nothing is derived
+    # from `apy`, which is average annual value and is not read at all.
     #
     # Also disclosed: `coverage.expected` drops the spec's original
-    # `cap_hit_current_usd` clause (an unsourceable field in the predicate pegs
-    # the ratio at 0 forever — the clause-swallowing failure `team-scheme` hit),
-    # and `seasons_remaining` is NOT clamped at zero, so a negative value means
-    # the source's record of the deal expired before the season captured.
+    # `cap_hit_current_usd` clause and keeps it dropped even though the field is
+    # now sourced — it is present on 75.7% of rows, so putting it in the
+    # predicate would re-create the clause-swallowing failure `team-scheme` hit
+    # in a smaller form. `seasons_remaining` is NOT clamped at zero, so a
+    # negative value means the source's record of the deal expired before the
+    # season captured (33 of 2,930 rows against the live parquet).
     #
-    # This collector joins on the player's display NAME — the upstream carries
-    # no crosswalk id — so every row goes through player-identity's Tier 3
-    # weighted agreement rather than a Tier 1 adoption. `otc_player_id` is
-    # published as provenance and a future crosswalk seed; it is NOT an fdy- id
-    # and must never be read as `player_id`.
+    # Identity joins TWO ways. 76.8% of active rows carry a `gsis_id` — a
+    # published crosswalk source — and resolve at Tier 1 by adoption, with the
+    # name deliberately withheld so a crosswalk miss cannot fall through to
+    # attribute scoring. The other 23% resolve on name/team/position at Tier 3.
+    # `otc_player_id` is published as provenance and a future crosswalk seed; it
+    # is NOT an fdy- id, is never sent as a `source_id` (player-identity has no
+    # `otc` crosswalk, so it would be inert), and must never be read as
+    # `player_id`.
     #
     # Set true if this collector narrows to roster-scope's membership list
     # before it fetches. Checked structurally by

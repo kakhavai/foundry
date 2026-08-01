@@ -65,27 +65,29 @@
           "minimum": 0
         },
         "cap_hit_current_usd": {
-          "description": "Current-season cap charge. Pinned to null: the free upstream carries no cap accounting, and `apy` is average annual value rather than a cap hit. Typing this `null` makes fabricating one a contract violation rather than a code review question.",
-          "type": "null"
+          "description": "Current-season cap charge, in whole USD, read from the upstream parquet's per-season table (`cols[year == scope.season].cap_number`) and scaled from its millions. Null when this row carries no entry for the capture season — 24% of active rows. NEVER derived from `apy`, which is average annual value and is not read at all.",
+          "type": ["integer", "null"],
+          "minimum": 0
         },
         "guaranteed_remaining_usd": {
-          "description": "Guarantee not yet earned. Pinned to null — see cap_hit_current_usd.",
+          "description": "Guarantee not yet earned. Pinned to null with reason `requires_undefined_derivation`: the per-season table carries `guaranteed_salary`, but 'not yet earned' needs a rule about the in-progress season the source does not state. Deliberately not invented.",
           "type": "null"
         },
         "signing_bonus_proration_usd": {
-          "description": "Current-season prorated bonus share. Pinned to null — see cap_hit_current_usd.",
-          "type": "null"
+          "description": "Current-season prorated bonus share, in whole USD, from `cols[year == scope.season].prorated_bonus`. Null when this row has no entry for the capture season or no proration in it — 40% of active rows.",
+          "type": ["integer", "null"],
+          "minimum": 0
         },
         "dead_money_if_cut_usd": {
-          "description": "Cap charge on release. Pinned to null — see cap_hit_current_usd.",
+          "description": "Cap charge on release. Pinned to null: no column carries it, and computing it needs guarantee-acceleration rules the source does not state. Typing this `null` makes fabricating one a contract violation rather than a code review question.",
           "type": "null"
         },
         "tag_status": {
-          "description": "none | franchise_exclusive | franchise_non_exclusive | transition. Pinned to null: the free upstream carries no tag column.",
+          "description": "none | franchise_exclusive | franchise_non_exclusive | transition. Pinned to null: the upstream carries no tag column.",
           "type": "null"
         },
         "void_years_count": {
-          "description": "Void years appended to the deal. Pinned to null: the free upstream carries no void-year column, so `years` is the stated term and cannot be decomposed.",
+          "description": "Void years appended to the deal. Pinned to null: the upstream carries no void-year column, so `years` is the stated term and cannot be decomposed.",
           "type": "null"
         },
         "otc_player_id": {
@@ -94,18 +96,20 @@
           "minLength": 1
         },
         "null_field_reasons": {
-          "description": "Why each null field is null. `unsourced_by_upstream` = this source will never supply it; `absent_in_upstream_row` = this row did not say. The six cap-accounting fields are always present here; a row-nullable field appears only when it is actually null.",
+          "description": "Why each null field is null, and each value implies a different consumer action. `unsourced_by_upstream` = no column exists, a paid feed would be needed. `requires_undefined_derivation` = the components are present but the source does not settle the definition. `absent_in_upstream_row` = this row did not say. The four permanently-null fields are always present here; a row-nullable field appears only when it is actually null — so a populated `cap_hit_current_usd` carries no entry at all.",
           "type": "object",
           "required": [
-            "cap_hit_current_usd",
             "guaranteed_remaining_usd",
-            "signing_bonus_proration_usd",
             "dead_money_if_cut_usd",
             "tag_status",
             "void_years_count"
           ],
           "additionalProperties": {
-            "enum": ["unsourced_by_upstream", "absent_in_upstream_row"]
+            "enum": [
+              "unsourced_by_upstream",
+              "requires_undefined_derivation",
+              "absent_in_upstream_row"
+            ]
           }
         }
       }

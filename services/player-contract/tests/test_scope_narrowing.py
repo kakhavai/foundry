@@ -14,7 +14,7 @@ lands in Tier 3 weighted agreement, so a wrong club, an unknown position code
 and a defaulting `.get` each cost something different and none of them raises.
 """
 
-import gzip
+import json
 import os
 
 import httpx
@@ -47,9 +47,10 @@ from .conftest import (
     TEAM_DEFENSE_IDS,
     WEEK,
     SpyLake,
-    contracts_csv,
+    contracts_parquet,
     mock_identity,
     mock_upstream,
+    row,
     scope_envelope,
 )
 
@@ -261,8 +262,9 @@ async def test_an_unresolved_row_is_dropped_even_when_its_RAW_id_is_in_scope():
     raw keys — the display name and `otc_id` — and a test naming only one leaves
     the other alive.
     """
-    row = upstream_mod.ContractRow(
+    raw_row = upstream_mod.ContractRow(
         otc_id="4242",
+        gsis_id="00-0004242",
         player_name="Raw Player",
         otc_position="RB",
         otc_team="Seahawks",
@@ -270,6 +272,8 @@ async def test_an_unresolved_row_is_dropped_even_when_its_RAW_id_is_in_scope():
         years=3,
         total_value_usd=1,
         guaranteed_total_usd=1,
+        cap_hit_current_usd=1,
+        signing_bonus_proration_usd=1,
     )
 
     class RefusingIdentity(IdentityClient):
@@ -282,17 +286,17 @@ async def test_an_unresolved_row_is_dropped_even_when_its_RAW_id_is_in_scope():
             return {}
 
     kept = await resolve_in_scope(
-        [row],
+        [raw_row],
         season=SEASON,
         # Both raw upstream keys, deliberately placed in the scope.
-        scope_members=frozenset({"Raw Player", "4242"}),
+        scope_members=frozenset({"Raw Player", "4242", "00-0004242"}),
         identity=RefusingIdentity(),
         failures=IdentityFailures(),
     )
 
     assert kept == [], (
-        "an id player-identity refused was published under the feed's own key — "
-        "this is the defaulting `.get(query, row.player_name)`"
+        "an id player-identity refused was published under one of the feed's "
+        "own keys — this is the defaulting `.get(query, <raw>)`"
     )
 
 
@@ -428,10 +432,11 @@ async def test_no_name_no_query_the_row_never_reaches_player_identity(lake):
     nameless row before it can become one — otherwise one blank cell would fail
     its whole chunk, exactly like an unmapped position."""
     rows = [
-        ("1", "", "QB", "Bears", "TRUE", 2025, 2, 5000000, 0),
-        ("2", "Alpha Passer", "QB", "Packers", "TRUE", 2025, 5, 1, 1),
-    ]
-    mock_upstream(respx.mock, body=gzip.compress(contracts_csv(rows).encode()))
+        row("", otc_id=1),
+        row("Alpha Passer", otc_id=2, team="Packers", year_signed=2025,
+            years=5, gsis_id="00-0000001"),
+    ]  # fmt: skip
+    mock_upstream(respx.mock, body=contracts_parquet(rows))
     mock_identity(respx.mock)
 
     envelopes = await capture(lake)
@@ -444,11 +449,20 @@ async def test_no_name_no_query_the_row_never_reaches_player_identity(lake):
 
 
 @respx.mock
-async def test_the_name_is_what_is_sent_and_the_otc_id_is_not(lake):
-    """`otc` is not a crosswalk source `player-identity` knows, so sending it as
-    `source_id` could never match at Tier 1 or Tier 2 — it would be inert
-    traffic dressed as a join. The NAME is the join, and this asserts on the
-    wire rather than on the adapter's source."""
+async def test_the_two_query_arms_are_sent_as_the_crosswalk_expects(lake):
+    """What actually goes on the wire, per arm.
+
+    A `gsis_id` earns a **Tier-1 crosswalk adoption**: `source`/`source_id` and
+    deliberately **no name**, so a crosswalk miss cannot fall through to
+    attribute scoring and quietly link two players who share one. Without a
+    `gsis_id` there is no crosswalk route at all, so the name is sent and the
+    row lands in Tier-3 weighted agreement.
+
+    `otc_id` is never sent under either arm: `otc` is not in
+    `player_identity.identity.CROSSWALK_SOURCES`, so it could match at neither
+    Tier 1 nor Tier 2 — it would be inert traffic dressed as a join, and the
+    service would not even complain.
+    """
     mock_upstream(respx.mock)
     route = respx.mock.post(f"{IDENTITY_URL}/resolve/batch")
     mock_identity(respx.mock)
@@ -456,17 +470,80 @@ async def test_the_name_is_what_is_sent_and_the_otc_id_is_not(lake):
     await capture(lake)
 
     assert route.call_count == 1
-    import json
-
     queries = json.loads(route.calls[0].request.content)["queries"]
     assert queries, "no queries were sent"
-    assert all(q["name"] for q in queries)
-    assert all(q.get("source") is None for q in queries)
-    assert all(q.get("source_id") is None for q in queries)
+
+    crosswalk = [q for q in queries if q.get("source")]
+    by_name = [q for q in queries if not q.get("source")]
+    assert crosswalk, "no query took the Tier-1 arm; the gsis split is not wired"
+    assert by_name, "no query took the Tier-3 arm; the fallback is not exercised"
+
+    for q in crosswalk:
+        assert q["source"] == "gsis"
+        assert q["source_id"].startswith("00-")
+        assert not q.get("name"), (
+            "a crosswalk query carried a name — a crosswalk miss would fall "
+            "through to attribute scoring"
+        )
+    for q in by_name:
+        assert q["name"]
+        assert q.get("source_id") is None
+
+    # No arm ever offers the OverTheCap key as an identity.
+    assert all(q.get("source") != "otc" for q in queries)
+    assert all(str(q.get("source_id") or "").isdigit() is False for q in queries)
+
     # The canonicalisers ran on the way out, not the raw upstream strings.
     assert {q["team"] for q in queries} >= {"GB", "BUF", "SF"}
     assert None in {q["team"] for q in queries}  # Echo's DEN/SEA
     assert "DE" in {q["position"] for q in queries}  # Hotel's ED
+
+
+@respx.mock
+async def test_a_row_with_no_gsis_id_still_resolves_by_name(lake):
+    """The Tier-3 arm end to end. 23% of live active rows have no crosswalk key,
+    and a collector that only handled the Tier-1 arm would silently drop every
+    one of them — Delta, Echo and Hotel here."""
+    mock_upstream(respx.mock)
+    mock_identity(respx.mock)
+
+    envelopes = await capture(lake)
+
+    published = {r["player_id"] for r in envelopes[CONTRACT_STATUS].signals}
+    for name in ("Delta Blocker", "Echo Kicker", "Hotel Rusher"):
+        assert CANONICAL_IDS[name] in published, name
+
+
+@respx.mock
+async def test_a_row_WITH_a_gsis_id_resolves_through_the_crosswalk_not_the_name(lake):
+    """The other arm, isolated so it cannot pass by falling back.
+
+    The identity mock resolves a crosswalk query **only** through `GSIS_TO_NAME`.
+    Here the display name is one the mock has never heard of, so the row can
+    only resolve if the `gsis_id` was actually sent and adopted — which is what
+    makes this a test of the Tier-1 path rather than of the name path.
+    """
+    mock_upstream(
+        respx.mock,
+        body=contracts_parquet(
+            [
+                row(
+                    "Totally Different Name",
+                    otc_id=1,
+                    team="Packers",
+                    year_signed=2025,
+                    years=5,
+                    gsis_id="00-0000001",
+                )
+            ]
+        ),
+    )
+    mock_identity(respx.mock)
+
+    envelopes = await capture(lake)
+
+    published = {r["player_id"] for r in envelopes[CONTRACT_STATUS].signals}
+    assert published == {CANONICAL_IDS["Alpha Passer"]}
 
 
 def test_the_scope_seam_is_the_shared_one_not_a_local_reimplementation():

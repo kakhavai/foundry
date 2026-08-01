@@ -13,8 +13,6 @@ collection, leaving the series absent from every scrape that does not
 immediately follow a capture — fails here.
 """
 
-import gzip
-
 import httpx
 import pytest
 import respx
@@ -28,9 +26,10 @@ from .conftest import (
     SEASON,
     WEEK,
     SpyLake,
-    contracts_csv,
+    contracts_parquet,
     mock_identity,
     mock_upstream,
+    row,
     scope_envelope,
 )
 
@@ -87,8 +86,18 @@ async def test_the_expired_error_survives_the_fifty_entry_cap():
             include_team_defenses=False,
         )
     )
-    rows = [("3", "Charlie Catcher", "WR", "49ers", "TRUE", 2021, 4, 1, 1)]
-    mock_upstream(respx.mock, body=gzip.compress(contracts_csv(rows).encode()))
+    rows = [
+        row(
+            "Charlie Catcher",
+            otc_id=3,
+            position="WR",
+            team="49ers",
+            year_signed=2021,
+            years=4,
+            gsis_id="00-0000003",
+        )  # fmt: skip
+    ]
+    mock_upstream(respx.mock, body=contracts_parquet(rows))
     mock_identity(respx.mock)
 
     envelope = (await capture(lake))[CONTRACT_STATUS]
@@ -105,8 +114,18 @@ async def test_a_pass_with_no_expired_contracts_records_a_ZERO_not_nothing(
 ):
     """An absent Prometheus series and a healthy one are indistinguishable, so a
     gauge only written when it is interesting cannot be alerted on."""
-    rows = [("1", "Alpha Passer", "QB", "Packers", "TRUE", 2025, 5, 1, 1)]
-    mock_upstream(respx.mock, body=gzip.compress(contracts_csv(rows).encode()))
+    rows = [
+        row(
+            "Alpha Passer",
+            otc_id=1,
+            position="QB",
+            team="Packers",
+            year_signed=2025,
+            years=5,
+            gsis_id="00-0000001",
+        )  # fmt: skip
+    ]
+    mock_upstream(respx.mock, body=contracts_parquet(rows))
     mock_identity(respx.mock)
 
     await capture(lake)
@@ -132,8 +151,18 @@ async def test_unresolved_scope_slots_reaches_prometheus(lake, client):
     """Coverage names the missing slots individually, which is right for an
     operator reading one envelope and useless for an alert: `missing` is capped
     at 50 entries and is not a number PromQL can threshold."""
-    rows = [("1", "Alpha Passer", "QB", "Packers", "TRUE", 2025, 5, 1, 1)]
-    mock_upstream(respx.mock, body=gzip.compress(contracts_csv(rows).encode()))
+    rows = [
+        row(
+            "Alpha Passer",
+            otc_id=1,
+            position="QB",
+            team="Packers",
+            year_signed=2025,
+            years=5,
+            gsis_id="00-0000001",
+        )  # fmt: skip
+    ]
+    mock_upstream(respx.mock, body=contracts_parquet(rows))
     mock_identity(respx.mock)
 
     await capture(lake)

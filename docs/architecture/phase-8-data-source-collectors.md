@@ -1405,12 +1405,14 @@ signal type, the incentive half is deferred and named.
 | `seasons_remaining` | int | Contract seasons after the current one, excluding void years |
 | `total_value_usd` | int | Full stated contract value |
 | `guaranteed_total_usd` | int | Total guaranteed at signing |
-| `cap_hit_current_usd` | int | Current-season cap charge — **null, see below** |
+| `cap_hit_current_usd` | int | Current-season cap charge — **sourced**, 75.7% of active rows |
+| `signing_bonus_proration_usd` | int | Current-season prorated bonus share — **sourced**, 59.8% |
 | `guaranteed_remaining_usd` | int | Guarantee not yet earned — **null, see below** |
-| `signing_bonus_proration_usd` | int | Current-season prorated bonus share — **null** |
 | `dead_money_if_cut_usd` | int | Cap charge on release — **null** |
 | `tag_status` | enum | `none`, `franchise_exclusive`, `franchise_non_exclusive`, `transition` — **null** |
 | `void_years_count` | int | Void years appended to the deal — **null** |
+| `otc_player_id` | string | OverTheCap's own key. Provenance and a future crosswalk seed — **not** an identity |
+| `null_field_reasons` | object | Why each null field is null. `unsourced_by_upstream` / `requires_undefined_derivation` / `absent_in_upstream_row` |
 
 **Extra routes beyond the standard five:** none. The incentive query route
 (`GET /signals/incentives`) belonged to the deferred half.
@@ -1426,24 +1428,49 @@ clause-swallowing failure `team-scheme` hit, where an unsourceable field in the
 coverage predicate destroys the ratio's ability to report anything else, such
 as a truncated upstream.
 
-**Adapter notes:** The upstream keys players by **name**, not by id, so every
-row must resolve through `player-identity` before it is emitted; a
-`resolved: false` is a miss with a reason, never an adopted raw id. Money
-arrives as whole USD integers and must not be re-scaled. The six null fields
-above are cap-accounting derivations that the free feed does not carry; they
-are emitted as present-and-null with a machine-readable reason rather than
-omitted, so a consumer can tell "not supplied" from "not applicable".
+**Adapter notes — revised during implementation, against the live document.**
+
+*Format.* The release's `.csv.gz` artifact was last regenerated **2022-05-29**
+while the release itself rebuilds daily; its newest `year_signed` is 2022 and
+2,869 of its 2,887 "active" contracts had already expired. The collector reads
+`historical_contracts.parquet` instead, with `pyarrow` in its own
+`pyproject.toml` and nowhere else. This is a bounded exception to
+`docs/collectors.md`'s CSV-over-parquet rule, which is a *size* argument and
+does not govern an abandoned artifact; the rule has been amended to say
+"compare `updated_at` across formats first".
+
+*Units.* The CSV carried money as whole-dollar integers. **The parquet carries
+it as doubles denominated in millions** (Mahomes: `value = 448.0`). It is
+converted once, in the adapter, and published as whole USD. Getting this wrong
+is wrong for every row at once and raises nothing.
+
+*Identity.* The upstream keys players by **name**, so a `resolved: false` is a
+miss with a reason and never an adopted raw id. The parquet additionally
+carries `gsis_id` on 76.8% of active rows — a Tier-1 published crosswalk key —
+so those resolve by adoption and the remaining 23% fall back to name agreement.
+Two query shapes; the crosswalk arm withholds the name deliberately.
+
+*Nulls.* Four fields are still emitted present-and-null with a machine-readable
+reason. `guaranteed_remaining_usd` is null for a different reason from the
+other three: its components exist in the per-season table but the source does
+not settle what "not yet earned" means mid-season, so it carries
+`requires_undefined_derivation` rather than `unsourced_by_upstream`. Nothing is
+derived from `apy`, which is average annual value and is not read at all.
 
 **Failure mode to watch:** A restructured deal. A mid-season restructure changes
 proration and dead money retroactively, and the append-only S3 layout means an
 old snapshot stays correct-as-of its `captured_at` and **must not be reconciled
-backward**. With the cap fields null this is currently latent rather than
-active, but it becomes live the moment a paid feed supplies them, so the
-append-only discipline must be in place before that happens.
+backward**. This section previously called the risk latent "with the cap fields
+null" and said it would become live the moment a feed supplied them. **It is now
+live** — the parquet supplies `cap_hit_current_usd` and
+`signing_bonus_proration_usd`. The discipline is structural rather than a
+convention: nothing in the capture reads a prior envelope back, and no
+reconcile-backward path exists to be reached for.
 
 **Candidate upstreams (non-normative):** nflverse `contracts`
-(`historical_contracts.csv.gz`, sourced from OverTheCap) — 1.13 MiB on the
-wire, 31,893 rows, 2,908 active contracts
+(`historical_contracts.parquet`, sourced from OverTheCap) — 6.44 MiB on the
+wire, 51,785 rows, 2,931 active contracts. The `.csv.gz` variant of the same
+release is **abandoned**; do not use it.
 
 #### `player-incentives`
 
@@ -1482,12 +1509,30 @@ in their active contract has a record. A player with no incentives is excluded
 from `expected` rather than reported missing — an incentive-free contract is a
 fact, not a gap.
 
-**Why this is deferred rather than built.** The free contracts feed carries
-**no incentive data at all**. Verified during 8E against
-`historical_contracts.csv.gz` (31,893 rows): the `season_history` column is
-empty on every row, and no column or value anywhere in the document mentions
-`incentive`, `escalator`, `LTBE`, `NLTBE` or `bonus`. This is not a sparse
-field, it is an absent one.
+**Why this is deferred rather than built.** The free contracts feed carries no
+usable incentive data. Verified during 8E against **both** artifacts of the
+`contracts` release, and the precise claim differs between them:
+
+* `historical_contracts.csv.gz` (31,893 rows): the `season_history` column is
+  empty on every row, and no column or value anywhere mentions `incentive`,
+  `escalator`, `LTBE`, `NLTBE` or `bonus`. Absent, not sparse. **That artifact
+  is also four years stale** — see `player-contract` above.
+* `historical_contracts.parquet` (51,785 rows — the live one, and the one
+  `player-contract` actually reads): `season_history` is gone, replaced by a
+  populated per-season `cols` table. That table **does** carry bonus columns —
+  `prorated_bonus`, `roster_bonus`, `workout_bonus`, `option_bonus`,
+  `other_bonus`, `per_game_roster_bonus`. An earlier revision of this paragraph
+  said no column anywhere mentioned `bonus`; against the parquet that is
+  **wrong**, and correcting it changes the argument rather than the conclusion.
+
+**Bonus buckets are not incentives.** Those six are contractual cash the deal
+allocates by year. None carries the three things `player_incentive_progress` is
+defined by: a `metric` from the enum, a `threshold` to measure distance against,
+and an LTBE/NLTBE classification. `per_game_roster_bonus` is the closest — it
+pays per game active — and still has neither a threshold nor a classification.
+So the load-bearing field, distance to threshold, remains unsourceable and the
+deferral stands on the sharper statement: **the feed carries bonus amounts
+without thresholds or classifications**, not "no bonus data exists".
 
 The split matters because **the collector computes only half of each record**.
 Per the original spec, `current_progress` is derived by joining

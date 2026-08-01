@@ -15,8 +15,6 @@ So a resolved row whose term the upstream left blank is **not** present. Delta
 exists for exactly that arm.
 """
 
-import gzip
-
 import httpx
 import respx
 
@@ -35,10 +33,22 @@ from .conftest import (
     SEASON,
     WEEK,
     SpyLake,
-    contracts_csv,
+    contracts_parquet,
     mock_identity,
     mock_upstream,
+    row,
     scope_envelope,
+)
+
+# The one in-scope contract several tests below narrow the document to.
+ALPHA_ROW = row(
+    "Alpha Passer",
+    otc_id=1,
+    position="QB",
+    team="Packers",
+    year_signed=2025,
+    years=5,
+    gsis_id="00-0000001",
 )
 
 
@@ -70,8 +80,8 @@ async def test_a_truncated_upstream_does_not_report_full_coverage(lake):
     worth must not yield `expected: 1, present: 1`, ratio 1.0 — which is what a
     collector expecting one key per *fetched row* would report while 99% of the
     league silently vanished."""
-    rows = [("1", "Alpha Passer", "QB", "Packers", "TRUE", 2025, 5, 1, 1)]
-    mock_upstream(respx.mock, body=gzip.compress(contracts_csv(rows).encode()))
+    rows = [ALPHA_ROW]
+    mock_upstream(respx.mock, body=contracts_parquet(rows))
     mock_identity(respx.mock)
 
     envelope = (await capture(lake))[CONTRACT_STATUS]
@@ -108,14 +118,7 @@ async def test_a_truncated_SCOPE_does_not_report_full_coverage():
 async def test_an_empty_upstream_reports_zero_not_one(lake):
     """`Coverage.ratio` returns 1.0 when `expected` is 0 — correct for a bye
     week, catastrophic for a pass that captured nothing."""
-    header = ",".join(
-        [
-            "player", "position", "team", "is_active", "year_signed", "years",
-            "value", "apy", "guaranteed", "inflated_value", "otc_id",
-            "season_history",
-        ]
-    )  # fmt: skip
-    mock_upstream(respx.mock, body=gzip.compress(f"{header}\n".encode()))
+    mock_upstream(respx.mock, body=contracts_parquet([]))
     mock_identity(respx.mock)
 
     envelope = (await capture(lake))[CONTRACT_STATUS]
@@ -174,8 +177,8 @@ async def test_a_scope_slot_with_no_contract_row_is_named_and_reasoned(lake):
     See `capture.py`'s module docstring, section 3, for why this is reported
     rather than excluded from `expected` as the phase doc's wording asks.
     """
-    rows = [("1", "Alpha Passer", "QB", "Packers", "TRUE", 2025, 5, 1, 1)]
-    mock_upstream(respx.mock, body=gzip.compress(contracts_csv(rows).encode()))
+    rows = [ALPHA_ROW]
+    mock_upstream(respx.mock, body=contracts_parquet(rows))
     mock_identity(respx.mock)
 
     envelope = (await capture(lake))[CONTRACT_STATUS]

@@ -17,7 +17,6 @@ in particular are enforcement, not documentation:
   Fabricating one — from `apy`, most plausibly — becomes a contract violation.
 """
 
-import gzip
 import json
 from pathlib import Path
 
@@ -31,6 +30,7 @@ from player_contract.capture import (
     CONTRACT_STATUS,
     EXPECTED_FLOOR,
     SIGNAL_TYPES,
+    UNDERIVED_FIELDS,
     UNSOURCED_FIELDS,
     capture_player_contract,
 )
@@ -40,9 +40,10 @@ from .conftest import (
     NOW,
     SEASON,
     WEEK,
-    contracts_csv,
+    contracts_parquet,
     mock_identity,
     mock_upstream,
+    row,
 )
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts" / "signal-envelope"
@@ -59,8 +60,8 @@ def validate(envelopes: dict) -> None:
         validator = Draft202012Validator(
             FIELD_SCHEMAS[signal_type], format_checker=FormatChecker()
         )
-        for row in body["signals"]:
-            validator.validate(row)
+        for signal in body["signals"]:
+            validator.validate(signal)
 
 
 async def capture(lake, **kwargs):
@@ -128,10 +129,14 @@ async def test_a_degraded_capture_still_conforms(lake):
     schema violation actually escapes, because the happy path is the one
     everybody looks at."""
     rows = [
-        ("1", "Alpha Passer", "QB", "Packers", "TRUE", None, None, None, None),
-        ("2", "Bravo Runner", "RB", "Bratislava Fog", "TRUE", 2023, 4, 0, 0),
-    ]
-    mock_upstream(respx.mock, body=gzip.compress(contracts_csv(rows).encode()))
+        row("Alpha Passer", otc_id=1, team="Packers", year_signed=None,
+            years=None, value=None, guaranteed=None,
+            gsis_id="00-0000001"),
+        row("Bravo Runner", otc_id=2, position="RB", team="Bratislava Fog",
+            year_signed=2023, years=4, value=0.0, guaranteed=0.0,
+            gsis_id="00-0000002"),
+    ]  # fmt: skip
+    mock_upstream(respx.mock, body=contracts_parquet(rows))
     mock_identity(respx.mock)
 
     envelopes = await capture(lake)
@@ -157,50 +162,113 @@ def test_the_deferred_incentive_half_has_no_surface_here():
         assert token not in document, token
 
 
-# ── the two kinds of null, one fixture per arm ───────────────────────────────
+# ── the THREE kinds of null, one fixture per arm ─────────────────────────────
 
 
 @respx.mock
-async def test_the_six_unsourceable_fields_are_present_and_null_on_every_row(lake):
+async def test_the_permanently_null_fields_are_present_and_null_on_every_row(lake):
     """Present and null, never omitted. An absent key cannot distinguish "this
     source will never supply it" from "this row did not say", and a consumer
     deciding whether to buy a cap-accounting feed needs exactly that
-    distinction."""
+    distinction.
+
+    Four fields, not the phase doc's six: the parquet's per-season cap table
+    supplies `cap_hit_current_usd` and `signing_bonus_proration_usd`, which are
+    asserted separately below.
+    """
     mock_upstream(respx.mock)
     mock_identity(respx.mock)
 
     envelope = (await capture(lake))[CONTRACT_STATUS]
 
     assert envelope.signals, "no rows; the loop below would pass vacuously"
-    assert len(UNSOURCED_FIELDS) == 6
-    for row in envelope.signals:
+    assert len(UNSOURCED_FIELDS) == 3
+    assert len(UNDERIVED_FIELDS) == 1
+    for signal in envelope.signals:
         for name in UNSOURCED_FIELDS:
-            assert name in row, name
-            assert row[name] is None, name
-            assert row["null_field_reasons"][name] == "unsourced_by_upstream"
+            assert name in signal, name
+            assert signal[name] is None, name
+            assert signal["null_field_reasons"][name] == "unsourced_by_upstream"
+        for name in UNDERIVED_FIELDS:
+            assert name in signal, name
+            assert signal[name] is None, name
+            assert signal["null_field_reasons"][name] == "requires_undefined_derivation"
 
 
 @respx.mock
-async def test_a_row_nullable_field_is_reasoned_DIFFERENTLY_from_an_unsourced_one(
-    lake,
-):
-    """The other arm. Echo's `guaranteed` is blank in the row and Echo's
-    `team` is an ambiguous multi-club string — both null, and both null for a
-    reason a paid feed could not fix, unlike the six above."""
+async def test_a_sourced_cap_hit_is_published_and_carries_NO_null_reason(lake):
+    """The field the phase doc calls unsourceable, sourced.
+
+    Alpha's 2026 entry is 30.25 in the document's millions. A `null_field_reasons`
+    entry for a populated field would make the whole block meaningless — a
+    consumer filtering on it would discard a real number.
+    """
+    mock_upstream(respx.mock)
+    mock_identity(respx.mock)
+
+    envelope = (await capture(lake))[CONTRACT_STATUS]
+    alpha = next(
+        s for s in envelope.signals if s["player_id"] == CANONICAL_IDS["Alpha Passer"]
+    )
+
+    assert alpha["cap_hit_current_usd"] == 30_250_000
+    assert alpha["signing_bonus_proration_usd"] == 8_500_000
+    assert "cap_hit_current_usd" not in alpha["null_field_reasons"]
+    assert "signing_bonus_proration_usd" not in alpha["null_field_reasons"]
+
+
+@respx.mock
+async def test_a_cap_field_absent_for_THIS_season_is_reasoned_as_a_ROW_gap(lake):
+    """The distinction that made the third reason value necessary.
+
+    Charlie's cap table stops in 2024, so his 2026 cap hit is null — but not
+    because the source lacks cap accounting. Emitting `unsourced_by_upstream`
+    here would be a machine-readable falsehood: it tells a consumer that buying
+    a feed would not help, when in fact this very document supplies the field
+    for three quarters of the league.
+    """
+    mock_upstream(respx.mock)
+    mock_identity(respx.mock)
+
+    envelope = (await capture(lake))[CONTRACT_STATUS]
+    charlie = next(
+        s
+        for s in envelope.signals
+        if s["player_id"] == CANONICAL_IDS["Charlie Catcher"]
+    )
+
+    assert charlie["cap_hit_current_usd"] is None
+    reasons = charlie["null_field_reasons"]
+    assert reasons["cap_hit_current_usd"] == "absent_in_upstream_row"
+    assert reasons["dead_money_if_cut_usd"] == "unsourced_by_upstream"
+    assert reasons["guaranteed_remaining_usd"] == "requires_undefined_derivation"
+
+
+@respx.mock
+async def test_all_three_reasons_can_appear_on_ONE_row(lake):
+    """Echo carries every arm at once: a blank `guaranteed` and an ambiguous
+    multi-club `team` (row gaps), no cap table at all (also a row gap),
+    `tag_status` (never sourced) and `guaranteed_remaining_usd` (underived).
+
+    A single row proving all three is what stops the three values collapsing
+    back into one over time — the collapse is invisible per-field.
+    """
     mock_upstream(respx.mock)
     mock_identity(respx.mock)
 
     envelope = (await capture(lake))[CONTRACT_STATUS]
     echo = next(
-        row
-        for row in envelope.signals
-        if row["player_id"] == CANONICAL_IDS["Echo Kicker"]
+        s for s in envelope.signals if s["player_id"] == CANONICAL_IDS["Echo Kicker"]
     )
 
-    assert echo["guaranteed_total_usd"] is None
     reasons = echo["null_field_reasons"]
+    assert echo["guaranteed_total_usd"] is None
     assert reasons["guaranteed_total_usd"] == "absent_in_upstream_row"
-    assert reasons["cap_hit_current_usd"] == "unsourced_by_upstream"
+    assert reasons["team"] == "absent_in_upstream_row"
+    assert reasons["cap_hit_current_usd"] == "absent_in_upstream_row"
+    assert reasons["tag_status"] == "unsourced_by_upstream"
+    assert reasons["guaranteed_remaining_usd"] == "requires_undefined_derivation"
+    assert len(set(reasons.values())) == 3, reasons
 
 
 @respx.mock

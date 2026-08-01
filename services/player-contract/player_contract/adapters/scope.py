@@ -1,36 +1,51 @@
 """Narrowing this collector to `roster-scope`'s membership list.
 
-**Forward, not backward, and by NAME — which is the sharp edge here.** The
-scope is a set of canonical `fdy-` ids; `historical_contracts.csv.gz` is keyed
-by a display name (`"Aaron Rodgers"`) and an OverTheCap id. So every upstream
-row is resolved through `player-identity` and the resulting `fdy-` id is
-checked against the scope.
+**Forward, not backward, and — uniquely in this fleet — by two different keys.**
+The scope is a set of canonical `fdy-` ids; the upstream is keyed by a display
+name (`"Aaron Rodgers"`), an OverTheCap id, and — on 2,251 of its 2,931 active
+rows (76.8%) — a `gsis_id`. Every upstream row is resolved through
+`player-identity` and the resulting `fdy-` id is checked against the scope.
 
-Every other scope-aware collector in the fleet joins on a *published crosswalk*
-id — `gsis` — which `player-identity` adopts at Tier 1 with no scoring at all.
-This one has none, so it lands in Tier 3: weighted multi-attribute agreement,
-where `normalized_key` (the name) carries 0.30, `team` 0.20 and
-`position_group` 0.15. Three consequences, all of them load-bearing:
+**Two query shapes, one per arm, and the split is deliberate.** `gsis` is a
+*published crosswalk source* in `player_identity.identity.CROSSWALK_KEYS`,
+adopted at Tier 1 with no attribute scoring at all:
 
-* **The name is sent, and it is the only thing that must be right.** A blank
-  name is dropped by the adapter before it ever gets here.
+* **`gsis_id` present -> `source`/`source_id` and NO name.** This is
+  `player-profile`'s rule and its reasoning applies unchanged: a GSIS id absent
+  from the crosswalk would otherwise fall through to attribute scoring, and a
+  feed that already carries a league id and is matched by name anyway is how two
+  Josh Allens become one player. `team` and `position` still travel, so
+  `player-identity` can reject a crosswalk hit that contradicts the row it came
+  from.
+* **`gsis_id` absent -> name, team and position.** Tier 3 weighted agreement,
+  where `normalized_key` carries 0.30, `team` 0.20 and `position_group` 0.15.
+  There is no other route for these 680 rows, and `MIN_AGREEING_ATTRIBUTES` is
+  2, so the name alone would not resolve one anyway.
+
+Before the parquet switch every row took the second path, which made this the
+only scope-aware collector in the fleet joining without a crosswalk id. Three
+consequences of that path are still load-bearing for the 23% that take it:
+
+* **A blank name is dropped by the adapter** before it ever gets here — a row
+  with neither a name nor a `gsis_id` is one `player-identity` could not resolve
+  by any route.
 * **A wrong `team` is worse than no team.** It scores as disagreement, not as
-  absence. `canonical_team` returns `None` for the 61 ambiguous multi-club
-  rows and for anything unrecognised, rather than guessing.
+  absence. `canonical_team` returns `None` for the 64 ambiguous multi-club rows
+  and for anything unrecognised, rather than guessing.
 * **An unknown `position` fails the whole batch.** `player-identity`'s
   `build_query` raises 422 on a position outside `KNOWN_POSITIONS`, and
   `/resolve/batch` validates the whole body, so one bad code costs all 500
-  queries in its chunk. `canonical_position` maps or returns `None`.
+  queries in its chunk — including every Tier-1 query travelling with it.
+  `canonical_position` maps or returns `None`.
 
 **`otc_id` is NOT sent as `source_id`.** It is a real, stable OverTheCap
-identifier, and it is not a crosswalk one: `player_identity.identity.
-CROSSWALK_KEYS` carries `gsis`, `espn`, `yahoo`, `rotowire`, `sportradar` and
-`fantasy_data`, and the index is built from Sleeper. `source="otc"` could
-therefore never match at Tier 1 (not a crosswalk source) or Tier 2 (never
-recorded in any `external_ids`), so sending it would be inert traffic dressed
-as a join. It is *published* on the signal row as `otc_player_id` instead —
-see `capture.build_signal` for why that is worth doing and why it can never be
-mistaken for a `player_id`.
+identifier, and it is not a crosswalk one: `CROSSWALK_KEYS` carries `gsis`,
+`espn`, `yahoo`, `rotowire`, `sportradar` and `fantasy_data`, and the index is
+built from Sleeper. `source="otc"` could therefore never match at Tier 1 (not a
+crosswalk source) or Tier 2 (never recorded in any `external_ids`), so sending it
+would be inert traffic dressed as a join. It is *published* on the signal row as
+`otc_player_id` instead — see `capture.build_signal` for why that is worth doing
+and why it can never be mistaken for a `player_id`.
 
 **The scope comes from the lake, never from `roster-scope` over HTTP.** The
 lake is append-only and already carries every scope capture, so the last good
@@ -68,6 +83,7 @@ __all__ = [
     "IDENTITY_UPSTREAM_ERROR",
     "SCOPE_SIGNAL_TYPE",
     "TEAM_DEFENSE_PREFIX",
+    "UPSTREAM_CROSSWALK_SOURCE",
     "IdentityFailures",
     "build_identity_client",
     "fetch_scope",
@@ -79,6 +95,13 @@ __all__ = [
 # player's own financial commitment, so the matchup list (`injury-report`'s
 # other half) names nobody this collector owes a record to.
 SCOPE_SIGNAL_TYPE = "scope_membership_weekly"
+
+# The crosswalk source the parquet's `gsis_id` column belongs to. Tier 1 in
+# `player-identity`'s resolution ladder: adopted exactly, never scored. Must
+# stay one of `player_identity.identity.CROSSWALK_SOURCES` — a source name it
+# does not know is not an error, it is silently inert, which is the whole reason
+# `otc` is not sent.
+UPSTREAM_CROSSWALK_SOURCE = "gsis"
 
 # See the module docstring. `roster_scope.scope` builds these as
 # `f"fdy-dst-{team.lower()}"`.
@@ -179,21 +202,35 @@ def build_identity_client(client: httpx.AsyncClient) -> IdentityClient:
 
 
 def _query(row: ContractRow, season: int) -> ResolveQuery:
-    """One upstream row as a resolve query.
+    """One upstream row as a resolve query — Tier 1 if it can be, else Tier 3.
 
-    The name is the load-bearing attribute; `team` and `position` are the two
-    that let `player-identity` separate the QB Josh Allen from the edge rusher
-    of the same name — 38 names are shared inside the active set alone. Both are
-    canonicalised or omitted, never passed through raw: see the module
-    docstring for what a wrong team and an unknown position each cost.
+    See the module docstring for the split. The short version: a `gsis_id` earns
+    a crosswalk adoption and the name is deliberately withheld so a crosswalk
+    miss cannot silently fall through to name scoring; without one, the name is
+    the only route there is.
 
-    No `jersey_number` (the feed carries none) and no `source`/`source_id`
-    (OverTheCap is not a crosswalk source `player-identity` knows).
+    `team` and `position` travel on both arms. On the Tier-1 arm they let
+    `player-identity` reject a crosswalk hit that contradicts the row; on the
+    Tier-3 arm they are what separates the QB Josh Allen from the edge rusher of
+    the same name — twelve names are shared inside the active set alone. Both
+    are canonicalised or omitted, never passed through raw.
+
+    No `jersey_number`: the feed carries none.
     """
+    team = canonical_team(row.otc_team)
+    position = canonical_position(row.otc_position)
+    if row.gsis_id:
+        return ResolveQuery(
+            team=team,
+            position=position,
+            season=season,
+            source=UPSTREAM_CROSSWALK_SOURCE,
+            source_id=row.gsis_id,
+        )
     return ResolveQuery(
         name=row.player_name,
-        team=canonical_team(row.otc_team),
-        position=canonical_position(row.otc_position),
+        team=team,
+        position=position,
         season=season,
     )
 
@@ -240,8 +277,9 @@ async def resolve_in_scope(
 
     kept: list[tuple[ContractRow, str]] = []
     for row, query in queries:
-        # `.get(query)`, never `.get(query, row.player_name)` and never
-        # `.get(query, row.otc_id)`. The default is the whole non-negotiable:
+        # `.get(query)`, never `.get(query, row.player_name)`, never
+        # `.get(query, row.otc_id)`, never `.get(query, row.gsis_id)`.
+        # The default is the whole non-negotiable:
         # `player-identity` is authoritative, and a row it did not resolve must
         # be dropped rather than published under the feed's own display name.
         # A defaulting `.get` is *positionally safe* — the adopted string then

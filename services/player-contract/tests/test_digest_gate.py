@@ -26,8 +26,6 @@ the data itself changes — months, on a `seasonal` cadence. The gate is recorde
 from `PublishResult.landed`, after the write.
 """
 
-import gzip
-
 import httpx
 import pytest
 import respx
@@ -37,13 +35,13 @@ from player_contract import capture as capture_mod
 from player_contract.capture import CONTRACT_STATUS, capture_player_contract
 
 from .conftest import (
+    CANONICAL_IDS,
     FIXTURE_CONTRACTS,
     NOW,
     SEASON,
     WEEK,
     SpyLake,
-    contracts_csv,
-    contracts_gz,
+    contracts_parquet,
     mock_identity,
     scope_envelope,
 )
@@ -97,7 +95,7 @@ async def test_a_second_identical_pass_writes_nothing_and_raises_unchanged(lake)
     """The gate doing its job. `run_capture_loop` treats `UpstreamUnchanged` as
     a successful pass: `last_capture_at` advances and the stored envelopes are
     left alone, so `/signals` keeps serving what it already has."""
-    _serve(respx.mock, [contracts_gz(), contracts_gz()])
+    _serve(respx.mock, [contracts_parquet(), contracts_parquet()])
     mock_identity(respx.mock)
 
     await capture(lake)
@@ -119,7 +117,7 @@ async def test_TWO_DISTINCT_WEEKS_both_publish_in_ONE_process(lake):
     live at once, which is what this does. Neither week is 1, and the two passes
     digest identically, so a week-less gate suppresses the second.
     """
-    _serve(respx.mock, [contracts_gz(), contracts_gz()])
+    _serve(respx.mock, [contracts_parquet(), contracts_parquet()])
     mock_identity(respx.mock)
     lake.write(scope_envelope(week=WEEK + 2))
 
@@ -137,7 +135,7 @@ async def test_a_week_that_was_already_captured_is_still_suppressed(lake):
     Without this, "both weeks publish" is satisfied by a gate that never
     suppresses anything at all.
     """
-    _serve(respx.mock, [contracts_gz()] * 4)
+    _serve(respx.mock, [contracts_parquet()] * 4)
     mock_identity(respx.mock)
     lake.write(scope_envelope(week=WEEK + 2))
 
@@ -162,7 +160,7 @@ async def test_the_digest_is_keyed_by_season_as_well_as_week(lake):
     deliberately so, because the alternative is an assertion that passes for the
     wrong reason.
     """
-    _serve(respx.mock, [contracts_gz(), contracts_gz()])
+    _serve(respx.mock, [contracts_parquet(), contracts_parquet()])
     mock_identity(respx.mock)
     lake.write(scope_envelope(season=SEASON + 1))
 
@@ -186,7 +184,7 @@ async def test_a_failed_lake_write_does_NOT_record_the_digest():
     again until the contracts themselves changed. Reproduced on `venue` before
     the fix.
     """
-    _serve(respx.mock, [contracts_gz(), contracts_gz()])
+    _serve(respx.mock, [contracts_parquet(), contracts_parquet()])
     mock_identity(respx.mock)
 
     broken = SeededRefusingLake(scope_envelope())
@@ -210,12 +208,12 @@ async def test_changed_content_publishes_again(lake):
     """The gate must not be a one-write latch. A contract the upstream restated
     has to reach the lake on the very next pass."""
     restated = [
-        r if r[1] != "Alpha Passer" or r[4] != "TRUE" else (*r[:7], 175_000_000, r[8])
+        {**r, "value": 175.0} if r["player"] == "Alpha Passer" and r["is_active"] else r
         for r in FIXTURE_CONTRACTS
     ]
     _serve(
         respx.mock,
-        [contracts_gz(), gzip.compress(contracts_csv(restated).encode())],
+        [contracts_parquet(), contracts_parquet(restated)],
     )
     mock_identity(respx.mock)
 
@@ -225,9 +223,9 @@ async def test_changed_content_publishes_again(lake):
     written = _writes(lake)
     assert len(written) == 2
     values = [
-        row["total_value_usd"]
+        signal["total_value_usd"]
         for envelope in written
-        for row in envelope.signals
-        if row["contract_start_season"] == 2025 and row["seasons_remaining"] == 3
+        for signal in envelope.signals
+        if signal["player_id"] == CANONICAL_IDS["Alpha Passer"]
     ]
     assert 150_000_000 in values and 175_000_000 in values, values
