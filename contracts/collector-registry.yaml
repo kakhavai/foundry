@@ -435,3 +435,55 @@ collectors:
     #     that collector has been deployed — weeks, not three seasons — with
     #     nothing in the data to say so.
     depends_on: [player-identity, roster-scope, injury-report]
+
+  - name: officiating
+    path: /collectors/officiating
+    stage: 8E
+    cadence_class: weekly
+    envelope_version: "1"
+    signal_types: [game_crew_assignment, crew_tendency_rates]
+    # False, and structurally so: this collector resolves no players. Its
+    # signals are keyed by game and by crew, so there is nothing for
+    # roster-scope's membership list to narrow — an officiating crew works a
+    # game regardless of which 416 players are in scope for it. No
+    # ScopeClient, and no IdentityClient either: `crew_id` is derived from an
+    # OFFICIAL's id, and officials are not players. player-identity has no
+    # opinion about them and must not acquire one.
+    scope_aware: false
+    # schedule-context owns `game_id`, and this collector needs it twice over.
+    # Its two data upstreams speak two DIFFERENT game keys — officials.csv
+    # uses the legacy gamekey (2025090400) and play-by-play uses the modern id
+    # (2025_01_DAL_PHI) — so the join between crew data and penalty data runs
+    # through the schedule feed's `old_game_id` column.
+    #
+    # The phase doc says that join is "by hand-maintained crosswalk". It is
+    # not, and this is the one place worth recording it: nflverse's games.csv
+    # PUBLISHES old_game_id alongside game_id. Measured before it was relied
+    # on — all 272 games of the 2025 regular season join, none unmatched in
+    # either direction. No table is maintained in this repo, and one should
+    # not be added.
+    #
+    # Two of the spec's fields are null by necessity rather than by omission.
+    # officials.csv is a POST-GAME record of who worked a game, so it carries
+    # no publication instant and no provisional flag:
+    # `assignment_announced_at` and `is_provisional` are emitted as null with
+    # `null_field_reason` on every row. Filling them needs a forward-looking
+    # assignment feed (Football Zebras publishes crews midweek, scraped rather
+    # than licensed) — not a code change here.
+    #
+    # The same post-game nature is why coverage.expected is floored at 272
+    # games and 17 crews rather than derived: in week 3 the officials feed
+    # describes 48 games, and deriving from it would report ratio 1.0 with
+    # 82% of the season absent.
+    #
+    # That floor is a DELIBERATE DEVIATION from the phase doc, which defines
+    # coverage.expected as one record per game "whose crew has been
+    # published" — i.e. the fetch-derived expectation the platform rule
+    # refuses. "expected never derives from what succeeded" is fleet-wide
+    # (collector_core.coverage, CLAUDE.md) and outranks a per-collector spec
+    # line. Two other deviations are disclosed in services/officiating/
+    # README.md: the crosswalk is published rather than hand-maintained, and
+    # each rate field is an object rather than a float because the spec's own
+    # "every rate must ship with games_sampled and rate_stderr" is
+    # unsatisfiable with a single scalar rate_stderr.
+    depends_on: [schedule-context]

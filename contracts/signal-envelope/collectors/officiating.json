@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/officiating.json",
+  "title": "officiating collector signal fields",
+  "signal_types": {
+    "game_crew_assignment": {
+      "description": "One regular-season game's officiating crew, resolved to individual official_ids rather than to the referee's name. crew_id is derived as <season>-ref<referee official_id>, because no upstream publishes a crew key and NFL crews are identified publicly by their white hat. assignment_announced_at and is_provisional are null BY NECESSITY, not by omission: the only free upstream (nflverse officials.csv) is a post-game record of who worked a game, and carries no publication instant and no provisional flag. null_field_reason states that on every row.",
+      "type": "object",
+      "required": [
+        "game_id",
+        "week",
+        "crew_id",
+        "referee_name",
+        "crew_members",
+        "assignment_announced_at",
+        "is_provisional",
+        "null_field_reason",
+        "crew_continuity_pct",
+        "games_sampled",
+        "rate_window"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "game_id": {
+          "description": "The modern nflverse id (2025_01_DAL_PHI), joined from officials.csv's legacy gamekey through games.csv's published old_game_id column.",
+          "type": "string",
+          "minLength": 1
+        },
+        "week": { "type": "integer", "minimum": 1 },
+        "crew_id": { "type": "string", "pattern": "^[0-9]{4}-ref[0-9]+$" },
+        "referee_name": { "type": "string" },
+        "crew_members": {
+          "description": "The on-field crew. Alternates and the replay official are excluded: they appear irregularly and do not throw flags, so counting them would read as churn on exactly the games where one happened to be recorded.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["official_id", "name", "position"],
+            "additionalProperties": false,
+            "properties": {
+              "official_id": { "type": "string", "minLength": 1 },
+              "name": { "type": "string" },
+              "position": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "assignment_announced_at": {
+          "description": "NULL BY NECESSITY. When the crew was published. No free upstream carries it; a paid or scraped forward-looking assignment feed (Football Zebras publishes crews midweek) would have to supply it.",
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "is_provisional": {
+          "description": "NULL BY NECESSITY. Whether the assignment is subject to change. Same upstream gap as assignment_announced_at -- a post-game record cannot be provisional.",
+          "type": ["boolean", "null"]
+        },
+        "null_field_reason": {
+          "type": "string",
+          "enum": ["post_game_feed_has_no_assignment_publication_record"]
+        },
+        "crew_continuity_pct": {
+          "description": "Share of this assignment's crew_members also on this crew_id across the sampled window, averaged over the members. Below 0.6 with the crew's rates being served raises the spec's separate alarm.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "games_sampled": {
+          "description": "Size of this crew's rate window. 0 when play-by-play was unavailable, which is the degraded pass.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "rate_window": {
+          "type": "string",
+          "enum": ["season_to_date", "trailing_17", "career"]
+        }
+      }
+    },
+    "crew_tendency_rates": {
+      "description": "One crew's rate profile over its sampled window. Every rate is an object rather than a bare float -- see $defs/rate. Rates are regressed toward the league mean by a random-effects weight rather than published as raw window means, and a rate whose split-half correlation is not distinguishable from zero is REFUSED (value null) unless it was shrunk, which is the spec's stated rule implemented rather than noted.",
+      "type": "object",
+      "$defs": {
+        "rate": {
+          "description": "One crew rate, with everything a consumer needs to judge it. The spec's field table lists is_shrunk (bool) and rate_stderr (float) as scalar fields of the signal; they cannot be, because there are eight rates with independent sample variances and independent stability verdicts and one bool cannot describe eight of them. So each spec-named rate field carries this object instead. `value` is null when the rate was REFUSED -- its split-half correlation was indistinguishable from zero and the estimate was not shrunk -- while `raw` survives the refusal, because a consumer doing its own statistics is entitled to the observation. $defs lives INSIDE this signal type rather than at the document root because both conformance gates extract signal_types[<name>] and validate it standalone, which leaves a root-level $ref pointing at nothing.",
+          "type": "object",
+          "required": [
+            "value",
+            "raw",
+            "stderr",
+            "games_sampled",
+            "is_shrunk",
+            "shrinkage_factor",
+            "split_half_r",
+            "split_half_ci_low",
+            "stable",
+            "served",
+            "refusal_reason"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "description": "The served rate: the shrunk estimate when is_shrunk, the raw window mean otherwise, and null when served is false.",
+              "type": ["number", "null"]
+            },
+            "raw": {
+              "description": "The unadjusted mean over games_sampled. Published even when the rate is refused.",
+              "type": ["number", "null"]
+            },
+            "stderr": {
+              "description": "The spec's rate_stderr: sqrt(pooled within-crew variance / games_sampled). The standard error of the raw mean at this sample size.",
+              "type": ["number", "null"],
+              "minimum": 0
+            },
+            "games_sampled": { "type": "integer", "minimum": 0 },
+            "is_shrunk": {
+              "description": "The spec's is_shrunk: whether the published value was regressed toward the league mean by a materially-less-than-one weight.",
+              "type": "boolean"
+            },
+            "shrinkage_factor": {
+              "description": "tau2 / (tau2 + sigma2/n). 0 means no evidence this crew differs from the league at all; 1 means the crew's own mean survives untouched.",
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1
+            },
+            "split_half_r": {
+              "description": "Pearson correlation between crews' odd-week and even-week means for this rate, across every sampled crew. null when the sample cannot answer the question (fewer than two crews, or no variance).",
+              "type": ["number", "null"],
+              "minimum": -1,
+              "maximum": 1
+            },
+            "split_half_ci_low": {
+              "description": "Lower bound of the Fisher-z 95% interval on split_half_r. Greater than zero is what 'distinguishable from zero' means. null below four crews, where the interval is undefined.",
+              "type": ["number", "null"]
+            },
+            "stable": { "type": "boolean" },
+            "served": { "type": "boolean" },
+            "refusal_reason": {
+              "type": ["string", "null"],
+              "enum": ["unstable_and_unshrunk", "no_games_sampled", null]
+            }
+          }
+        }
+      },
+      "required": [
+        "crew_id",
+        "referee_name",
+        "games_sampled",
+        "rate_window",
+        "penalties_per_game",
+        "penalty_yards_per_game",
+        "dpi_per_game",
+        "dpi_yards_per_game",
+        "offensive_holding_per_game",
+        "defensive_holding_per_game",
+        "plays_per_game",
+        "seconds_per_play"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "crew_id": { "type": "string", "pattern": "^[0-9]{4}-ref[0-9]+$" },
+        "referee_name": { "type": "string" },
+        "games_sampled": {
+          "description": "The spec's games_sampled: games behind every rate below. Uniform across rates because a game only enters the window when play-by-play carries it with at least one offensive snap.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "rate_window": {
+          "type": "string",
+          "enum": ["season_to_date", "trailing_17", "career"]
+        },
+        "penalties_per_game": { "$ref": "#/$defs/rate" },
+        "penalty_yards_per_game": { "$ref": "#/$defs/rate" },
+        "dpi_per_game": { "$ref": "#/$defs/rate" },
+        "dpi_yards_per_game": { "$ref": "#/$defs/rate" },
+        "offensive_holding_per_game": { "$ref": "#/$defs/rate" },
+        "defensive_holding_per_game": { "$ref": "#/$defs/rate" },
+        "plays_per_game": { "$ref": "#/$defs/rate" },
+        "seconds_per_play": { "$ref": "#/$defs/rate" }
+      }
+    }
+  }
+}
