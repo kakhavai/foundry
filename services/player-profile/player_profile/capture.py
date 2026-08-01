@@ -186,46 +186,6 @@ def reset_published_digests() -> None:
     _PUBLISHED_DIGESTS.clear()
 
 
-class _WriteObserver:
-    """A `LakeWriter` that delegates and remembers which writes landed.
-
-    `publish_capture` is right to swallow a failed lake write — availability
-    beats durability — but it reports nothing back, and a digest gate needs to
-    know: recording a digest for content the lake never received means the
-    snapshot is never written again until the content itself changes, which for
-    a `static reference` collector can be a whole season.
-
-    **This is the second copy of this class in the fleet** (`venue.capture` has
-    the first, with the full reasoning). Two is the point at which it should
-    move into `collector_core.publish` — as a return value from
-    `publish_capture` naming the signal types whose writes failed, rather than
-    as a wrapper each collector re-declares. Called out here rather than done
-    here because it changes a shared signature that nine collectors call.
-    """
-
-    def __init__(self, inner: LakeWriter) -> None:
-        self.inner = inner
-        self._failed: set[str] = set()
-
-    def landed(self, signal_type: str) -> bool:
-        return signal_type not in self._failed
-
-    def write(self, envelope: Envelope) -> str:
-        # Runs on a worker thread (`publish_capture` -> `awrite` ->
-        # `asyncio.to_thread`), so delegating to the guarded lake is safe.
-        try:
-            return self.inner.write(envelope)
-        except Exception:
-            self._failed.add(envelope.signal_type)
-            raise
-
-    def list_keys(self, *args, **kwargs) -> list[str]:
-        return self.inner.list_keys(*args, **kwargs)
-
-    def read(self, key: str) -> dict:
-        return self.inner.read(key)
-
-
 def player_key(player_id: str) -> str:
     """The coverage key for one scope slot.
 
@@ -719,11 +679,15 @@ async def capture_player_profile(  # noqa: C901 — one linear pass, read top to
     # coverage gauge, records `collector_capture_failures_total` if a write
     # fails — then returns the envelopes ANYWAY, because the capture succeeded
     # and only its archival copy did not.
-    observer = _WriteObserver(lake)
-    await publish_capture(changed, lake=observer, metrics=metrics)
+    published = await publish_capture(changed, lake=lake, metrics=metrics)
 
-    for signal_type in changed:
-        if observer.landed(signal_type):
+    # Gated on the write LANDING. A digest recorded for content the lake never
+    # received permanently suppresses the retry: the next pass digests the same
+    # content, matches, raises `UpstreamUnchanged`, and the object is never
+    # written again until the data itself changes — a whole season, for a
+    # `static reference` collector. See `collector_core.publish.PublishResult`.
+    for signal_type in published:
+        if published.landed(signal_type):
             _PUBLISHED_DIGESTS[(season, week, signal_type)] = digests[signal_type]
 
     # An unchanged envelope is not written, but its coverage gauge is still

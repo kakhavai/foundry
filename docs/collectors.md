@@ -514,6 +514,50 @@ lake object (`player-stats`'s revision counter) can now serve an in-memory
 envelope whose revision the lake does not have. That was already true — the
 write failed either way — and the alternative is serving nothing.
 
+### If you gate state on the write, ask `PublishResult.landed`
+
+Swallowing the failed write is right for availability and **wrong for any
+collector that keeps state gated on the write having landed**. The case that
+forced this into the library is the digest gate — the pattern that suppresses a
+byte-identical append:
+
+```python
+if _PUBLISHED_DIGESTS.get(key) == digest:
+    raise UpstreamUnchanged(...)     # nothing changed; do not re-append
+...
+_PUBLISHED_DIGESTS[key] = digest     # ← WRONG: records even if the write failed
+```
+
+Record a digest for content the lake never received and the next pass digests
+the same content, matches, raises `UpstreamUnchanged`, and **the object is never
+written again until the upstream data itself changes**. On a `static reference`
+or `seasonal` cadence that is months. Reproduced on `venue`: pass 1 with a
+failing lake wrote nothing, pass 2 with a healthy lake raised
+`UpstreamUnchanged` and still wrote nothing. Note it takes **two passes** to
+see — the single-pass availability test stays green throughout.
+
+`publish_capture` returns a `PublishResult`, a `dict[str, Envelope]` subclass
+that also reports which writes failed:
+
+```python
+published = await publish_capture(changed, lake=lake, metrics=metrics)
+
+for signal_type in published:
+    if published.landed(signal_type):
+        _PUBLISHED_DIGESTS[(season, week, signal_type)] = digests[signal_type]
+```
+
+Iterate the result, not your own `changed` dict — `landed` **raises** for a
+signal type the call never published, because the caller has confused
+"unchanged, so not published" with "published and failed" and both plausible
+defaults hide that. `True` records a digest for content never offered to the
+lake; `False` reads as an outage that did not happen.
+
+`venue`, `player-profile` and `durability-history` each carried a private
+`_WriteObserver` wrapper doing this before it moved here. **Do not write a
+fourth.** If you find yourself wrapping the lake to learn what `publish_capture`
+already knows, the answer is on the return value.
+
 ---
 
 ## Memory: never buffer the same response twice

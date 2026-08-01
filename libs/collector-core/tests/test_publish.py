@@ -34,7 +34,7 @@ from fastapi.testclient import TestClient
 from collector_core.cadence import CadenceClass
 from collector_core.envelope import ENVELOPE_VERSION, Coverage, Envelope, Upstream
 from collector_core.failure import fail_capture
-from collector_core.publish import publish_capture
+from collector_core.publish import PublishResult, publish_capture
 from collector_core.refresh import RefreshGate
 from collector_core.routes import CaptureState, CollectorSpec, build_collector_router
 from collector_core.scheduler import run_capture_loop
@@ -205,6 +205,93 @@ async def test_fail_capture_records_the_failure_counter_itself():
     # the failure rate scale with a collector's signal-type count.
     assert len(metrics.failures) == 1
     assert metrics.failures[0] is original
+
+
+# --- DEFECT 3: the durability failure was not reportable ---------------------
+#
+# Swallowing the failed write is right for availability and wrong for any
+# collector that gates state on the write having landed. Three collectors --
+# `venue`, `player-profile`, `durability-history` -- each carried an identical
+# private `_WriteObserver` to recover the answer, because a digest recorded for
+# content the lake never received suppresses the retry until the upstream data
+# itself changes: months, on a `static reference` or `seasonal` cadence.
+
+
+async def test_the_result_names_the_signal_types_whose_write_failed():
+    lake, metrics = _SpyLake(fail_on=("alpha",)), _SpyMetrics()
+
+    published = await publish_capture(make_envelopes(), lake=lake, metrics=metrics)
+
+    assert published.failed == frozenset({"alpha"})
+    assert not published.landed("alpha")
+    assert published.landed("beta")
+
+
+async def test_a_healthy_publish_reports_nothing_failed():
+    lake, metrics = _SpyLake(), _SpyMetrics()
+
+    published = await publish_capture(make_envelopes(), lake=lake, metrics=metrics)
+
+    assert published.failed == frozenset()
+    assert all(published.landed(signal_type) for signal_type in SIGNAL_TYPES)
+    # `all([])` is True, so the length is what makes the line above mean
+    # anything at all.
+    assert len(published) == 2
+
+
+async def test_a_total_outage_reports_every_signal_type_failed():
+    lake, metrics = _SpyLake(fail_on=SIGNAL_TYPES), _SpyMetrics()
+
+    published = await publish_capture(make_envelopes(), lake=lake, metrics=metrics)
+
+    assert published.failed == frozenset(SIGNAL_TYPES)
+    assert len(published.failed) == 2
+
+
+async def test_asking_about_an_unpublished_signal_type_raises():
+    """Both plausible defaults hide the bug.
+
+    `True` records a digest for content never offered to the lake -- the exact
+    permanent-suppression failure this reporting exists to prevent -- and
+    `False` reads as a durability outage that did not happen. The caller has
+    confused "unchanged, so not published" with "published and failed".
+    """
+    lake, metrics = _SpyLake(), _SpyMetrics()
+
+    published = await publish_capture(
+        {"alpha": make_envelope("alpha", [])}, lake=lake, metrics=metrics
+    )
+
+    with pytest.raises(KeyError, match="beta"):
+        published.landed("beta")
+
+
+async def test_the_result_is_still_a_plain_dict_to_every_existing_caller():
+    """Nine call sites `return await publish_capture(...)` and never look at
+    the durability report. The hook is additive precisely so none of them --
+    nor `CaptureState.apply_capture`, which consumes the return value -- needed
+    an edit. A named tuple or a `(dict, set)` pair would have touched all nine.
+    """
+    lake, metrics = _SpyLake(), _SpyMetrics()
+    built = make_envelopes()
+
+    published = await publish_capture(built, lake=lake, metrics=metrics)
+
+    assert isinstance(published, dict)
+    assert published == built  # plain-dict equality, ignoring the extra state
+    assert dict(published) == built
+    assert sorted(published) == sorted(built)
+    assert published["alpha"] is built["alpha"]
+
+
+def test_a_bare_publish_result_defaults_to_everything_landed():
+    """The zero-argument default is the honest one for a result nobody
+    reported a failure into -- but only because it is constructed exclusively
+    by `publish_capture`, which always passes the set it computed."""
+    result = PublishResult({"alpha": make_envelope("alpha", [])})
+
+    assert result.failed == frozenset()
+    assert result.landed("alpha")
 
 
 # --- what the fix must NOT break ---------------------------------------------

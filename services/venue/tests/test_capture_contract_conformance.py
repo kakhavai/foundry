@@ -13,13 +13,15 @@ output rather than about a mock's.
 
 import json
 from pathlib import Path
+from unittest import mock
 
 import jsonschema
 import pytest
 from collector_core.conditional import UpstreamUnchanged
-from collector_core.failure import failure_envelopes
+from collector_core.publish import PublishResult
 from jsonschema import Draft202012Validator, FormatChecker
 
+import venue.capture
 from venue import reference
 from venue.capture import (
     ASSIGNMENT,
@@ -30,7 +32,6 @@ from venue.capture import (
 )
 
 from .conftest import (
-    NOW,
     SEASON_GAMES,
     SpyLake,
     run_capture,
@@ -166,38 +167,35 @@ async def test_a_partial_lake_failure_only_retries_the_type_that_failed():
     assert [e.signal_type for e in lake.writes] == [ASSIGNMENT, STATIC]
 
 
-def test_the_write_observer_is_a_faithful_lake_delegate():
-    """It wraps the lake for a whole `publish_capture` call, so every
-    `LakeWriter` method has to keep working — `publish_capture` only writes
-    today, but a wrapper that silently dropped `read`/`list_keys` would be a
-    trap for the next person who reaches for one inside the tail."""
-    from venue.capture import _WriteObserver
+async def test_the_digest_gate_asks_the_library_which_writes_landed():
+    """The mechanism, pinned at the seam rather than only through two passes.
 
-    inner = SpyLake()
-    observer = _WriteObserver(inner)
+    The two-pass tests above prove the *behaviour* and are the ones that
+    matter. This one pins that the answer comes from
+    `collector_core.publish.PublishResult` — the fleet-wide hook — and not from
+    a fourth private copy of the wrapper this collector used to carry. Deleting
+    the library call and reinstating a local observer would keep every
+    behavioural test green, which is exactly why the seam is asserted.
+    """
+    seen: list[PublishResult] = []
+    real_publish = venue.capture.publish_capture
 
-    envelope = next(
-        iter(
-            failure_envelopes(
-                RuntimeError("x"),
-                collector="venue",
-                signal_types=(STATIC,),
-                adapter="venue-reference-table",
-                now=NOW,
-                scope={"season": 2026, "week": 1},
-            ).values()
-        )
-    )
-    key = observer.write(envelope)
-    assert observer.landed(STATIC)
-    assert observer.list_keys("venue", STATIC, 2026, 1) == [key]
-    assert observer.read(key)["signal_type"] == STATIC
+    async def spy(envelopes, *, lake, metrics):
+        result = await real_publish(envelopes, lake=lake, metrics=metrics)
+        seen.append(result)
+        return result
 
-    failing = _WriteObserver(SpyLake(fail_write=True))
-    with pytest.raises(RuntimeError):
-        failing.write(envelope)
-    assert not failing.landed(STATIC)
-    assert failing.landed(ASSIGNMENT), "only the type that failed is marked"
+    lake = SpyLake(fail_write=True)
+    with mock.patch.object(venue.capture, "publish_capture", spy):
+        await run_capture(lake)
+
+    assert len(seen) == 1
+    assert isinstance(seen[0], PublishResult)
+    assert seen[0].failed == frozenset(SIGNAL_TYPES)
+    assert not any(seen[0].landed(signal_type) for signal_type in SIGNAL_TYPES)
+    # ...and the pass that failed to write recorded no digest, so the next one
+    # is not suppressed — the property the two-pass tests then exercise.
+    assert lake.objects == {}
 
 
 async def test_an_assignment_change_alone_does_not_re_append_venue_static():
