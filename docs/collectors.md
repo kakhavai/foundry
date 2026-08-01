@@ -36,7 +36,6 @@ services/<name>/<pkg>/capture.py              the capture pass
 services/<name>/<pkg>/metrics.py              your own series, on a subclass
 services/<name>/<pkg>/signals.py              SUPPORTED_FILTERS + signal_matches
 services/<name>/<pkg>/adapters/upstream.py    the only module that knows the wire
-services/<name>/Dockerfile
 services/<name>/pyproject.toml
 services/<name>/README.md
 services/<name>/tests/{conftest,test_routes,
@@ -51,9 +50,11 @@ contracts/collector-registry.yaml             one appended entry
 
 and deliberately **not**: a CI workflow (`services.yml` is a matrix computed
 from the fleet), an Argo CD Application (`applicationset.yaml` globs
-`helm/values/*`), a `telemetry.py`, an `auth.py`, a `scheduler.py`, per-member
-Dockerfile `COPY` lines, or an edit to `deploy-local.py`, `stack-up.py`,
-`smoke-test.sh` or `integration-test.yml`.
+`helm/values/*`), a `telemetry.py`, an `auth.py`, a `scheduler.py`, a
+`Dockerfile` (the root `Dockerfile.collector` builds every collector, and
+`tests/test_dockerfile_workspace.py` fails if a per-service one reappears), or
+an edit to `deploy-local.py`, `stack-up.py`, `smoke-test.sh` or
+`integration-test.yml`.
 
 **If you find yourself editing one of those, stop.** That is a gap in the
 tooling, not a step you are missing. `tests/test_collector_tooling.py` exists
@@ -736,8 +737,16 @@ Before opening a PR:
 cd services/<name> && uv run pytest -v
 uv run --with pyyaml==6.0.3 --with pytest --with jsonschema pytest tests/ -q
 uv lock --check
-docker build -f services/<name>/Dockerfile -t <name>:local .
+docker build -f Dockerfile.collector \
+    --build-arg SERVICE=<name> --build-arg PACKAGE=<pkg> --build-arg PORT=<port> \
+    -t <name>:local .
 ```
+
+Run that from the repo root, not the service directory: a collector depends on
+the `libs/collector-core/` workspace member by path, so the root **is** the
+build context. `<port>` is `service.port` from `helm/values/<name>/values.yaml`
+— the artifact Kubernetes actually applies, which is why the port the container
+listens on cannot drift from the one the probes dial.
 
 The Docker build is not optional and no pytest run substitutes for it: **pytest
 never touches a Dockerfile**, and adding a workspace member has broken an
