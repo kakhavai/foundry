@@ -263,12 +263,23 @@ jobs:
           # them through collector_core.lake rather than a second, hand-rolled
           # implementation of either, and collector-core already declares
           # boto3 as its own runtime dependency, so this pulls both in.
+          #
+          # --python 3.12 is REQUIRED, and its absence is not a style slip.
+          # The ci-runner image's ambient python3 is 3.10, `--no-project`
+          # means uv resolves against that ambient interpreter rather than
+          # the workspace's, and collector-core declares
+          # `requires-python = ">=3.12"`. Without the pin uv fails at
+          # RESOLUTION with "the current Python version (3.10.12) does not
+          # satisfy Python>=3.12", before the script is ever imported — a
+          # red REQUIRED check whose message points at collector-core rather
+          # than at this line. The neighbouring --no-project steps need no
+          # pin only because ruff and pyyaml still support 3.10.
           LAKE_BUCKET=foundry-signals \
           LAKE_ENDPOINT_URL=http://localhost:9000 \
           AWS_ACCESS_KEY_ID=foundry \
           AWS_SECRET_ACCESS_KEY=foundry-local-dev \
           AWS_DEFAULT_REGION=us-east-1 \
-          uv run --no-project --with ./libs/collector-core python3 \
+          uv run --no-project --python 3.12 --with ./libs/collector-core python3 \
             scripts/seed-scope-fixture.py --season 2026 --week 1 --lake
 
       - name: Deploy collector gateway
