@@ -556,12 +556,15 @@ collectors:
     #
     # KNOWN GAP, stated here because a consumer reading the registry should
     # not have to find it in a service README: the spec's PROE changepoint
-    # test (guard 2) ships DISABLED. Measured over five live seasons it has
-    # no discriminating power — 65% firing on real series against 55% on
-    # week-shuffled ones, and 0/13 recall once properly calibrated. Combined
-    # with nfldata's coach columns carrying no mid-season change for 2024 or
-    # 2025, this collector currently detects no regime change on a live
-    # season. `staff_assignment` is still correct about what the feed says;
-    # it is the independent cross-check that is missing.
+    # test (guard 2) ships DISABLED. Measured over five live seasons it fires
+    # on 65% of real team-seasons against 55% of week-shuffled ones, and the
+    # oracle test — handed the true week for free — cannot separate a real
+    # head-coach change from an arbitrary week (mean |shift| 4.83 vs 4.01
+    # points, p = 0.18 at n = 12). Any effect is smaller than roughly six
+    # points and below what that sample resolves. Combined with nfldata's
+    # coach columns carrying no mid-season change for 2024 or 2025, this
+    # collector currently detects no regime change on a live season.
+    # `staff_assignment` is still correct about what the feed says; it is the
+    # independent cross-check that is missing.
     # See services/coaching-scheme/README.md.
     depends_on: [schedule-context]

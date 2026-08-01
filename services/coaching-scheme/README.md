@@ -116,24 +116,53 @@ A threshold sweep separates them nowhere (8/10/12/14/16/18 points: real
 65/39/19/7.5/3.8/1.9%, null 55/32/15/7.3/3.4/1.4%).
 
 So the estimator was replaced with a pooled-variance max-t and the fixed
-threshold with a **per-team permutation test**. That worked exactly as
-designed — the false-positive rate lands on alpha at every level (5.0% at
-α=0.05, 2.2% at 0.02, **1.1% at 0.01**) — and found nothing: **recall 0/13**
-against known mid-season coaching changes, with the real firing rate sitting
-on the null firing rate.
+threshold with a **per-team permutation test**. The false-positive rate then
+lands on alpha at every level (5.0% at α=0.05, 2.2% at 0.02, **1.1% at 0.01**),
+and recall against the known events is 0.
 
-Then the ceiling on *any* detector: hand one the true changepoint week for
-free, no search, no multiple-comparisons penalty.
+**That recall figure proves nothing, and an earlier revision of this README
+wrongly leaned on it.** The permutation test has almost no power against a
+step: on a *perfect* step it never fires at α=0.01 at any balance ratio, and
+its p-value is **invariant to the step size** — 10-point, 30-point and
+100-point steps all return the same p, because permuting a stepped series
+keeps recreating a 4-versus-4 step at one of ~11 candidate splits. It would
+score 0 against twelve perfect hundred-point steps. So "recall 0" cannot
+distinguish *no effect* from *no power*.
 
-    mean |shift| at a REAL coaching change     4.18 pts   mean |t| 1.05
-    mean |shift| at a RANDOM week, same teams  3.92 pts   mean |t| 1.02
+**The conclusion rests on the oracle test instead**, which uses no permutation:
+hand a detector the true changepoint week for free, no search and no
+multiple-comparisons penalty. Measured under the **capped ±4-week estimator
+`max_t` actually computes** (an earlier revision quoted uncapped figures while
+describing the capped statistic — under the cap NYJ 2024 reads −3.08, not
++0.16):
+
+    mean |shift| at a REAL head-coach change   4.83 pts   mean |t| 1.17
+    mean |shift| at a RANDOM week, same teams  4.01 pts   mean |t| 0.97
     within-team weekly PROE sd                 6.89 pts
-    nominally significant (|t| >= 2)           2 of 13
+    nominally significant (|t| >= 2)           2 of 12
+    permutation test of the difference         p = 0.18
 
-A real coaching change is **indistinguishable from an arbitrary week**. NYJ
-2024 moves +0.16, TEN 2025 −0.16, CHI 2024 +1.11; NO 2024 moves +2.98, the
-wrong way. It is not the threshold, the estimator or the calibration — **the
-signal is not in this statistic.**
+**The claim is bounded, not absolute.** At n = 12 and this sd, the study
+resolves a 2-point step ~10% of the time, 4 points ~22%, 6 points ~53%,
+8 points ~82% (an independent replication put 6 points nearer 82%, so read the
+bound as ~6-8 points). The measured 4.83 sits squarely inside the band that
+cannot be resolved. So:
+
+> Any regime effect on weekly team PROE is **smaller than roughly six points
+> and not separable from week-to-week noise at n = 12** — not "there is nothing
+> to find", which overstates what this sample supports.
+
+That is still ample reason to disable: a detector that cannot see a perfect
+step of any size should not ship enabled, and an effect this study cannot
+resolve is one the detector certainly cannot.
+
+**Scope — the events are head-coach changes, not play-calling handoffs.** The
+thirteen events (twelve admissible; DEN 2022 wk17 has too few weeks after it)
+are in-season head-coach changes. That is a *proxy* for what this collector
+targets — `change_event: play_calling_handoff` — and the two overlap
+imperfectly in both directions. A reviewer's separate run on three
+handoffs-without-firing was consistent with the same negative result, but at
+n = 3 it is indicative only. Do not read these figures as covering handoffs.
 
 `CHANGEPOINT_ENABLED = False`. Every row publishes `changepoint_unexplained:
 null` with a machine-readable reason, never `false` — `false` would assert
@@ -144,12 +173,26 @@ calibration machinery is correct and a future statistic needs it to prove
 itself; `test_flipping_the_flag_re_enables_the_wiring` keeps the disabled path
 a switch rather than dead code.
 
-**Follow-up:** weekly PROE may simply be the wrong series. `neutral_pass_rate`,
-`personnel_rates` or `sec_per_play_neutral` may carry a sharper regime signal.
-The oracle test above is the cheap way to check *before* building anything —
-if the true-week effect does not clearly exceed the random-week effect, stop.
-Those series were **not** tested here: swapping the spec's named statistic is a
-design change, not a bug fix.
+**Follow-up — measured, not guessed.** An earlier revision nominated
+`neutral_pass_rate`, `personnel_rates` and `sec_per_play_neutral`. A reviewer
+ran the same oracle over six candidate series (same 12 events, same fairness
+rules, same capped estimator), and **two of those three measure at or below the
+random-week baseline**:
+
+| series | real mean abs t | random | perm p |
+|---|---|---|---|
+| **shotgun rate** | **1.74** | 1.15 | **0.038** |
+| no-huddle rate | 1.31 | 1.08 | 0.191 |
+| PROE (shipped) | 1.17 | 0.94 | 0.177 |
+| neutral pass rate | 1.06 | 0.99 | 0.360 |
+| sec/play neutral | 0.88 | 1.03 | 0.668 |
+| 4th-down go rate | 0.77 | 0.95 | 0.757 |
+
+`sec_per_play_neutral` is actively worse than random, and the promising
+candidate was not on the original list. **Bonferroni over six series puts
+shotgun rate at p ≈ 0.23 — suggestive, not established**, unregistered, and
+not a working detector. It is where a future attempt should start, confirmed
+on held-out seasons first.
 
 ### What this costs, stated plainly
 

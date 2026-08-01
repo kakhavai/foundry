@@ -194,7 +194,7 @@
         },
         "changepoint_unexplained": {
           "type": ["boolean", "null"],
-          "description": "Guard 2. NULL means the detector is disabled and this row was NOT checked -- see null_field_reason and changepoint.py, which carries the five seasons of measurement showing a weekly-PROE mean-shift test has no discriminating power (real firing 65% vs shuffled-null 55%; permutation-calibrated recall 0/13). False would assert 'checked and clean', which this collector cannot support. True (unreachable today) means the series shifted with no corresponding staff revision, so the rates on BOTH sides are suspect -- surfaced, not corrected."
+          "description": "Guard 2. NULL means the detector is disabled and this row was NOT checked -- see null_field_reason and changepoint.py, which carries the five seasons of measurement: a weekly-PROE mean-shift test fires on 65% of real team-seasons against 55% of week-shuffled ones, and the oracle test cannot separate a real head-coach change from an arbitrary week (mean |shift| 4.83 vs 4.01 points, p = 0.18 at n = 12). False would assert 'checked and clean', which this collector cannot support. True (unreachable today) means the series shifted with no corresponding staff revision, so the rates on BOTH sides are suspect -- surfaced, not corrected."
         },
         "changepoint_week": { "type": ["integer", "null"], "minimum": 1 },
         "changepoint_shift": {

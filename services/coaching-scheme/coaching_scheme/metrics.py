@@ -71,11 +71,13 @@ class CoachingSchemeMetrics(CollectorMetrics):
         """Guard 2's firing count. **Pinned at 0: the guard ships disabled.**
 
         Do not read this as "no regime changes were detected". Read it as "no
-        detection was attempted". `changepoint.py` carries the measurement:
-        a weekly-PROE mean-shift test fires on 65% of real team-seasons and
-        55% of *week-shuffled* ones, and a properly calibrated permutation
-        version has a measured recall of 0/13 against known coaching changes.
-        The series carries no regime signal, so the guard is off.
+        detection was attempted". `changepoint.py` carries the measurement: a
+        weekly-PROE mean-shift test fires on 65% of real team-seasons and 55%
+        of *week-shuffled* ones, and the oracle test -- handed the true week
+        for free -- cannot separate a real head-coach change (mean |shift|
+        4.83 pts) from an arbitrary week (4.01) at n = 12, p = 0.18. Any
+        effect is smaller than roughly six points and below what that sample
+        can resolve, so the guard is off.
 
         An earlier revision of this docstring said the opposite — that a
         season-long zero here was "the suspicious state". That reading assumed

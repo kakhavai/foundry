@@ -41,9 +41,10 @@ the change the collector exists to detect.
 `changepoint.py` was built to be the independent cross-check for exactly this
 gap — and **it does not work.** Measured over five live seasons, a PROE
 changepoint test fires on 65% of real team-seasons and 55% of week-shuffled
-ones, and a properly calibrated permutation version has 0/13 recall. It ships
-disabled. Read that module before assuming this collector can see a coaching
-change that the feed cannot.
+ones, and the oracle test cannot separate a real head-coach change from an
+arbitrary week at n = 12 (mean |shift| 4.83 vs 4.01 points, p = 0.18). It
+ships disabled. Read that module before assuming this collector can see a
+coaching change the feed cannot.
 
 The consequence, stated rather than left to be inferred: **on a current season
 this collector has no working regime-change detector at all.**

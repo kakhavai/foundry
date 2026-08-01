@@ -82,8 +82,9 @@ extraEnv:
   # keep the loop off rather than a reason to turn it on. Guard 2 -- the PROE
   # changepoint test the spec asks for -- ships DISABLED: measured over five
   # live seasons it fires on 65% of real team-seasons and 55% of
-  # week-SHUFFLED ones, and a properly calibrated permutation version has a
-  # recall of 0/13 against known coaching changes. See
+  # week-SHUFFLED ones, and the oracle test cannot separate a real head-coach
+  # change from an arbitrary week (mean |shift| 4.83 vs 4.01 points, p = 0.18
+  # at n = 12). See
   # services/coaching-scheme/coaching_scheme/changepoint.py. Enabling capture
   # would pull 73 MiB a pass to feed a detector that is switched off.
   #

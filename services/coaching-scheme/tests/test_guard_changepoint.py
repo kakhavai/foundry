@@ -196,16 +196,21 @@ def test_a_tighter_alpha_fires_strictly_less():
 def test_an_overwhelming_shift_is_still_detected():
     """Calibration must not mean "never fires".
 
-    **A minority shifted segment, deliberately.** A permutation test has
-    surprisingly little power against a *balanced* step, because the null
-    contains the reorderings that recreate it: an 8-and-8 split of the same
-    30-point step measures p=0.03, not 0.003, since a shuffle can easily land
-    four lows next to four highs. Four high weeks among seventeen is much
-    harder to reassemble by chance, so this fires at the floor.
+    **A minority shifted segment, deliberately, and the balance is doing all
+    the work.** A permutation test has very little power against a *balanced*
+    step, because the null contains the reorderings that recreate it: a
+    shuffle easily lands four lows next to four highs. Measured, on
+    real-shaped noise, an 8-and-8 split bottoms out at **p ~= 0.043 whatever
+    the step size** — 10, 30 or 100 points — and never reaches the shipped
+    alpha. Four high weeks among seventeen is much harder to reassemble by
+    chance, so this fires at the floor.
 
-    That is not a fixture convenience — it is a real property of the test and
-    a second reason (independent of the effect-size finding) that guard 2 is
-    weak on a 17-week season.
+    On a *perfect* (noiseless) step the failure is total: p is exactly
+    invariant to step size at every balance ratio and the test never fires at
+    alpha=0.01 at all. `changepoint.py` carries that table. It is why the
+    detector's zero recall against real coaching changes proves nothing, and
+    why the argument for disabling rests on the oracle test rather than on
+    recall.
     """
     found = detect(
         weeks(noisy([0] * 13 + [30] * 4, jitter=2.0, seed=3)),
