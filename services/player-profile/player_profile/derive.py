@@ -104,19 +104,33 @@ DAYS_PER_YEAR = 365.25
 
 
 def age_years(birth_date: date | None, as_of: date) -> float | None:
-    """Age in decimal years as of `as_of`, or `None` without a birth date.
+    """Age in decimal years as of `as_of`, or `None` where none can be defended.
 
     `None`, never 0.0 and never a guess. The spec allows a null birth date
     ("null only when no adapter can supply it"), and an age of zero would flow
     into `position_age_curve_stage` as the most `pre_peak` player in the league.
 
-    A birth date in the future yields a negative age rather than a clamp: that
-    is a genuine upstream error and the caller records it, where a clamp to 0.0
-    would launder it into a plausible value.
+    **A birth date after `as_of` is `None` too, and the caller files
+    `birth_date_in_future`.** It used to return the negative number, with a
+    docstring saying the caller recorded it — which nothing did. The negative
+    then flowed into `position_age_curve_stage`, where every comparison in the
+    table put it in `pre_peak`, and into the percentile population, where it
+    dragged the whole position's distribution down. A clamp to 0.0 would launder
+    it into a plausible value; a negative launders it into a confident one. The
+    only honest answer to "how old is a player born next year" is that there
+    isn't one.
+
+    Returning `None` for both cases is deliberate — the row is still complete
+    under the spec's coverage rule, which requires `player_id`, `position` and
+    `experience_seasons` and explicitly permits a null birth date. What tells
+    the two apart is the `errors` entry, not the field.
     """
     if birth_date is None:
         return None
-    return round((as_of - birth_date).days / DAYS_PER_YEAR, 3)
+    days = (as_of - birth_date).days
+    if days < 0:
+        return None
+    return round(days / DAYS_PER_YEAR, 3)
 
 
 def draft_capital_score(overall_pick: int | None) -> float:

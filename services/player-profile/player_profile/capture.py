@@ -165,6 +165,11 @@ REASON_NO_PROFILE = "profile_not_in_upstream"
 REASON_INCOMPLETE_PROFILE = "profile_incomplete"
 REASON_DEADLINE = "deadline_exceeded"
 REASON_STALE_POSITION = "position_not_reconfirmed"
+# A birth date after the pass's own `as_of_date`. `derive.age_years` refuses to
+# turn it into a number; this is the half that makes the refusal visible, since
+# a null `age_years` is otherwise indistinguishable from "no adapter supplied a
+# birth date" — which the spec explicitly permits.
+REASON_BIRTH_DATE_IN_FUTURE = "birth_date_in_future"
 REASON_SNAP_SEASONS_MISSING = "career_snap_seasons_missing"
 REASON_HISTORY_UNAVAILABLE = "prior_history_unavailable"
 
@@ -357,14 +362,25 @@ def build_career_load_row(
     is present and null so a consumer can tell "not supplied" from "absent
     field", and this is recorded as a known gap in the service README.
 
-    `career_snaps_complete` is the honesty flag on the number that IS supplied:
-    nflverse publishes snap counts from `CAREER_SNAP_FIRST_SEASON` only, so a
-    player who was already in the league before it has a floor rather than a
-    total — and a season this pass could not read has the same effect.
+    `career_snaps_complete` is the honesty flag on the number that IS supplied,
+    and it is only ever `True` on evidence. nflverse publishes snap counts from
+    `CAREER_SNAP_FIRST_SEASON` only, so a player who was already in the league
+    before it has a floor rather than a total; a season this pass could not read
+    has the same effect; and **an unknown `rookie_season` is a third case, not a
+    pass.** It used to be one: the pre-2012 comparison was skipped when the
+    field was null and `complete` stayed `True`, so a twelve-year veteran whose
+    rookie season the feed omitted published a 2012-onward floor labelled
+    complete — and a consumer weighting `career_snap_load_percentile` would
+    treat a truncated total as a full one. That is an assumption standing in for
+    a measurement, which is the same thing `is_stale`, `CareerSnaps.total_for`
+    and `age_years` each refuse to do.
     """
-    complete = snaps is not None and not career.seasons_missing
-    if complete and row.rookie_season is not None:
-        complete = row.rookie_season >= career.first_season
+    complete = (
+        snaps is not None
+        and not career.seasons_missing
+        and row.rookie_season is not None
+        and row.rookie_season >= career.first_season
+    )
     return {
         "player_id": player_id,
         "career_offensive_snaps": snaps,
@@ -527,6 +543,7 @@ async def capture_player_profile(  # noqa: C901 — one linear pass, read top to
 
     stale_positions = 0
     covered: set[str] = set()
+    future_birth_dates: list[str] = []
 
     for row, player_id in resolved:
         key = player_key(player_id)
@@ -541,6 +558,12 @@ async def capture_player_profile(  # noqa: C901 — one linear pass, read top to
             continue
 
         age = derive.age_years(row.birth_date, as_of)
+        if age is None and row.birth_date is not None:
+            # `age_years` returns None for a missing birth date AND for one
+            # after `as_of_date`. The spec permits the first outright, so only
+            # the second is worth an error — and without this the two are
+            # indistinguishable in the published row.
+            future_birth_dates.append(player_id)
         age_percentile = derive.position_age_percentile(
             ages_by_position, row.position, age
         )
@@ -593,11 +616,17 @@ async def capture_player_profile(  # noqa: C901 — one linear pass, read top to
         # docstring, section 3. Biographical is the strict one; the other three
         # are satisfied by a row existing, because their contents are explicitly
         # optional.
-        if (
-            row.position is not None
-            and row.experience_seasons is not None
-            and player_id
-        ):
+        #
+        # Of the spec's three required fields, `experience_seasons` is the only
+        # one that can still be null HERE, and the other two are not checked
+        # because a check that cannot fail is a check nobody can test:
+        # `_to_profile` drops a row with no `gsis_id` or an unmappable
+        # `position` before it is ever returned, and `resolve_in_scope` yields
+        # only rows `player-identity` resolved to a scope member, so
+        # `player_id` is non-empty by construction. Asserting all three here
+        # read as defensive and was in fact two unreachable clauses wrapped
+        # around one live one.
+        if row.experience_seasons is not None:
             accumulators[BIOGRAPHICAL].record(key)
         else:
             accumulators[BIOGRAPHICAL].fail(key, REASON_INCOMPLETE_PROFILE)
@@ -618,6 +647,17 @@ async def capture_player_profile(  # noqa: C901 — one linear pass, read top to
         # by itself and push every other reason off the list.
         for acc in accumulators.values():
             acc.add_error(IDENTITY_UPSTREAM_ERROR, identity_failures.detail())
+
+    if future_birth_dates:
+        # Summarised, never per row: a feed whose date column shifted would file
+        # one entry per scoped player and push every other reason off
+        # `CoverageAccumulator`'s 50-entry cap. The first few ids are named
+        # because chasing a corrected birth date starts with knowing whose.
+        accumulators[BIOGRAPHICAL].add_error(
+            REASON_BIRTH_DATE_IN_FUTURE,
+            f"{len(future_birth_dates)} player(s) born after "
+            f"{as_of.isoformat()}: {', '.join(sorted(future_birth_dates)[:5])}",
+        )
 
     if stale_positions:
         # `add_priority_error`, not `add_error`: the entry that explains why a
