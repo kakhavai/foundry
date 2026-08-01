@@ -163,7 +163,7 @@ Cadence is a declared property of each collector, not an ad-hoc number, so the p
 | Class | Interval | Collectors |
 |---|---|---|
 | `static reference` | on change, checked daily | `venue`, `player-profile` |
-| `seasonal` | daily | `player-identity`, `player-contract`, `coaching-scheme`, `durability-history`, `season-futures` |
+| `seasonal` | daily | `player-identity`, `player-contract`, `team-scheme`, `durability-history`, `season-futures` (plus `coaching-staff`, deferred) |
 | `weekly` | post-game, then daily | `roster-scope`, `player-stats`, `usage-share`, `game-script`, `schedule-context`, `broadcast-context`, `officiating`, and all four matchup collectors |
 | `volatile` | 15 minutes | `weather`, `betting-lines`, `depth-chart`, `injury-report`, `roster-transactions`, `news-feed`, `social-signal` |
 | `perishable` | 5 minutes in-window | `player-props`; `weather` escalates into this class inside its pre-kickoff window |
@@ -1160,15 +1160,107 @@ Answers who is calling the game and what that group has historically done to it.
 
 **Candidate upstreams (non-normative):** Football Zebras weekly crew assignments, nflverse play-by-play penalty records, Pro Football Reference officials pages
 
-#### `coaching-scheme`
+#### `team-scheme`
 
-**Signal types:** `staff_assignment`, `team_scheme_profile`
-**Cadence class:** seasonal — daily; staff changes are announced off-cycle and mid-week, and scheme rates recompute after each week's games
+**Signal types:** `team_scheme_profile`
+**Cadence class:** seasonal — daily; rates recompute after each week's games
 **Stage:** 8E
+**Depends on:** `schedule-context` for the season/week grid
+**Scope-aware:** no — signals are keyed by team and season
+
+Answers what an offense is actually doing right now: how often it passes
+relative to expectation, how fast it plays, what personnel it lines up in, how
+often it motions or play-actions, and how aggressively it goes for it on fourth
+down. Every one of those is measured from play-by-play, independently of who is
+coaching.
+
+**This collector was originally specified as `coaching-scheme`, carrying both
+the scheme rates and the coaching-staff timeline. It was split during 8E
+implementation.** See `coaching-staff` below for why, and for the staff fields
+that moved there. The short version: no reliable free source exists for
+per-week coaching staff, and a wrong staff timeline does not merely leave a
+gap — it silently corrupts the rates by attributing a two-regime sample to one
+regime. Removing the attribution removes the failure mode; guarding against it
+does not.
+
+**Normalized signal fields**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `team_id`, `season` | string, int | Subject |
+| `neutral_pass_rate` | float | Pass rate in neutral game script |
+| `pass_rate_over_expected` | float | PROE against a down/distance/score/time baseline |
+| `sec_per_play_neutral` | float | Pace, neutral script only |
+| `no_huddle_rate` | float | Share of snaps without a huddle |
+| `personnel_rates` | object | `{p11, p12, p21, p13, heavy}` — snap share by personnel grouping |
+| `shotgun_rate`, `play_action_rate`, `pre_snap_motion_rate` | float | Formation and design tendencies |
+| `fourth_down_go_rate` | float | Go-for-it rate on fourth down |
+| `fourth_down_go_rate_over_expected` | float | Against a win-probability-optimal baseline |
+| `games_sampled` | int | Games behind the rates |
+
+**Extra routes beyond the standard five:** none. The revision-timeline route
+(`GET /teams/{team_id}/revisions`) belonged to the staff half and moved to
+`coaching-staff`.
+
+**`coverage.expected` means:** every team in the season grid has a profile with
+`neutral_pass_rate` and `games_sampled` non-null. 32 teams is a declarable
+floor independent of any fetch.
+
+**Adapter notes:** Rates key to a **team-season**, deliberately, not to a staff
+revision — see `coaching-staff`. Personnel, formation and motion rates require
+charted play-by-play rather than box scores; nflverse's `pbp_participation`
+(`offense_personnel`, `offense_formation`) and `ftn_charting` (`is_motion`,
+`is_play_action`, `is_no_huddle`) supply them, so all of these fields are in
+fact populable. Where a field's upstream is unavailable, unpopulated is
+correct and invented is not.
+
+**Failure mode to watch:** A rate window that straddles a regime change it
+cannot see. Because rates are keyed to a team-season and make no regime claim,
+a mid-season coordinator change produces a *blended* season profile rather than
+a mis-attributed one — the number is a true statement about the season and a
+poor predictor of next week. Consumers wanting regime-aware rates need
+`coaching-staff` to exist first. Do not reintroduce revision-keyed rates
+against an unreliable staff feed: that converts an honest blend into a
+confident false attribution.
+
+**A measured negative result, recorded so it is not re-attempted blindly:** the
+original spec required a changepoint test on each team's weekly PROE series to
+detect an unannounced play-calling handoff, firing on a sustained shift beyond
+roughly eight points. It does not work, and the reason is not the threshold.
+An oracle test — the true changepoint week supplied for free, no search and no
+multiple-comparisons penalty — gives a mean absolute shift of **4.83 points at
+a real head-coach change against 4.01 points at a random week**, with a
+within-team weekly standard deviation of **6.89** (p = 0.18, n = 12 head-coach
+changes, 2021–2025). Power at n = 12 reaches ~53% only at 6 points. The
+defensible claim is that **any regime effect on weekly team PROE is smaller
+than roughly six to eight points and not separable at this sample size** — not
+that no effect exists. Note the naive recall figure is uninformative: at
+α = 0.01 the permutation test cannot detect a perfect step of *any* size at
+*any* balance ratio, because permuting a stepped series keeps recreating the
+step. Of six candidate series tested with the same oracle, **shotgun rate is
+the only one that separates** (1.74 vs 1.15, p = 0.038 — suggestive, not
+established after correcting for six tests), and `sec_per_play_neutral`
+performs *worse* than random. A future detector should start there, not from
+PROE.
+
+**Candidate upstreams (non-normative):** nflverse play-by-play, `pbp_participation`
+for personnel and formation, `ftn_charting` for motion, play-action and no-huddle
+
+#### `coaching-staff`
+
+**Signal types:** `staff_assignment`
+**Cadence class:** seasonal — daily; staff changes are announced off-cycle and mid-week
+**Stage:** deferred — **paid vendor required**, see below
 **Depends on:** `schedule-context` for the season/week grid
 **Scope-aware:** no — signals are keyed by team and staff revision
 
-Answers why a player's own history stops predicting them. When a coordinator is fired in Week 8 and the quarterbacks coach takes over play-calling, the offense's pass rate over expectation can move ten points in a week, and every receiver's target share is drawn from a different distribution than the one their prior nine games describe. No player-level collector can see a regime change; this one names it, dates it, and quantifies what changed.
+Answers who is running a team's offense, and from when. When a coordinator is
+fired in Week 8 and the quarterbacks coach takes over play-calling, the
+offense's pass rate over expectation can move ten points in a week, and every
+receiver's target share is drawn from a different distribution than the one
+their prior nine games describe. No player-level collector can see a regime
+change; this one names it and dates it, and `team-scheme` quantifies what
+changed.
 
 **Normalized signal fields**
 
@@ -1182,25 +1274,54 @@ Answers why a player's own history stops predicting them. When a coordinator is 
 | `play_caller_role` | enum | `head_coach`, `offensive_coordinator`, `position_coach`, `unknown` |
 | `change_event` | enum | `none`, `dismissal`, `promotion`, `interim`, `play_calling_handoff` |
 | `change_reported_at` | timestamp | When the change became public; may lag the effective week |
-| `neutral_pass_rate` | float | Pass rate in neutral game script |
-| `pass_rate_over_expected` | float | PROE against a down/distance/score/time baseline |
-| `sec_per_play_neutral` | float | Pace, neutral script only |
-| `no_huddle_rate` | float | Share of snaps without a huddle |
-| `personnel_rates` | object | `{p11, p12, p21, p13, heavy}` — snap share by personnel grouping |
-| `shotgun_rate`, `play_action_rate`, `pre_snap_motion_rate` | float | Formation and design tendencies |
-| `fourth_down_go_rate` | float | Go-for-it rate on fourth down |
-| `fourth_down_go_rate_over_expected` | float | Against a win-probability-optimal baseline |
-| `games_sampled` | int | Games inside this revision's window only |
 
-**Extra routes beyond the standard five:** `GET /teams/{team_id}/revisions?season=` — the ordered staff-revision timeline for one team, which is the shape consumers actually want and which is awkward to reconstruct from filtered `/signals` calls.
+**Extra routes beyond the standard five:** `GET /teams/{team_id}/revisions?season=`
+— the ordered staff-revision timeline for one team, which is the shape
+consumers actually want and which is awkward to reconstruct from filtered
+`/signals` calls.
 
-**`coverage.expected` means:** every team has at least one revision covering the requested week, with `play_caller_id` and `play_caller_role` non-null — `unknown` is a legitimate role value and counts as present, a null does not.
+**`coverage.expected` means:** every team has at least one revision covering
+the requested week, with `play_caller_id` and `play_caller_role` non-null —
+`unknown` is a legitimate role value and counts as present, a null does not.
 
-**Adapter notes:** An adapter must key every rate to a staff revision rather than to a team-season, and recompute from scratch when a revision boundary is inserted mid-season. Play-caller identity is the field with no reliable feed behind it — it is reported in beat coverage, changes without announcement, and is the single field most worth a manual override path. Personnel and formation rates require charted play-by-play, not box scores, so the adapter's available upstream determines which of those fields can be populated at all; unpopulated is correct, invented is not.
+**Why this is deferred rather than built.** Every free source was enumerated
+during 8E and none is usable:
 
-**Failure mode to watch:** A rate window that straddles the change it is supposed to describe. An adapter that computes season-to-date PROE and then attaches it to the current staff revision produces a number blending nine weeks of the fired coordinator with three of their replacement — it describes neither regime, it moves in the right direction just slowly enough to look like real drift, and the whole point of the collector is lost silently. Assert at write time that no rate's sample window crosses an `effective_from_week` boundary and that `games_sampled` never exceeds the revision's week span. Then run a changepoint test on each team's weekly PROE series independently of the staff feed: a sustained shift of more than roughly eight points holding three or more weeks with no corresponding revision means a play-calling handoff the adapter never saw, and the rates on both sides of it are wrong.
+| Source | Verdict |
+|---|---|
+| nflverse (all 25 data releases) | no coaching feed exists |
+| nfldata `games.csv` `home_coach`/`away_coach` | correct through 2023, **wrong from 2024** — every row carries the opening-day coach, so a mid-season change is invisible. 2024 NYJ shows Saleh for all 17 games; he was dismissed in week 5. Same for NO, CHI and TEN. |
+| ESPN core API `/seasons/{season}/teams/{id}/coaches` | returns **today's** staff for every season queried despite the season-scoped path — actively misleading rather than merely absent |
+| Pro Football Reference coaching pages | HTTP 403 to automated requests |
 
-**Candidate upstreams (non-normative):** nflverse play-by-play and participation data, Pro Football Reference coaching-staff pages, a charting provider for personnel and motion rates, plus a committed manual-override file for play-caller identity
+Two workarounds were considered and **rejected on principle**: a committed
+manual-override file, and snapshotting a current-state source daily so the
+collector's own append-only lake accrues the transitions. Both make this
+project the permanent maintainer of another project's data quality, with a
+per-firing editing deadline and no coverage of unannounced handoffs.
+
+The consequence is recorded rather than worked around: **`staff_assignment` for
+a current season would be false, not merely incomplete** — it would claim one
+regime where there were two — and that false claim propagates into any
+consumer keying rates to it. That is why `team-scheme` keys to team-season
+instead.
+
+**Adapter notes:** An adapter must key every revision boundary to an
+`effective_from_week` and never store `effective_to_week` on the record itself
+— a revision's end is a fact about the *next* revision, and storing it creates
+the one field an adapter can overwrite in place. Play-caller identity is the
+field with no reliable feed behind it even among paid vendors; it is reported
+in beat coverage and changes without announcement.
+
+**Failure mode to watch:** A staff feed that is present, well-formed and stale.
+The 2024 `games.csv` case is the canonical example: the column is populated on
+every row, passes every schema check, and is wrong for twelve games. A source
+that 404s is safe; a source that confidently returns last month's answer is
+not. Any adapter must carry a freshness assertion independent of the feed's own
+claims.
+
+**Candidate upstreams (non-normative):** a paid staff/transaction wire, or a
+charting provider that publishes play-caller attribution
 
 ### Profile (3)
 
@@ -1451,7 +1572,7 @@ Phase 8 ships in six sub-phases. Each is independently deployable and leaves the
 | **8B** | `player-stats`, `usage-share`, `depth-chart`, `injury-report`, `roster-transactions`, `schedule-context` | Who is playing, in what role, how much. The first stage after which the generator can produce a real projection rather than a placeholder. |
 | **8C** | `betting-lines`, `player-props`, `game-script`, `season-futures` | The market block. Highest signal-per-service in the catalog, and all four share one auth shape, one rate-limit profile, and the same perishability problem. |
 | **8D** | `defense-vs-position`, `coverage-matchup`, `defensive-front`, `offensive-line` | Matchup block — four unit-strength ratings sharing a weekly cadence, an opponent-adjustment requirement, and a sample-size discipline. |
-| **8E** | `venue`, `coaching-scheme`, `officiating`, `broadcast-context`, `player-profile`, `player-contract`, `durability-history` | Seven services, but the cheapest seven: slow-moving reference data, near-zero cadence, small adapters. Lumpy by design rather than by accident. |
+| **8E** | `venue`, `team-scheme`, `officiating`, `broadcast-context`, `player-profile`, `player-contract`, `durability-history` | Seven services, but the cheapest seven: slow-moving reference data, near-zero cadence, small adapters. Lumpy by design rather than by accident. |
 | **8F** | `news-feed`, `social-signal` | Deliberately last and deliberately alone — the only two needing entity extraction and NLP, and the only two whose payoff is uncertain. Isolating them means a sentiment rabbit-hole cannot block anything else from shipping. |
 
 Each stage is tagged `phase-8a` through `phase-8f`; the `phase-8` milestone tag lands when 8F merges. See [`tagging-policy.md`](../tagging-policy.md).

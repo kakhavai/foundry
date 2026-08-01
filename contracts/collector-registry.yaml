@@ -530,3 +530,59 @@ collectors:
     # reason on every row: network, kickoff_local_time, announced_at /
     # flex_decided_at, and regional_coverage_pct.
     depends_on: [schedule-context]
+
+  - name: team-scheme
+    path: /collectors/team-scheme
+    stage: 8E
+    cadence_class: seasonal
+    envelope_version: "1"
+    signal_types: [team_scheme_profile]
+    # One profile per (team, season), folded from nflverse play-by-play plus
+    # two charting feeds: neutral pass rate, PROE, pace, no-huddle, personnel
+    # groupings, shotgun, play-action, pre-snap motion and fourth-down
+    # aggression. Everything a consumer needs to know what an offense is
+    # actually doing, measured independently of who is coaching it.
+    #
+    # ONE SIGNAL TYPE, and the missing one is the point. This collector was
+    # specified as `coaching-scheme`, carrying these rates AND a per-week
+    # coaching-staff timeline, with the rates keyed to a staff revision. No
+    # reliable free source for that timeline exists: nflverse publishes no
+    # coaching feed in any of its 25 releases; nfldata's games.csv coach
+    # columns are correct through 2023 and wrong from 2024 (every row carries
+    # the opening-day coach, so 2024 NYJ shows Saleh for all 17 games though
+    # he was dismissed in week 5 — likewise NO, CHI, TEN); ESPN's core API
+    # returns TODAY's staff for every season queried; PFR 403s automated
+    # requests. A staff timeline for a current season would be FALSE rather
+    # than merely incomplete, and keying a rate to it turns an honest blend
+    # into a confident false attribution. So `staff_assignment`, the
+    # revision fields and the GET /teams/{id}/revisions route are deferred to
+    # a `coaching-staff` collector, marked paid-vendor-required in the phase
+    # doc. It is not registered here because this file lists DEPLOYED
+    # collectors.
+    #
+    # Consequence for a consumer: a mid-season coordinator change produces a
+    # BLENDED season profile. True about the season, poor about next week.
+    # Regime-aware rates need `coaching-staff` to exist first.
+    #
+    # CAPTURE_ENABLED=false. 73.28 MiB per changed pass — the largest in the
+    # fleet — and `broadcast-context`'s vacuous-without-the-loop exception
+    # does not apply: nothing here reads back a prior lake snapshot, so one
+    # dispatched /refresh produces exactly what a season-long loop would.
+    #
+    # `fourth_down_go_rate_over_expected` is null by necessity (no free
+    # win-probability-optimal baseline), and `sec_per_play_neutral` ships
+    # UNVALIDATED against any published pace figure. Both disclosed in
+    # services/team-scheme/README.md. The spec's changepoint detector is
+    # measured, negative and deliberately not built — see the phase doc.
+    #
+    # Set true if this collector narrows to roster-scope's membership list
+    # before it fetches. Checked structurally by
+    # tests/test_scope_aware_gate.py: declaring true requires importing
+    # collector_core.scope.ScopeClient (`from collector_core.scope import
+    # ScopeClient`) somewhere in this collector's source — that test is by
+    # AST, so an `import collector_core.scope` plus attribute access will
+    # not satisfy it. That check proves the narrowing seam is wired in, not
+    # that it behaves correctly; write this collector's own fail-closed test
+    # for that.
+    scope_aware: false
+    depends_on: [schedule-context]
