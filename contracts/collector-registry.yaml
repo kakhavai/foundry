@@ -319,3 +319,37 @@ collectors:
     # The nflverse game table this collector reads for assignments is a third
     # party, not a collector, so it is not a depends_on either.
     depends_on: []
+
+  - name: player-profile
+    path: /collectors/player-profile
+    stage: 8E
+    cadence_class: static reference
+    envelope_version: "1"
+    signal_types: [player_biographical, player_draft_capital, player_athleticism, player_career_load]
+    # Checked structurally by tests/test_scope_aware_gate.py; nothing verifies
+    # the reasoning below. True, and here it is load-bearing rather than
+    # decorative: the biographical upstream is a 25,029-row table of every
+    # player nflverse has ever carried, and the career-snap sweep is fifteen
+    # per-season files. Narrowing to the 384 individual watchlist slots BEFORE
+    # the first request is what keeps a pass that cannot narrow from spending
+    # ~44 MB to publish nothing. The behavioural half — that a scope failure
+    # makes zero upstream calls, and that a resolved-but-out-of-scope row is
+    # dropped — is proven in services/player-profile/tests/test_scope_narrowing.py,
+    # because the AST gate can only see that ScopeClient is imported.
+    scope_aware: true
+    # player-identity because every emitted row is keyed by a canonical
+    # `player_id` and `players.csv` is keyed by GSIS id: without the crosswalk
+    # there is no id to publish under, and this collector refuses to mint one.
+    # roster-scope because the watchlist is both the narrowing input AND the
+    # coverage denominator — `coverage.expected` here is a scope slot, not an
+    # upstream row.
+    #
+    # NOT declared, and each is a near miss worth one line:
+    #   player-stats / usage-share — `breakout_age_years` would need per-season
+    #     production from one of them. The field ships null rather than
+    #     inventing a threshold the spec never defines, so there is no edge to
+    #     declare yet. Add one here when it is actually computed.
+    #   depth-chart — supplies `position` to roster-scope, not to this
+    #     collector; the arrow reaches here through roster-scope already.
+    # The three nflverse tables are third parties rather than collectors.
+    depends_on: [player-identity, roster-scope]

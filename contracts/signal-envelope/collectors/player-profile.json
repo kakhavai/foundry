@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/player-profile.json",
+  "title": "player-profile collector signal fields",
+  "signal_types": {
+    "player_biographical": {
+      "type": "object",
+      "required": [
+        "player_id",
+        "position",
+        "birth_date",
+        "age_years",
+        "position_age_percentile",
+        "position_age_curve_stage",
+        "experience_seasons",
+        "height_inches",
+        "weight_lbs",
+        "college",
+        "position_last_changed_at",
+        "position_last_confirmed_at",
+        "weight_lbs_last_changed_at",
+        "weight_lbs_last_confirmed_at",
+        "position_stale"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "player_id": { "type": "string", "minLength": 1 },
+        "position": { "enum": ["QB", "RB", "WR", "TE", "K"] },
+        "birth_date": { "type": ["string", "null"], "format": "date" },
+        "age_years": { "type": ["number", "null"] },
+        "position_age_percentile": {
+          "type": ["number", "null"],
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "position_age_curve_stage": {
+          "enum": ["pre_peak", "peak", "post_peak", "cliff", null]
+        },
+        "experience_seasons": { "type": ["integer", "null"], "minimum": 0 },
+        "height_inches": { "type": ["integer", "null"], "minimum": 1 },
+        "weight_lbs": { "type": ["integer", "null"], "minimum": 1 },
+        "college": { "type": ["string", "null"] },
+        "position_last_changed_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "position_last_confirmed_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "weight_lbs_last_changed_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "weight_lbs_last_confirmed_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "position_stale": { "type": "boolean" }
+      }
+    },
+    "player_draft_capital": {
+      "type": "object",
+      "required": [
+        "player_id",
+        "draft_year",
+        "draft_round",
+        "draft_overall_pick",
+        "draft_capital_score",
+        "is_undrafted"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "player_id": { "type": "string", "minLength": 1 },
+        "draft_year": { "type": ["integer", "null"], "minimum": 1936 },
+        "draft_round": { "type": ["integer", "null"], "minimum": 1, "maximum": 7 },
+        "draft_overall_pick": { "type": ["integer", "null"], "minimum": 1 },
+        "draft_capital_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+        "is_undrafted": { "type": "boolean" }
+      }
+    },
+    "player_athleticism": {
+      "type": "object",
+      "required": ["player_id", "athleticism", "measurement_source_id"],
+      "additionalProperties": false,
+      "properties": {
+        "player_id": { "type": "string", "minLength": 1 },
+        "measurement_source_id": { "type": ["string", "null"] },
+        "athleticism": {
+          "type": "object",
+          "required": [
+            "forty_yard",
+            "vertical_inches",
+            "broad_jump_inches",
+            "three_cone",
+            "shuttle",
+            "bench_reps",
+            "composite_score"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "forty_yard": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+            "vertical_inches": {
+              "type": ["number", "null"],
+              "exclusiveMinimum": 0
+            },
+            "broad_jump_inches": {
+              "type": ["number", "null"],
+              "exclusiveMinimum": 0
+            },
+            "three_cone": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+            "shuttle": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+            "bench_reps": { "type": ["integer", "null"], "minimum": 0 },
+            "composite_score": {
+              "type": ["number", "null"],
+              "minimum": 0.0,
+              "maximum": 1.0
+            }
+          }
+        }
+      }
+    },
+    "player_career_load": {
+      "type": "object",
+      "required": [
+        "player_id",
+        "career_offensive_snaps",
+        "career_snap_load_percentile",
+        "breakout_age_years",
+        "experience_seasons",
+        "career_snaps_complete",
+        "career_snaps_first_season"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "player_id": { "type": "string", "minLength": 1 },
+        "career_offensive_snaps": { "type": ["integer", "null"], "minimum": 0 },
+        "career_snap_load_percentile": {
+          "type": ["number", "null"],
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "breakout_age_years": { "type": ["number", "null"] },
+        "experience_seasons": { "type": ["integer", "null"], "minimum": 0 },
+        "career_snaps_complete": { "type": "boolean" },
+        "career_snaps_first_season": { "type": "integer", "minimum": 1920 }
+      }
+    }
+  }
+}

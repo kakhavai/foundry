@@ -1,0 +1,121 @@
+service:
+  name: player-profile
+  port: 8019
+
+image:
+  repository: ghcr.io/kakhavai/foundry/player-profile
+
+containerPort: 8019
+
+# The chart defaults. Measure before raising either: roster-scope's first deploy
+# was OOMKilled at 256Mi because its adapter buffered a 37 MB document three
+# times, and raising the limit would have hidden the bug rather than fixed it.
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+otel:
+  resourceAttributes: "service.name=player-profile,service.namespace=foundry"
+
+grafanaAnnotations:
+  enabled: true
+
+gateway:
+  enabled: true
+  pathPrefix: /collectors/player-profile
+  # Only the paths this collector publishes as its contract. /health and
+  # /metrics are deliberately absent: they are exempt from bearer auth
+  # in-process (a kubelet probe and a Prometheus scrape cannot carry a token),
+  # and that is a reason to reach them in-cluster, not at the edge.
+  # Add a path here when you add a route beyond the standard five.
+  publicPaths:
+    - /catalog
+    - /signals
+    # The spec's extra route. Listed explicitly because the gateway publishes
+    # only declared contract paths — omit it and it 404s at the edge while
+    # working perfectly in-cluster, which reads as a routing bug rather than a
+    # missing declaration.
+    - /signals/age-curve
+    - /refresh
+
+extraEnv:
+  # optional: true lets the pod start before the Secret exists. player-profile then
+  # answers 503 on every data route until it arrives — the ArgoCD Application
+  # reports Healthy the whole time, so recognise that combination for what it
+  # is before assuming the deploy is broken.
+  - name: COLLECTOR_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: player-profile-collector-token
+        key: token
+        optional: true
+  - name: LAKE_BUCKET
+    value: "foundry-signals"
+  - name: LAKE_ENDPOINT_URL
+    value: "http://minio.monitoring.svc.cluster.local:9000"
+  - name: REFRESH_MIN_INTERVAL_SECONDS
+    value: "300"
+  # FALSE, and this one is a cost decision rather than a scaffolding default.
+  # Measured 2026-07-31, per capture pass on a cold process:
+  #
+  #   players.csv                 7.32 MB   (25,029 rows -> 1,326 kept)
+  #   combine.csv                 0.89 MB
+  #   snap_counts_2012..2026     ~36    MB   (15 files x ~2.4 MB)
+  #   -------------------------------------
+  #   first pass                 ~44    MB
+  #
+  # Steady state is far cheaper — every one of those URLs answers
+  # `If-None-Match` with a 304 carrying zero bytes (verified against the live
+  # assets), and only the current season's snap file and players.csv actually
+  # republish — but "steady state" is per PROCESS, and the ETag store is in
+  # memory. A Kind cluster rebuilt on every CI run, plus every pod restart,
+  # pays the full ~44 MB again. That is roughly nine times player-identity's
+  # ~5 MB upstream, and player-identity ships false for exactly this reason.
+  #
+  # Flip to "true" only on a long-lived cluster, where the daily marginal cost
+  # is one 2.4 MB snap file plus whatever players.csv republished.
+  #
+  # A dispatched POST /refresh reaches the upstream regardless of this flag,
+  # which is why smoke.sh does not post one.
+  - name: CAPTURE_ENABLED
+    value: "false"
+  # The narrowing seam. Empty means this collector cannot resolve a single
+  # upstream row to a canonical id, which fails the pass CLOSED with zero
+  # upstream calls rather than publishing profiles under GSIS keys that would
+  # never join the scope. See player_profile/adapters/scope.py.
+  - name: PLAYER_IDENTITY_URL
+    value: "http://player-identity:8002"
+  # nflverse publishes snap counts from 2012 only. A player whose rookie season
+  # predates it reports `career_snaps_complete: false` rather than a total that
+  # is quietly a floor. Raising this trades career accuracy for a smaller cold
+  # start: each season is one ~2.4 MB file.
+  - name: CAREER_SNAP_FIRST_SEASON
+    value: "2012"
+  - name: CAPTURE_SEASON
+    value: "2026"
+  - name: CAPTURE_WEEK
+    value: "1"
+  # Wall-clock ceiling for one capture pass, so total upstream failure costs at
+  # most this much rather than items x per-call timeout.
+  - name: CAPTURE_DEADLINE_SECONDS
+    value: "300"
+  # Same optional:true pattern — the pod starts before the Secret exists and
+  # the lake simply has no credentials until it arrives.
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: player-profile-lake-credentials
+        key: access-key-id
+        optional: true
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: player-profile-lake-credentials
+        key: secret-access-key
+        optional: true
+  - name: AWS_DEFAULT_REGION
+    value: "us-east-1"
