@@ -341,6 +341,56 @@ async def test_a_lake_write_failure_does_not_suppress_the_next_pass(lake):
     assert second[BIOGRAPHICAL].signals
 
 
+@respx.mock
+async def test_a_partial_lake_failure_only_retries_the_type_that_failed(lake):
+    """One signal type's write failing must not re-append the other's.
+
+    The total-outage test above cannot see this: with nothing landing, "record
+    per signal type" and "record only if everything landed" behave identically.
+    Review found the coarser gate
+
+        if any(published.landed(st) for st in published):
+
+    survived this suite entirely, while `venue` — which has this test — killed
+    it at once. A guard whose two arms look alike needs a fixture per arm.
+
+    Concretely: `player_biographical`'s PUT fails on a transient 500 while the
+    other three land. Under the coarse gate the pass records the biographical
+    digest anyway, the next pass digests identical content, matches, raises
+    `UpstreamUnchanged`, and `player_biographical` is never written again — a
+    season, on this cadence — while `/signals` and `/catalog` both look
+    healthy.
+    """
+    mock_upstreams(respx.mock)
+    mock_identity(respx.mock)
+
+    real_write = lake.write
+
+    def write(envelope):
+        if lake.failing and envelope.signal_type == BIOGRAPHICAL:
+            raise RuntimeError("lake unreachable")
+        return real_write(envelope)
+
+    lake.failing = True
+    lake.write = write
+
+    await capture(lake)
+    written = [e.signal_type for e in lake.writes if e.collector == "player-profile"]
+    healthy = [t for t in SIGNAL_TYPES if t != BIOGRAPHICAL]
+    assert sorted(written) == sorted(healthy), written
+    assert BIOGRAPHICAL not in written
+
+    lake.failing = False
+    await capture(lake)
+
+    # Exactly one more write, and it is the one that failed. An unconditional
+    # retry of the whole pass would re-append the three that already landed.
+    written = [e.signal_type for e in lake.writes if e.collector == "player-profile"]
+    assert len(written) == len(SIGNAL_TYPES), written
+    assert written[-1] == BIOGRAPHICAL, written
+    assert sorted(written) == sorted(SIGNAL_TYPES), written
+
+
 def test_the_schema_covers_exactly_the_declared_signal_types():
     """A schema that silently omits a signal type would let that type's rows go
     unvalidated by both this file and the repo-root suite."""

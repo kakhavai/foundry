@@ -129,10 +129,13 @@ two-month-old position still produces a complete, fully-covered record.
   experience_seasons)` cohorts are small by construction and the snap-load
   percentile is null for a good share of veterans. A null is better than a
   percentile computed from three players, which a consumer cannot detect.
-* **`_WriteObserver` is duplicated from `venue`.** Two copies is the point at
-  which it should become a return value from
-  `collector_core.publish.publish_capture`; not done here because it changes a
-  signature nine collectors call.
+* **The digest gate is durability-aware.** A digest is recorded only for a
+  signal type whose lake write actually landed, via
+  `collector_core.publish.PublishResult.landed`. Recording one for content the
+  lake never received would suppress the retry until the upstream data itself
+  changed — a whole season, for a `static reference` collector. This began as a
+  private `_WriteObserver` wrapper duplicated from `venue`; it now lives in the
+  library.
 
 ## Tests
 

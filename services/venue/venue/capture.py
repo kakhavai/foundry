@@ -144,60 +144,20 @@ REASON_SCHEDULE_UNAVAILABLE = "schedule_unavailable"
 
 # `(season, week, signal_type) -> the digest THIS process last published AND
 # saw land in the lake`. See the module docstring for why it is not read back
-# from the lake, and `_WriteObserver` for why "saw land" is part of the key's
-# meaning rather than an aspiration.
+# from the lake, and `PublishResult.landed` for why "saw land" is part of the
+# key's meaning rather than an aspiration.
+#
+# **A `static reference` collector's "next successful pass" may be months
+# away.** The digest gate suppresses a pass whose content is unchanged, so
+# recording a digest for content the lake never received means the snapshot is
+# never written again until the venue table itself changes. One object-store
+# blip on the single daily pass would cost the season's `venue_static` object.
+# Reproduced before the gate was made durability-aware: pass 1 with a failing
+# lake wrote nothing, pass 2 with a healthy lake raised `UpstreamUnchanged` and
+# still wrote nothing. Same reasoning `_capture_without_schedule` applies to a
+# degraded pass — "a degraded pass must not suppress the next healthy one" —
+# carried to the case where the degradation is the write rather than the read.
 _PUBLISHED_DIGESTS: dict[tuple[int, int, str], str] = {}
-
-
-class _WriteObserver:
-    """A `LakeWriter` that delegates and remembers which writes landed.
-
-    `publish_capture` is right to swallow a failed lake write — availability
-    beats durability, the envelopes are already built and correct, and the next
-    successful pass writes a superseding object. But it reports nothing back,
-    and this collector needs to know, for one reason that is specific to its
-    cadence:
-
-    **A `static reference` collector's "next successful pass" may be months
-    away.** The digest gate suppresses a pass whose content is unchanged, so
-    recording a digest for content the lake never received means the snapshot is
-    never written again until the venue table itself changes. One object-store
-    blip on the single daily pass would cost the season's `venue_static` object.
-    Reproduced before this class existed: pass 1 with a failing lake wrote
-    nothing, pass 2 with a healthy lake raised `UpstreamUnchanged` and still
-    wrote nothing.
-
-    This is the same reasoning `_capture_without_schedule` already applied to a
-    degraded pass — "a degraded pass must not suppress the next healthy one" —
-    carried to the case where the degradation is the write rather than the read.
-
-    It observes rather than replaces: `publish_capture` still does the writing,
-    the coverage gauges and the failure counter. This only watches, so nothing
-    about the shared tail is re-implemented here.
-    """
-
-    def __init__(self, inner: LakeWriter) -> None:
-        self.inner = inner
-        self._failed: set[str] = set()
-
-    def landed(self, signal_type: str) -> bool:
-        return signal_type not in self._failed
-
-    def write(self, envelope: Envelope) -> str:
-        # Runs on a worker thread (`publish_capture` -> `awrite` ->
-        # `asyncio.to_thread`), so delegating to the guarded lake is safe: there
-        # is no running event loop in this thread for it to object to.
-        try:
-            return self.inner.write(envelope)
-        except Exception:
-            self._failed.add(envelope.signal_type)
-            raise
-
-    def list_keys(self, *args, **kwargs) -> list[str]:
-        return self.inner.list_keys(*args, **kwargs)
-
-    def read(self, key: str) -> dict:
-        return self.inner.read(key)
 
 
 def reset_published_digests() -> None:
@@ -540,17 +500,14 @@ async def capture_venue(
     # coverage gauge, and records `collector_capture_failures_total` if a write
     # fails — then returns the envelopes ANYWAY, because the capture succeeded
     # and only its archival copy did not.
-    #
-    # Wrapped so this collector can tell whether the write actually landed.
-    # `publish_capture` deliberately swallows a failed write and reports nothing
-    # back, which is right for availability and wrong for a digest gate: record
-    # a digest for content the lake never received and the single daily pass
-    # never retries it. See `_WriteObserver`.
-    observer = _WriteObserver(lake)
-    await publish_capture(changed, lake=observer, metrics=metrics)
+    published = await publish_capture(changed, lake=lake, metrics=metrics)
 
-    for signal_type in changed:
-        if observer.landed(signal_type):
+    # Gated on the write LANDING. `publish_capture` swallows a failed write,
+    # which is right for availability and wrong for a digest gate: record a
+    # digest for content the lake never received and the single daily pass
+    # never retries it. See `PublishResult`.
+    for signal_type in published:
+        if published.landed(signal_type):
             _PUBLISHED_DIGESTS[(season, week, signal_type)] = digests[signal_type]
 
     # An unchanged envelope is not written, but its coverage gauge is still

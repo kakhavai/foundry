@@ -403,7 +403,9 @@ A collector writes none of its own coverage floor, error cap, failure envelope
 or lake offloading. `collector_core.coverage` supplies `CoverageAccumulator` and
 `cap_errors`; `collector_core.failure.fail_capture` writes the `present: 0`
 envelope and re-raises; `collector_core.publish.publish_capture` is the
-**success** path's tail — write, record coverage, return the envelopes;
+**success** path's tail — write, record coverage, return the envelopes (as a
+`PublishResult`, a `dict` subclass that also reports which writes *landed*, for
+a collector gating state on durability — see below);
 `collector_core.lake` supplies `awrite`/`alist_keys`/
 `aread`, and the lake you are handed **refuses a synchronous call from the event
 loop thread** — boto3 on the loop gates readiness on object-store latency.
@@ -418,6 +420,20 @@ hand-roll that tail and eight re-raised, which discarded a good capture over a
 missing archival copy. `fail_capture` keeps the opposite answer for the
 opposite case: there the capture itself failed, and installing `present: 0`
 envelopes over the last good ones destroys good data.
+
+**A collector that gates state on the write having landed asks the return
+value.** Swallowing the failure is right for availability and wrong for a
+digest gate: record a digest for content the lake never received and the next
+pass digests the same content, matches, raises `UpstreamUnchanged`, and the
+object is **never written again** until the upstream data itself changes —
+months, on a `seasonal` or `static reference` cadence. So `publish_capture`
+returns a `PublishResult`, a `dict[str, Envelope]` subclass whose
+`landed(signal_type)` reports whether that envelope reached the lake. Iterate
+the result — `landed` raises for a signal type the call never published,
+because "unchanged, so not published" and "published and failed" need different
+answers and both plausible defaults hide the confusion. `venue`,
+`player-profile` and `durability-history` each carried a private
+`_WriteObserver` wrapper before this existed; **do not write a fourth.**
 
 **The library owns `collector_capture_failures_total` for a failure that ends a
 pass.** Both `fail_capture` and `publish_capture` record it. Do not call
