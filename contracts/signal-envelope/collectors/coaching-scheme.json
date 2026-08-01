@@ -4,23 +4,218 @@
   "title": "coaching-scheme collector signal fields",
   "signal_types": {
     "staff_assignment": {
-      "$comment": "TODO(new-collector): placeholder fields. Replace these with this collector's real signal shape, then delete this $comment. Kept deliberately meaningless -- the generated build_signal agrees with them by construction, so leaving both in place would prove only that two placeholders match.",
       "type": "object",
-      "required": ["key", "observed_at", "value"],
+      "required": [
+        "team_id",
+        "season",
+        "revision_id",
+        "effective_from_week",
+        "effective_to_week",
+        "head_coach_id",
+        "head_coach_name",
+        "offensive_coordinator_id",
+        "defensive_coordinator_id",
+        "play_caller_id",
+        "play_caller_role",
+        "play_caller_source",
+        "play_caller_missing_reason",
+        "change_event",
+        "change_reported_at",
+        "null_field_reason"
+      ],
+      "additionalProperties": false,
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "observed_at": { "type": "string", "format": "date-time" },
-        "value": { "type": "number" }
+        "team_id": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "season": { "type": "integer", "minimum": 1999 },
+        "revision_id": { "type": "string", "minLength": 1 },
+        "effective_from_week": { "type": "integer", "minimum": 1 },
+        "effective_to_week": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "Null means current. Derived from the NEXT revision's effective_from_week and never stored on both sides -- see revisions.py."
+        },
+        "head_coach_id": {
+          "type": ["string", "null"],
+          "pattern": "^coach-[a-z0-9-]+$",
+          "description": "A name-derived surrogate. There is no coach-identity service; player-identity is authoritative for players only. head_coach_name is published beside it so a consumer can tell a re-spelling from a real change."
+        },
+        "head_coach_name": { "type": ["string", "null"], "minLength": 1 },
+        "offensive_coordinator_id": {
+          "type": "null",
+          "description": "Null by necessity. No free feed names coordinators; the spec's own candidate is scraping Pro Football Reference staff pages. See null_field_reason."
+        },
+        "defensive_coordinator_id": {
+          "type": "null",
+          "description": "Null by necessity, same reason as offensive_coordinator_id."
+        },
+        "play_caller_id": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "Populated ONLY from the curated register in play_callers.py, which ships empty. Never defaulted to the head coach -- that default is right often enough to look correct and wrong exactly when a play-calling handoff happens, which is the event this collector exists to detect."
+        },
+        "play_caller_role": {
+          "enum": [
+            "head_coach",
+            "offensive_coordinator",
+            "position_coach",
+            "unknown",
+            null
+          ]
+        },
+        "play_caller_source": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "The evidence behind the assertion. Required non-empty on every register entry, so a populated play_caller_id always carries its provenance onto the wire."
+        },
+        "play_caller_missing_reason": {
+          "enum": [
+            "play_caller_unknown",
+            "play_caller_assertion_expired",
+            "play_caller_assertion_not_yet_effective",
+            null
+          ],
+          "description": "Exactly one of this and play_caller_id is non-null. 'expired' and 'unknown' are distinct because they imply different work: a re-check versus a first look."
+        },
+        "change_event": {
+          "type": "string",
+          "enum": [
+            "none",
+            "dismissal",
+            "promotion",
+            "interim",
+            "play_calling_handoff",
+            "unclassified"
+          ],
+          "description": "DEVIATION: 'unclassified' is added to the spec's enum. The feed states that the head coach changed and nothing about why; picking a cause would be fabrication and 'none' would be false. See revisions.py."
+        },
+        "change_reported_at": {
+          "type": "null",
+          "description": "Null by necessity. No feed carries a staff-change publication instant, and inferring one from our own fetch time would state an observation as an announcement."
+        },
+        "null_field_reason": {
+          "type": "object",
+          "required": [
+            "offensive_coordinator_id",
+            "defensive_coordinator_id",
+            "change_reported_at"
+          ],
+          "additionalProperties": { "type": "string", "minLength": 1 },
+          "properties": {
+            "offensive_coordinator_id": { "type": "string", "minLength": 1 },
+            "defensive_coordinator_id": { "type": "string", "minLength": 1 },
+            "change_reported_at": { "type": "string", "minLength": 1 }
+          }
+        }
       }
     },
     "team_scheme_profile": {
-      "$comment": "TODO(new-collector): placeholder fields. Replace these with this collector's real signal shape, then delete this $comment. Kept deliberately meaningless -- the generated build_signal agrees with them by construction, so leaving both in place would prove only that two placeholders match.",
       "type": "object",
-      "required": ["key", "observed_at", "value"],
+      "required": [
+        "team_id",
+        "season",
+        "revision_id",
+        "effective_from_week",
+        "effective_to_week",
+        "games_sampled",
+        "sampled_weeks",
+        "neutral_pass_rate",
+        "pass_rate_over_expected",
+        "sec_per_play_neutral",
+        "no_huddle_rate",
+        "personnel_rates",
+        "shotgun_rate",
+        "play_action_rate",
+        "pre_snap_motion_rate",
+        "fourth_down_go_rate",
+        "fourth_down_go_rate_over_expected",
+        "changepoint_unexplained",
+        "changepoint_week",
+        "changepoint_shift",
+        "degraded_upstreams",
+        "null_field_reason"
+      ],
+      "additionalProperties": false,
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "observed_at": { "type": "string", "format": "date-time" },
-        "value": { "type": "number" }
+        "team_id": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "season": { "type": "integer", "minimum": 1999 },
+        "revision_id": { "type": "string", "minLength": 1 },
+        "effective_from_week": { "type": "integer", "minimum": 1 },
+        "effective_to_week": { "type": ["integer", "null"], "minimum": 1 },
+        "games_sampled": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Games inside THIS revision's window only. Guard 1 refuses a row whose games_sampled exceeds the revision's week span -- a team plays at most one game a week."
+        },
+        "sampled_weeks": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 },
+          "description": "Every week folded into these rates. Published so a consumer can verify guard 1 rather than trust it: every entry must lie inside [effective_from_week, effective_to_week]."
+        },
+        "neutral_pass_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "pass_rate_over_expected": {
+          "type": ["number", "null"],
+          "description": "PERCENTAGE POINTS, not a share: nflfastR's pass_oe is (pass - xpass) * 100. That is also what makes changepoint.py's 8.0 threshold the spec's 'eight points' with no conversion."
+        },
+        "sec_per_play_neutral": { "type": ["number", "null"], "minimum": 0 },
+        "no_huddle_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "personnel_rates": {
+          "type": ["object", "null"],
+          "required": ["p11", "p12", "p21", "p13", "heavy"],
+          "additionalProperties": false,
+          "properties": {
+            "p11": { "type": "number", "minimum": 0, "maximum": 1 },
+            "p12": { "type": "number", "minimum": 0, "maximum": 1 },
+            "p21": { "type": "number", "minimum": 0, "maximum": 1 },
+            "p13": { "type": "number", "minimum": 0, "maximum": 1 },
+            "heavy": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "description": "Shares of classified offensive snaps. They do NOT sum to 1.0: 10 and 20 personnel are real and belong in no named bucket. Null when the participation feed was unavailable -- 'no evidence', never 'zero'."
+        },
+        "shotgun_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "play_action_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "pre_snap_motion_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fourth_down_go_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fourth_down_go_rate_over_expected": {
+          "type": "null",
+          "description": "Null by necessity. nflfastR publishes wp and vegas_wp but no fourth-down recommendation; a baseline invented here would look like the well-known public one and not be it."
+        },
+        "changepoint_unexplained": {
+          "type": "boolean",
+          "description": "Guard 2. True means this team's weekly PROE series shifted with no corresponding staff revision, so the rates on BOTH sides are suspect. Surfaced, not corrected -- the spec's own instruction."
+        },
+        "changepoint_week": { "type": ["integer", "null"], "minimum": 1 },
+        "changepoint_shift": {
+          "type": ["number", "null"],
+          "description": "PROE points, signed. Positive means the offense became more pass-happy than expected after the shift."
+        },
+        "degraded_upstreams": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["ftn_charting_unavailable", "participation_unavailable"]
+          },
+          "description": "Which optional feeds were missing on the pass that produced this row, so a null rate is attributable rather than merely absent."
+        },
+        "null_field_reason": {
+          "type": "object",
+          "required": ["fourth_down_go_rate_over_expected"],
+          "additionalProperties": { "type": "string", "minLength": 1 },
+          "properties": {
+            "fourth_down_go_rate_over_expected": { "type": "string", "minLength": 1 }
+          }
+        }
       }
     }
   }

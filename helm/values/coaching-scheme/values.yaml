@@ -36,6 +36,11 @@ gateway:
     - /catalog
     - /signals
     - /refresh
+    # coaching-scheme's own extra route: GET /teams/{team_id}/revisions. A
+    # PathPrefix match, so the id and the ?season= query come along. Omit it
+    # and the route works in-cluster and 404s at the edge, which reads like a
+    # broken handler rather than a missing line here.
+    - /teams
 
 extraEnv:
   # optional: true lets the pod start before the Secret exists. coaching-scheme then
@@ -54,11 +59,60 @@ extraEnv:
     value: "http://minio.monitoring.svc.cluster.local:9000"
   - name: REFRESH_MIN_INTERVAL_SECONDS
     value: "300"
-  # Scaffolded false. Flip to "true" once the real upstream is wired AND you
-  # have decided the third-party load is acceptable: the cluster is recreated
-  # on every CI run and every pod restart re-captures, so a large or
-  # rate-limited upstream should stay false here. A dispatched POST /refresh
-  # reaches the upstream regardless of this flag.
+  # False, deliberately, with the numbers rather than as a scaffold default
+  # nobody revisited. One pass reads FOUR upstreams. Sizes are what goes over
+  # the WIRE for the request httpx actually sends (it offers
+  # `Accept-Encoding: gzip`), measured live on 2026-08-01:
+  #
+  #     games.csv                        0.49 MiB  (2.07 MiB parsed --
+  #                                                 raw.githubusercontent.com
+  #                                                 transfer-encodes it)
+  #     play_by_play_<season>.csv.gz    18.22 MiB  (93.41 MiB uncompressed)
+  #     ftn_charting_<season>.csv        7.75 MiB  (no .gz published)
+  #     pbp_participation_<season>.csv  46.82 MiB  (no .gz published)
+  #     -----------------------------------------
+  #                                     73.28 MiB per changed pass
+  #
+  # That is 3.7x `officiating`'s 19.9 MiB, which already ships false, and it
+  # is the largest per-pass footprint in the fleet. `seasonal` polls daily and
+  # the Kind cluster is rebuilt on every CI run, so a `true` here would pull
+  # ~73 MiB from GitHub on every PR.
+  #
+  # THE ARGUMENT THAT MADE broadcast-context SHIP "true" DOES NOT APPLY HERE,
+  # and that is the part worth reading rather than the arithmetic.
+  # broadcast-context ships true at 509 KB because its guard is *vacuous*
+  # without a running loop: its flex history is derived by comparing each pass
+  # against its OWN prior lake snapshots, so a collector that never captures
+  # reports every game as `original` forever -- the product switched off, not
+  # degraded.
+  #
+  # This collector has no such dependency. BOTH its guards are computable from
+  # a single pass:
+  #
+  #   * the staff-revision timeline comes from games.csv's per-week coach
+  #     columns, which carry the whole season in one document; and
+  #   * the changepoint series comes from play-by-play's per-week plays, also
+  #     the whole season in one document.
+  #
+  # Nothing here reads back a prior snapshot. One dispatched `POST /refresh`
+  # produces exactly the same answer a loop running since week 1 would. So the
+  # size argument is uncontested and false is right.
+  #
+  # The cost of false, stated: `change_reported_at` stays null forever. An
+  # observation-derived upper bound on it (broadcast-context's
+  # `first_observed_at` shape) WOULD need the loop -- and it is deliberately
+  # not built, precisely so this collector's product stays complete from one
+  # pass. See services/coaching-scheme/README.md.
+  #
+  # Conditional GET makes the STEADY state cheap (all four feeds serve ETags
+  # and answer If-None-Match with a 304 carrying zero bytes, verified live),
+  # but it cannot help a fresh pod: the ETag store is in memory, so every
+  # restart pays the full 73.28 MiB again. That is the cost this flag controls.
+  #
+  # Consequence for the smoke hook: a dispatched POST /refresh reaches the
+  # upstreams REGARDLESS of this flag, so services/coaching-scheme/smoke.sh
+  # must not post one. It exercises GET /teams/{team_id}/revisions instead,
+  # which needs no capture to answer correctly.
   - name: CAPTURE_ENABLED
     value: "false"
   - name: CAPTURE_SEASON

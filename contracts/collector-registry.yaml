@@ -537,14 +537,20 @@ collectors:
     cadence_class: seasonal
     envelope_version: "1"
     signal_types: [staff_assignment, team_scheme_profile]
-    # Set true if this collector narrows to roster-scope's membership list
-    # before it fetches. Checked structurally by
-    # tests/test_scope_aware_gate.py: declaring true requires importing
-    # collector_core.scope.ScopeClient (`from collector_core.scope import
-    # ScopeClient`) somewhere in this collector's source — that test is by
-    # AST, so an `import collector_core.scope` plus attribute access will
-    # not satisfy it. That check proves the narrowing seam is wired in, not
-    # that it behaves correctly; write this collector's own fail-closed test
-    # for that.
+    # false: every signal is keyed by team and staff revision, and the
+    # universe is all 32 teams rather than a subset of players — there is no
+    # membership list to narrow to. The four upstreams are season-wide
+    # documents read once per pass, so narrowing would not reduce the fetch
+    # either.
     scope_aware: false
+    # Conceptual, not a call: the season/week grid comes from games.csv
+    # directly, the same way broadcast-context reads it. Declared because a
+    # consumer reasoning about ordering needs to know this collector's weeks
+    # mean what schedule-context's mean.
+    #
+    # Ships CAPTURE_ENABLED=false. 73.28 MiB per changed pass across four
+    # feeds is the largest footprint in the fleet, and unlike
+    # broadcast-context both of this collector's guards are computable from a
+    # single pass — nothing here reads back a prior lake snapshot — so the
+    # size argument is uncontested. See services/coaching-scheme/README.md.
     depends_on: [schedule-context]
