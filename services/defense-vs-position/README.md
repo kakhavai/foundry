@@ -41,8 +41,19 @@ formats.
 | `players/players.csv.gz` | **2.39 MiB** | `gsis_id → position`, and the fields `player-identity` scores a resolve query on |
 | `player-identity` `POST /resolve/batch` | — | the canonical id every opportunity must resolve to before it is attributed |
 
-**20.61 MiB per changed pass.** Both CSVs use conditional GET, so a poll that
-finds nothing new costs one round trip.
+**20.61 MiB per changed pass.** The play-by-play uses conditional GET, so a
+poll that finds nothing new costs one round trip.
+
+**The roster feed is deliberately *un*conditional.** It is fetched first
+because it gates which players the fold accumulates, so with an `etag_key` an
+unchanged roster raised `UpstreamUnchanged` **before the play-by-play was
+requested at all** — a roster that had not moved suppressed a play-by-play
+carrying a whole new week of games. `mark_unchanged` then advanced
+`last_capture_at`, so staleness never alerted either: `/signals` served last
+week's ratings while every gauge read healthy. Reordering the fetches does not
+fix it, only changes which feed wins; and a 304 returns no body, while this
+feed's whole product *is* the body. 2.39 MiB weekly is not worth a cross-pass
+parsed-map cache.
 
 ### `pbp_participation` is deliberately NOT read
 
@@ -162,6 +173,14 @@ the noise floor. Every position beats it. On the two positions the spec's
 failure mode actually names — WR and TE — the guard flags six to eight of
 thirty-two, not twenty.
 
+**`DST`'s 0.0% is structural, not a quiet year, and it flatters the aggregate
+slightly.** A DST row's opportunity denominator is offensive plays run, which
+is near-constant across teams, so the two bases are close to affine and the
+maximum rank gap across all 32 teams is **3.0** (median 0.5) — the guard can
+essentially never fire there. That is a true negative rather than a defect,
+but it means one of the six positions contributes a guaranteed zero to the
+16.0% aggregate. Read the per-position rows, not the total.
+
 It also fires in the **right direction**. On WR/PPR in 2025:
 
 | team | per-game rank | per-opportunity rank | reading |
@@ -186,19 +205,41 @@ signal, which is why `team-scheme` rejected one. Eight is the spec's number.
 `fantasy_points_allowed_per_game_adj = fantasy_points_allowed_per_game /
 opponent_strength_index`.
 
-- **Fit on offensive units, never on prior defensive ratings.** The spec
-  forbids the alternative and the reason is circularity: a defensive rating is
-  already a function of the offenses it faced.
-- **Leave-one-out.** An opponent's strength, as used to adjust the defense it
+- **Fit on the opposing unit's own production, never on a prior rating of the
+  unit being adjusted.** The spec forbids the alternative and the reason is
+  circularity: a rating is already a function of the units it faced. For QB,
+  RB, WR, TE and K the opposing unit is an offense — the spec's "fit on
+  offensive units" exactly. For `DST` it is the opposing **defense**, because
+  that is the unit a conceding offense actually faced.
+- **Leave-one-out.** An opponent's strength, as used to adjust the unit it
   played, is computed from that opponent's *other* games — so a defense that
   shut an offense out is not told that offense is weak partly because of the
-  shutout. An offense with one game falls back to it, and that residual is
-  stated rather than hidden.
-- `adjustment_method` is `opponent_offense_mean_ratio_loo_v1` — it names the
+  shutout. A unit with one game falls back to it, and that residual is stated
+  rather than hidden.
+- `adjustment_method` is `opponent_unit_mean_ratio_loo_v2` — it names the
   arithmetic performed, not a model this collector does not implement.
 - `adjustment_window_weeks` is the real number of distinct weeks in the sampled
   play set, because the ratings and the adjustment are fit over **one** play
   set rather than two.
+
+### The v1 bug, recorded because stored rows may carry it
+
+`v1` skipped the re-key onto the producing opponent for `DST` alone, which made
+that position's yardstick the team's **own** leave-one-out mean of the very
+quantity being rated. The mean of a team's leave-one-out means is exactly its
+full mean, so `adj = raw / (raw / league_mean)` collapsed to the league mean
+**identically**. On the real 2025 season all 32 DST rows published `5.925`
+while raw spanned 2.588–10.471: 96 of 576 rows carrying no information at all,
+under a schema describing the field as opponent-adjusted.
+
+Nothing caught it because the adjustment suite contained no DST row, and the
+one test that iterated every row asserted only `adj == raw / index` — which the
+degenerate case satisfies trivially. After the fix, DST `adj` spans
+2.681–10.707 with 32 distinct values, and its index is a genuine 0.863–1.142
+schedule spread with mean exactly 1.0000 — comparable to WR's 0.847–1.099.
+
+That is what the `_v2` suffix is for: a consumer must be able to tell a stored
+v1 DST row from a v2 one.
 
 ## Both bases from one play set
 

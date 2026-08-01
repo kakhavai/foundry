@@ -197,8 +197,76 @@ def test_rank_one_is_the_largest_allowance():
     assert average_ranks({"HIGH": 10.0, "LOW": 1.0}) == {"HIGH": 1.0, "LOW": 2.0}
 
 
-def test_mismatched_populations_are_not_compared():
-    """Ranking two different sets of teams against each other produces
-    nonsense gaps rather than an error, so it is refused."""
+def test_teams_present_in_only_one_basis_are_excluded_not_fatal():
+    """**One incomparable team must not disable the guard for the league.**
+
+    `per_game` and `per_opportunity` admit a team only where its rate is
+    non-`None`, so a single team with games but zero opportunities used to
+    make the key sets unequal and return `{}` for all 32 teams of that
+    position and scoring format -- silently, with the divergence gauge
+    recording a perfectly plausible zero.
+
+    Reachable rather than theoretical: the fumble branch in `_fold_players`
+    adds a game to `games` without incrementing `opportunities`, so a player
+    whose only involvement in a game was a lost fumble produces exactly that
+    line.
+
+    The comparable teams are still ranked; the odd one out is dropped from
+    both rankings together, so it cannot shift anyone else's rank either.
+    """
+    teams = [f"T{i:02d}" for i in range(32)]
+    per_game = {team: float(32 - index) for index, team in enumerate(teams)}
+    per_opportunity = dict(per_game)
+    a, b = teams[0], teams[12]
+    per_opportunity[a], per_opportunity[b] = per_opportunity[b], per_opportunity[a]
+
+    both = divergent_teams(per_game, per_opportunity)
+    assert {a, b} <= set(both), "the baseline population must flag the swap"
+
+    # Now one extra team has a per-game rate and no per-opportunity rate.
+    per_game["ODD"] = 99.0
+    partial = divergent_teams(per_game, per_opportunity)
+    assert {a, b} <= set(partial), (
+        "one incomparable team disabled the guard for the whole split"
+    )
+    assert "ODD" not in partial
+
+
+async def test_a_fumble_only_line_does_not_silence_the_split(upstreams):
+    """The same thing end to end, through the fold that can actually produce
+    it: a receiver whose only involvement in a game is a lost fumble."""
+    ghost = season.Play(
+        game_id="2026_01_ARI_ATL",
+        week=1,
+        posteam="ARI",
+        defteam="ATL",
+        home_team="ATL",
+        away_team="ARI",
+        home_score=20,
+        away_score=20,
+        play_type="run",
+        values={
+            "fumble_lost": 1,
+            "fumbled_1_player_id": season.gsis_id("ARI", "WR"),
+            "fumbled_1_team": "ARI",
+        },
+    ).to_row()
+    upstreams.set_pbp(
+        season.pbp_document(drives=season.volume_skewed(SKEWED), extra_rows=[ghost])
+    )
+    envelope = (await run_capture(SpyLake()))[SIGNAL_TYPE]
+
+    flagged = {
+        row["team_id"]
+        for row in envelope.signals
+        if row["position"] == "WR" and row["rank_divergence_flagged"]
+    }
+    assert SKEWED in flagged, (
+        "a fumble-only line silenced the guard for the whole WR split"
+    )
+
+
+def test_two_disjoint_populations_still_yield_nothing():
+    """No overlap means nothing is comparable, which is genuinely `{}`."""
     assert divergent_teams({"A": 1.0}, {"B": 1.0}) == {}
     assert divergent_teams({}, {}) == {}

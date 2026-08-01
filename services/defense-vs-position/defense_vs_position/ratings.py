@@ -8,11 +8,16 @@ Three things happen here and each one is a named requirement of the spec:
    its denominators, so there is no arrangement of this module in which they
    describe different sets of plays.
 
-2. **The opponent adjustment is fit on offensive units.** Never on prior
-   defensive ratings -- that is the spec's explicit prohibition, and it is not
-   stylistic: a defensive rating is itself a function of the offenses faced,
-   so adjusting a defense by its opponents' *defensive* ratings feeds the
-   quantity back into its own estimate. See `offense_strengths`.
+2. **The opponent adjustment is fit on the opposing unit's own production.**
+   Never on a prior rating of the unit being adjusted -- that is the spec's
+   explicit prohibition, and it is not stylistic: a rating is itself a
+   function of the units faced, so adjusting a defense by its opponents'
+   *defensive* ratings feeds the quantity back into its own estimate. For the
+   five player positions the opposing unit is an offense, which is the spec's
+   wording exactly; for `DST` it is the opposing defense, because that is what
+   a conceding offense faced. See `opposing_unit_strengths`, whose docstring
+   also records the constant-valued bug that shipped when `DST` skipped the
+   re-key onto its opponent.
 
 3. **The rank-divergence guard.** See `divergent_teams` for the failure it
    catches, why a null check cannot, and what the live rate is.
@@ -70,16 +75,23 @@ from .scoring import (
 RANK_DIVERGENCE_THRESHOLD = 8.0
 
 # `adjustment_method`, and it names what this module actually does rather than
-# a model it does not implement. "loo" is leave-one-out: an opponent's
-# offensive strength is computed with the game in question excluded, so the
-# defense being rated does not contribute to the yardstick it is measured
-# against. Bump the suffix if the arithmetic changes -- it is the only thing
-# telling a consumer which vintage of the adjustment produced a stored row.
-ADJUSTMENT_METHOD = "opponent_offense_mean_ratio_loo_v1"
+# a model it does not implement. "loo" is leave-one-out: the opposing unit's
+# strength is computed with the game in question excluded, so the unit being
+# rated does not contribute to the yardstick it is measured against.
+#
+# **v2, and the bump is load-bearing rather than cosmetic.** v1 rows are in
+# the lake carrying a `DST` adjusted column that is the league mean for every
+# team -- `build_rows` skipped the re-key onto the producing opponent for that
+# one position, which made the yardstick self-referential. A consumer has to
+# be able to tell a v1 DST row from a v2 one, and this field is the only thing
+# that can tell it. "offense" also left the name: for `DST` the opposing unit
+# is a defense. Bump again if the arithmetic changes again.
+ADJUSTMENT_METHOD = "opponent_unit_mean_ratio_loo_v2"
 
-# Below this, a defense's opponent-strength index is not trusted to divide by:
-# a schedule of offenses that scored essentially nothing at a position would
-# otherwise turn a small raw allowance into an enormous adjusted one.
+# Below this, the opponent-strength index is not trusted to divide by: a
+# schedule of units that produced essentially nothing at a position would
+# otherwise turn a small raw allowance into an enormous adjusted one. Below
+# the floor the raw figure is published unchanged.
 MIN_OPPONENT_STRENGTH = 0.05
 
 # Published floats are rounded here rather than at the schema. Four places is
@@ -143,14 +155,27 @@ def divergent_teams(
     published with `rank_divergence_flagged: true`, an entry in
     `coverage.errors`, and a counter -- so a consumer can discount it and an
     operator can go and look, which is what "for manual review" asks for.
+
+    **A team missing from either basis is excluded, not a reason to give
+    up on the split.** The two maps admit a team only where its rate is
+    non-`None`, so one team with games but zero opportunities used to make the
+    key sets unequal and disable the guard for **all 32 teams** of that
+    position and scoring format -- silently, with the divergence gauge
+    recording a perfectly plausible zero. That is reachable: the fumble branch
+    in `_fold_players` adds a game to `games` without incrementing
+    `opportunities`, so a player whose only involvement in a game was a lost
+    fumble produces exactly such a line.
+
+    Ranking the intersection keeps the guard running on every team that CAN be
+    compared, which is strictly more than none. A team that cannot be ranked on
+    both bases is genuinely not comparable and is dropped from both rankings
+    together, so it cannot shift anyone else's rank either.
     """
-    if not per_game or set(per_game) != set(per_opportunity):
-        # Two different populations cannot be rank-compared. Nothing in this
-        # module produces that, so it is a guard against a future caller
-        # rather than a case with a fixture.
+    common = set(per_game) & set(per_opportunity)
+    if not common:
         return {}
-    game_ranks = average_ranks(per_game)
-    opportunity_ranks = average_ranks(per_opportunity)
+    game_ranks = average_ranks({team: per_game[team] for team in common})
+    opportunity_ranks = average_ranks({team: per_opportunity[team] for team in common})
     flagged: dict[str, float] = {}
     for team, rank in game_ranks.items():
         gap = abs(rank - opportunity_ranks[team])
@@ -164,26 +189,41 @@ def divergent_teams(
 # --------------------------------------------------------------------------
 
 
-def offense_strengths(
+def opposing_unit_strengths(
     game_points: Mapping[tuple[str, str], float],
 ) -> dict[tuple[str, str], float]:
-    """`(offense, game) -> that offense's strength, excluding that game`.
+    """`(unit, game) -> that unit's strength, excluding that game`.
 
-    **Fit on offensive units and nothing else.** The input is per-game fantasy
-    production BY an offense at one position -- not any defense's rating, and
-    not any quantity derived from one. The spec forbids the alternative
-    outright, and the reason is circularity: a defensive rating is already a
-    function of the offenses it faced, so adjusting defense D by its
-    opponents' defensive ratings puts D's own allowance back into its own
-    correction term through however many hops the schedule provides.
+    **Fit on the PRODUCING unit's own output and nothing else** -- never on
+    any prior rating of the unit being adjusted. For the five player positions
+    the producing unit is an opposing offense, which is the spec's "fit the
+    opponent adjustment on offensive units". For `DST` it is an opposing
+    defense's own sack, takeaway and return-touchdown generation, because that
+    is the unit a conceding offense actually faced.
 
-    **Leave-one-out.** An opponent's strength, as used to adjust the defense
-    it played, is computed from that opponent's OTHER games. Without it the
-    game being adjusted appears on both sides -- a defense that shut an
-    offense out would be told that offense is weak partly because of the
-    shutout, and would have its own achievement adjusted away. An offense with
-    exactly one game has no other games, so it falls back to that game and the
-    residual circularity is stated rather than hidden.
+    The spec's prohibition -- "never on prior defensive ratings" -- is written
+    for the rows that describe a defense, where the opposing unit IS an
+    offense. What generalises to all six positions is the rule this function
+    enforces structurally by taking exactly one argument: **production, never
+    ratings**. The circularity being avoided is identical in both directions,
+    because a rating is already a function of the units it faced, so adjusting
+    by ratings feeds the quantity back into its own estimate through however
+    many hops the schedule provides.
+
+    **Leave-one-out.** A unit's strength, as used to adjust the unit it played,
+    is computed from that unit's OTHER games. Without it the game being
+    adjusted appears on both sides -- a defense that shut an offense out would
+    be told that offense is weak partly because of the shutout, and would have
+    its own achievement adjusted away. A unit with exactly one game has no
+    other games, so it falls back to that game and the residual is stated
+    rather than hidden.
+
+    **A caller that hands this the CONCEDING unit rather than the producing
+    one gets a silent constant, not an error.** The mean of a team's
+    leave-one-out means is exactly its full mean, so the strength becomes
+    `own_rate / league_mean` and `rate / strength` collapses to the league mean
+    identically, for every team. That shipped once for `DST`; see the re-keying
+    comment in `build_rows`.
 
     Strength is relative to the league mean per game, so `1.0` is average --
     which is the unit `opponent_strength_index` is documented in.
@@ -193,23 +233,23 @@ def offense_strengths(
     league_mean = sum(game_points.values()) / len(game_points)
     if league_mean <= 0:
         # Nobody produced anything at this position all season (a genuine
-        # possibility for a bye-heavy early week). Every offense is average.
+        # possibility for a bye-heavy early week). Every unit is average.
         return dict.fromkeys(game_points, 1.0)
 
     totals: dict[str, float] = {}
     counts: dict[str, int] = {}
-    for (offense, _game), points in game_points.items():
-        totals[offense] = totals.get(offense, 0.0) + points
-        counts[offense] = counts.get(offense, 0) + 1
+    for (unit, _game), points in game_points.items():
+        totals[unit] = totals.get(unit, 0.0) + points
+        counts[unit] = counts.get(unit, 0) + 1
 
     strengths: dict[tuple[str, str], float] = {}
-    for (offense, game), points in game_points.items():
-        remaining = counts[offense] - 1
+    for (unit, game), points in game_points.items():
+        remaining = counts[unit] - 1
         if remaining <= 0:
-            mean = totals[offense]
+            mean = totals[unit]
         else:
-            mean = (totals[offense] - points) / remaining
-        strengths[(offense, game)] = mean / league_mean
+            mean = (totals[unit] - points) / remaining
+        strengths[(unit, game)] = mean / league_mean
     return strengths
 
 
@@ -305,19 +345,35 @@ def build_rows(
             season.setdefault(team, StatLine()).merge(line)
 
         for scoring_format in SCORING_FORMATS:
-            # The offensive-unit yardstick: what each OFFENSE produced at this
-            # position, per game. Derived from the same `lines` -- the offense
-            # in a defense's game is that defense's opponent.
-            offense_points: dict[tuple[str, str], float] = {}
-            for (defense, game), points in points_of.items():
-                if position == "DST":
-                    # A DST line is already keyed by the conceding OFFENSE.
-                    offense_points[(defense, game)] = points(scoring_format)
-                else:
-                    opponent = totals.opponents.get((defense, game))
-                    if opponent is not None:
-                        offense_points[(opponent, game)] = points(scoring_format)
-            strengths = offense_strengths(offense_points)
+            # The yardstick: what the OPPOSING unit produced, per game.
+            #
+            # **Every line in `points_of` is keyed by the unit that CONCEDED,
+            # so every one of them is re-keyed onto the unit that PRODUCED.**
+            # That is one rule with no per-position exception, and the
+            # exception is precisely the bug it replaces: `DST` lines were
+            # left keyed by the conceding team, which made `strengths` that
+            # team's own leave-one-out mean of the very quantity being rated.
+            # The mean of a team's leave-one-out means is exactly its full
+            # mean, so `adjusted` collapsed to the league mean *identically* --
+            # all 32 DST rows published the same number while the raw values
+            # spanned 2.588 to 10.471. Every field populated, every value
+            # plausible, and the column carried no information at all.
+            #
+            # Re-keyed, the producing unit is the opponent in both cases: an
+            # opposing OFFENSE for the five player positions, an opposing
+            # DEFENSE's takeaway/sack/return generation for `DST`. The spec's
+            # "fit on offensive units, never on prior defensive ratings" is
+            # written for the rows that describe a defense, where the opposing
+            # unit IS an offense; the invariant that generalises to all six is
+            # *adjust by the opposing unit's own production, never by any
+            # prior rating of the unit being rated*. Leave-one-out is what
+            # keeps that non-circular, identically in both directions.
+            unit_points: dict[tuple[str, str], float] = {}
+            for (conceded_by, game), points in points_of.items():
+                produced_by = totals.opponents.get((conceded_by, game))
+                if produced_by is not None:
+                    unit_points[(produced_by, game)] = points(scoring_format)
+            strengths = opposing_unit_strengths(unit_points)
 
             per_game_rate: dict[str, float] = {}
             per_opportunity_rate: dict[str, float] = {}
@@ -329,23 +385,16 @@ def build_rows(
                 points = sum(
                     points_of[(team, game)](scoring_format) for game in line.games
                 )
+                # The opposing unit's strength, in every one of this team's
+                # sampled games. No per-position branch -- see the re-keying
+                # comment above for why the branch that used to be here made
+                # the DST adjustment self-referential.
                 strength_samples = [
                     strengths[(opponent, game)]
                     for game in line.games
-                    if position != "DST"
-                    and (opponent := totals.opponents.get((team, game))) is not None
+                    if (opponent := totals.opponents.get((team, game))) is not None
                     and (opponent, game) in strengths
                 ]
-                if position == "DST":
-                    # A DST row's opponent is the defense that faced this
-                    # team's offense; the yardstick is that team's OWN
-                    # offensive strength, which is what `strengths` already
-                    # holds for it.
-                    strength_samples = [
-                        strengths[(team, game)]
-                        for game in line.games
-                        if (team, game) in strengths
-                    ]
                 strength = (
                     sum(strength_samples) / len(strength_samples)
                     if strength_samples
@@ -446,5 +495,5 @@ __all__ = [
     "build_rows",
     "declared_splits",
     "divergent_teams",
-    "offense_strengths",
+    "opposing_unit_strengths",
 ]

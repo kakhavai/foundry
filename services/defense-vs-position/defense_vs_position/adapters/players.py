@@ -72,7 +72,6 @@ def source_ref() -> str:
 async def fetch_positions(
     *,
     client: httpx.AsyncClient,
-    etag_store=None,
 ) -> dict[str, PlayerRef]:
     """`gsis_id -> PlayerRef`, for fantasy-eligible positions only.
 
@@ -80,8 +79,33 @@ async def fetch_positions(
     delete opportunities from every defense's row rather than fail the pass,
     which is exactly the plausible-looking wrong answer the coverage floor
     cannot see: the rows would all still be there, just smaller.
+
+    --------------------------------------------------------------------------
+    **NO conditional GET on this feed, deliberately.** It had one and it was a
+    freshness bug.
+    --------------------------------------------------------------------------
+
+    This map is fetched FIRST, because it gates which players the play-by-play
+    fold accumulates. With an `etag_key`, an unchanged roster document raised
+    `UpstreamUnchanged` before `pbp.fetch_fold` was called at all -- so a
+    roster that had not moved suppressed a play-by-play carrying a whole new
+    week of games. `run_capture_loop` then calls `mark_unchanged`, which
+    advances `last_capture_at`, so `collector_staleness_seconds` never alerted
+    either: `/signals` served last week's ratings while every gauge read
+    healthy.
+
+    Conditional GET cannot be made safe here by reordering the two fetches --
+    that only changes which feed wins. The deeper reason is that a 304 returns
+    no body, and this function's whole product IS the body: there is no cached
+    parsed map to fall back on, so "unchanged" and "unavailable" are the same
+    fact to the caller. A collector that wanted to skip this fetch would have
+    to cache the parsed map across passes, and 2.39 MiB weekly does not buy
+    that complexity.
+
+    `pbp.py` keeps its `etag_key`: it is 18.22 MiB, it alone determines the
+    ratings, and a 304 there is a genuinely complete answer -- the previous
+    capture's rows remain correct.
     """
-    kwargs = {} if etag_store is None else {"etag_store": etag_store}
     positions: dict[str, PlayerRef] = {}
 
     async for row in stream_csv_dicts(
@@ -90,8 +114,6 @@ async def fetch_positions(
         required_columns=REQUIRED_COLUMNS,
         columns=REQUIRED_COLUMNS,
         gzipped=True,
-        etag_key=UPSTREAM_URL,
-        **kwargs,
     ):
         gsis_id = row["gsis_id"].strip()
         if not gsis_id:

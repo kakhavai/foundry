@@ -71,7 +71,7 @@
           "type": ["number", "null"]
         },
         "fantasy_points_allowed_per_game_adj": {
-          "description": "The same allowance restated against a league-average schedule. Fit on OFFENSIVE units only -- never on prior defensive ratings, which would be circular -- with the game being adjusted left out of its opponent's own strength estimate. Null when the raw figure is.",
+          "description": "The same allowance restated against a league-average schedule. Fit on the OPPOSING UNIT'S OWN PRODUCTION -- never on any prior rating of the unit being adjusted, which would be circular -- with the game being adjusted left out of that opponent's strength estimate. For QB, RB, WR, TE and K the opposing unit is an offense, which is the spec's 'fit on offensive units'; for DST it is the opposing defense, because that is the unit a conceding offense actually faced. Null when the raw figure is.",
           "type": ["number", "null"]
         },
         "fantasy_points_allowed_per_opportunity": {
@@ -103,7 +103,7 @@
           "type": ["number", "null"]
         },
         "opponent_strength_index": {
-          "description": "Mean offensive strength faced across games_sampled, where 1.0 is league-average production at this position. Computed from offensive units only; see fantasy_points_allowed_per_game_adj.",
+          "description": "Mean strength of the OPPOSING UNITS faced across games_sampled, where 1.0 is league-average production at this position: opposing offenses for QB, RB, WR, TE and K, opposing defenses for DST. Computed from those units' own production, never from a rating of the team this row describes -- a yardstick built from the team's own rate makes fantasy_points_allowed_per_game_adj the league mean for every team, identically. See fantasy_points_allowed_per_game_adj.",
           "type": ["number", "null"]
         },
         "adjustment_method": {

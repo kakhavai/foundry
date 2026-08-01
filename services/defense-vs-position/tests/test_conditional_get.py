@@ -32,6 +32,75 @@ async def test_a_second_pass_sends_if_none_match(upstreams):
     assert sent == '"pbp-v1"'
 
 
+# --------------------------------------------------------------------------
+# The roster feed is deliberately UNconditional. See adapters/players.py.
+# --------------------------------------------------------------------------
+
+
+async def test_the_roster_feed_never_sends_if_none_match(upstreams):
+    """`players.csv.gz` is fetched unconditionally, on purpose.
+
+    It is fetched FIRST, because it gates which players the fold accumulates.
+    With an `etag_key` an unchanged roster raised `UpstreamUnchanged` before
+    the play-by-play was requested at all, so a roster that had not moved
+    suppressed a play-by-play carrying a whole new week of games.
+    """
+    upstreams.set_players(season.players_document(), headers={"etag": '"pl-v1"'})
+    await run_capture(SpyLake())
+    await run_capture(SpyLake())
+
+    for call in upstreams.players_route.calls:
+        assert "if-none-match" not in call.request.headers, (
+            "the roster feed is conditional again -- an unchanged roster will "
+            "suppress a changed play-by-play"
+        )
+
+
+async def test_an_unchanged_roster_does_not_suppress_a_changed_play_by_play(
+    upstreams,
+):
+    """The freshness bug itself, driven end to end.
+
+    Pass 1 ETags both feeds. Pass 2 serves a roster the upstream would answer
+    `304` for and a play-by-play with a THIRD week in it. The new week must
+    reach `/signals`.
+
+    Note the failure this guards is silent in every direction: `mark_unchanged`
+    advances `last_capture_at`, so `collector_staleness_seconds` resets, the
+    failure counter stays flat, and the collector serves last week's ratings
+    while every gauge reads healthy.
+    """
+    # A roster server that honours `If-None-Match` the way a real one does:
+    # 200 with a body when the request is unconditional, 304 when the caller
+    # says it already holds this version. Mocking the *protocol* rather than a
+    # bare 304 is what makes this test fail if `etag_key` is ever restored --
+    # a fixture that returns 304 unconditionally would instead just error.
+    roster = season.players_document()
+
+    def conditional_roster(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("if-none-match") == '"pl-v1"':
+            return httpx.Response(304, headers={"etag": '"pl-v1"'})
+        return httpx.Response(200, content=roster, headers={"etag": '"pl-v1"'})
+
+    upstreams.players_route.mock(side_effect=conditional_roster)
+    upstreams.set_pbp(season.pbp_document(weeks=2), headers={"etag": '"pbp-v1"'})
+    first = await run_capture(SpyLake(), week=2)
+    assert {
+        r["adjustment_window_weeks"]
+        for r in first["defense_positional_allowance"].signals
+    } == {2}
+
+    # The roster has not changed; the play-by-play has.
+    upstreams.set_pbp(season.pbp_document(weeks=3), headers={"etag": '"pbp-v2"'})
+
+    second = await run_capture(SpyLake(), week=3)
+    assert {
+        r["adjustment_window_weeks"]
+        for r in second["defense_positional_allowance"].signals
+    } == {3}, "the new week never reached the capture"
+    assert upstreams.pbp_route.called
+
+
 async def test_a_304_does_not_write_a_present_zero_envelope(upstreams):
     """The arm that destroys good data if it is missing.
 

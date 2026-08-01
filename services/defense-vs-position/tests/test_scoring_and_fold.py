@@ -18,6 +18,7 @@ from defense_vs_position.scoring import (
     PLAYER_POSITIONS,
     POSITIONS,
     RECEPTION_POINTS,
+    SACK_POINTS,
     SCORING_FORMATS,
     DstLine,
     StatLine,
@@ -152,25 +153,136 @@ async def test_receiving_fields_are_null_for_k_and_dst(upstreams):
             assert (row[field] is not None) is applicable, (row["position"], field)
 
 
-async def test_the_dst_row_describes_the_conceding_offense(upstreams):
-    """The one place `team_id` cannot mean "the defense the row describes".
+def expected_dst_points(drives: dict, team: str, weeks: int = 2) -> float:
+    """What `team` should concede per game, computed from the fixture itself.
 
-    Every offense here concedes one sack a game and scores 20 points, so every
-    DST row is one sack (1) plus the 14-20 tier (1) per game = 2.0. Keyed by
-    the conceding team, which is the offense.
+    Deliberately recomputed from the `Drive` knobs rather than hard-coded, so
+    the assertion is "the pipeline agrees with the input" rather than "the
+    pipeline agrees with a number somebody typed once".
     """
+    total = 0.0
+    for week in range(1, weeks + 1):
+        drive = drives[(team, week)]
+        total += drive.sacks * SACK_POINTS + points_allowed_points(drive.points)
+    return total / weeks
+
+
+async def test_the_dst_row_is_built_from_the_conceding_teams_own_game(upstreams):
+    """The one place `team_id` cannot mean "the defense the row describes",
+    pinned on a fixture that can actually tell the two answers apart.
+
+    **This test was vacuous before.** The flat fixture gave every team one
+    sack and 20 points, so keying a DST row by the OPPOSING defense instead of
+    the conceding team produced byte-identical output and the mutant survived
+    the whole suite. `asymmetric_league` gives every team a distinct sack count
+    and score, so each team's row is now a value only its own game can produce.
+    """
+    drives = season.asymmetric_league()
+    upstreams.set_pbp(season.pbp_document(drives=drives))
     envelope = (await run_capture(SpyLake()))[SIGNAL_TYPE]
+
+    rows = {
+        r["team_id"]: r
+        for r in envelope.signals
+        if r["position"] == "DST" and r["scoring_format"] == "ppr"
+    }
     for team in season.TEAMS:
-        row = next(
-            r
-            for r in envelope.signals
-            if r["team_id"] == team
-            and r["position"] == "DST"
-            and r["scoring_format"] == "ppr"
-        )
-        assert row["fantasy_points_allowed_per_game"] == pytest.approx(2.0)
+        assert rows[team]["fantasy_points_allowed_per_game"] == pytest.approx(
+            expected_dst_points(drives, team)
+        ), f"{team}'s DST row was not built from {team}'s own concessions"
         # Its denominator is offensive plays run, not anything defensive.
-        assert row["opportunities_defended"] > 0
+        assert rows[team]["opportunities_defended"] > 0
+
+    # And the population is genuinely discriminating: if every team conceded
+    # the same thing, the assertion above would pass under the inversion too.
+    distinct = {r["fantasy_points_allowed_per_game"] for r in rows.values()}
+    assert len(distinct) > 8, (
+        "the fixture is not asymmetric enough to distinguish the two answers"
+    )
+
+
+async def test_points_allowed_is_read_off_the_conceding_teams_own_side(upstreams):
+    """`home_score` for the home team, `away_score` for the away team.
+
+    Every game in the flat fixture is 20-20, so swapping the two branches in
+    `_fold_team_defense` was a no-op across the entire suite while moving real
+    2025 numbers by up to 1.6 points a game. The points-allowed tier is the
+    largest single term in `DstLine.fantasy_points`, so this is not a
+    rounding-level gap.
+    """
+    drives = season.asymmetric_league()
+    upstreams.set_pbp(season.pbp_document(drives=drives))
+    envelope = (await run_capture(SpyLake()))[SIGNAL_TYPE]
+    rows = {
+        r["team_id"]: r
+        for r in envelope.signals
+        if r["position"] == "DST" and r["scoring_format"] == "ppr"
+    }
+
+    checked = 0
+    for week in (1, 2):
+        rotation = season._rotation(week)
+        for index in range(0, len(rotation) - 1, 2):
+            away, home = rotation[index], rotation[index + 1]
+            # The fixture guarantees the two sides of every game differ, which
+            # is the property that makes the branch observable at all.
+            assert drives[(away, week)].points != drives[(home, week)].points
+            checked += 1
+    assert checked == 32, "expected 16 games a week over two weeks"
+
+    # Each team's tier must follow its OWN score. Swapping the branches gives
+    # each team its opponent's tier, which these two teams disagree about.
+    for team in season.TEAMS:
+        own = expected_dst_points(drives, team)
+        assert rows[team]["fantasy_points_allowed_per_game"] == pytest.approx(own)
+
+
+async def test_the_dst_adjustment_is_not_a_constant(upstreams):
+    """**The bug this test exists for shipped once.**
+
+    `DST` lines are keyed by the CONCEDING team, exactly as player-position
+    lines are keyed by the conceding defense, so both must be re-keyed onto the
+    PRODUCING opponent before the strength is computed. `build_rows` used to
+    special-case DST and skip that re-key, which made the yardstick the team's
+    own leave-one-out mean of the very quantity being rated. The mean of a
+    team's leave-one-out means is exactly its full mean, so
+
+        adjusted == ppg / (ppg / league_mean) == league_mean
+
+    identically, for every team. On the real 2025 season all 32 DST rows
+    published `adj = 5.925` while raw spanned 2.588 to 10.471 -- 96 of 576 rows
+    whose adjusted column carried no information at all, under a schema that
+    describes it as opponent-adjusted.
+
+    Nothing caught it because the adjustment suite contained no DST row and the
+    one test that iterated everything asserted only `adj == raw / index`, which
+    the degenerate case satisfies trivially.
+    """
+    upstreams.set_pbp(season.pbp_document(drives=season.asymmetric_league()))
+    envelope = (await run_capture(SpyLake()))[SIGNAL_TYPE]
+    rows = [
+        r
+        for r in envelope.signals
+        if r["position"] == "DST" and r["scoring_format"] == "ppr"
+    ]
+
+    adjusted = {r["fantasy_points_allowed_per_game_adj"] for r in rows}
+    assert len(adjusted) > 1, (
+        "every DST row published the same adjusted value -- the adjustment is "
+        "self-referential again"
+    )
+    # Sharper than "not all equal", and a direct measure rather than an
+    # invented ratio: a degenerate adjustment yields exactly ONE distinct
+    # value across the league.
+    assert len(adjusted) >= 8, (
+        f"only {len(adjusted)} distinct adjusted values across 32 teams"
+    )
+    adj = [r["fantasy_points_allowed_per_game_adj"] for r in rows]
+    assert max(adj) - min(adj) > 0.0
+
+    # And the index must be an OPPONENT's strength, so it cannot simply track
+    # the team's own rate -- which is exactly what the degenerate version did.
+    assert len({r["opponent_strength_index"] for r in rows}) > 1
 
 
 # --------------------------------------------------------------------------
