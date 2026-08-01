@@ -233,6 +233,7 @@ async def test_a_birth_date_after_the_as_of_date_is_refused_and_named(lake):
     """
     future = [list(record) for record in FIXTURE_PLAYERS]
     future[1][4] = "2030-01-01"  # Bravo, born four years after the capture
+    future[2][4] = ""  # Charlie: the spec's PERMITTED missing birth date
     mock_upstreams(respx.mock, players=players_csv(future))
     mock_identity(respx.mock)
 
@@ -248,6 +249,27 @@ async def test_a_birth_date_after_the_as_of_date_is_refused_and_named(lake):
     )
     reasons = {error["reason"] for error in biographical.errors}
     assert "birth_date_in_future" in reasons, reasons
+
+    # The clause that separates the two nulls, pinned. Charlie's age is refused
+    # for the reason the spec ALLOWS, so naming him here would make the reason
+    # code mean the opposite of what it says and send an operator chasing a date
+    # column that is working fine. Without a fixture player who has no birth
+    # date at all, dropping `row.birth_date is not None` from the guard survives
+    # the whole suite.
+    charlie = next(
+        row for row in biographical.signals if row["player_id"] == "fdy-cccc11112222"
+    )
+    assert charlie["age_years"] is None, "the fixture no longer omits a birth date"
+    detail = next(
+        error["detail"]
+        for error in biographical.errors
+        if error["reason"] == "birth_date_in_future"
+    )
+    assert "fdy-bbbb11112222" in detail, detail
+    assert "fdy-cccc11112222" not in detail, (
+        "a permitted missing birth date was filed as an upstream error"
+    )
+    assert detail.startswith("1 player(s) born after"), detail
 
     # And it is out of the reference population the other players rank against.
     ages = [
