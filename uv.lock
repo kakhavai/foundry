@@ -12,6 +12,7 @@ members = [
     "broadcast-context",
     "collector-core",
     "defense-vs-position",
+    "defensive-front",
     "depth-chart",
     "durability-history",
     "injury-report",
@@ -526,6 +527,61 @@ wheels = [
 name = "defense-vs-position"
 version = "0.1.0"
 source = { editable = "services/defense-vs-position" }
+dependencies = [
+    { name = "collector-core" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-exporter-prometheus" },
+    { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-instrumentation-httpx" },
+    { name = "opentelemetry-sdk" },
+    { name = "prometheus-client" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "jsonschema", extra = ["format"] },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "respx" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "collector-core", editable = "libs/collector-core" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-exporter-prometheus" },
+    { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-instrumentation-httpx" },
+    { name = "opentelemetry-sdk" },
+    { name = "prometheus-client" },
+    { name = "uvicorn", extras = ["standard"] },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx" },
+    { name = "jsonschema", extras = ["format"] },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "respx" },
+    { name = "ruff" },
+]
+
+[[package]]
+name = "defensive-front"
+version = "0.1.0"
+source = { editable = "services/defensive-front" }
 dependencies = [
     { name = "collector-core" },
     { name = "fastapi" },
