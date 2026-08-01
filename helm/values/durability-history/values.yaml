@@ -1,0 +1,136 @@
+# Port 8020 follows the documented Phase 8 stage allocation rather than being
+# the next free number: 8A-8B occupy 8000-8009, 8C is reserved 8010-8013 and 8D
+# 8014-8017, both blocked on a paid vendor and therefore unclaimed today. 8E
+# started at 8018 (venue) and continues 8019 (player-profile), 8020 here. Do not
+# close the 8010-8017 gap.
+service:
+  name: durability-history
+  port: 8020
+
+image:
+  repository: ghcr.io/kakhavai/foundry/durability-history
+
+containerPort: 8020
+
+# The chart defaults. Measure before raising either: roster-scope's first deploy
+# was OOMKilled at 256Mi because its adapter buffered a 37 MB document three
+# times, and raising the limit would have hidden the bug rather than fixed it.
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+otel:
+  resourceAttributes: "service.name=durability-history,service.namespace=foundry"
+
+grafanaAnnotations:
+  enabled: true
+
+gateway:
+  enabled: true
+  pathPrefix: /collectors/durability-history
+  # Only the paths this collector publishes as its contract. /health and
+  # /metrics are deliberately absent: they are exempt from bearer auth
+  # in-process (a kubelet probe and a Prometheus scrape cannot carry a token),
+  # and that is a reason to reach them in-cluster, not at the edge.
+  # Add a path here when you add a route beyond the standard five.
+  publicPaths:
+    - /catalog
+    # A PathPrefix match, so it also publishes this collector's own extra route,
+    # GET /signals/return-profile. Omit /signals here and BOTH 404 at the edge
+    # while working in-cluster, which reads like a broken handler rather than a
+    # missing line in this file.
+    - /signals
+    - /refresh
+
+extraEnv:
+  # optional: true lets the pod start before the Secret exists. durability-history then
+  # answers 503 on every data route until it arrives — the ArgoCD Application
+  # reports Healthy the whole time, so recognise that combination for what it
+  # is before assuming the deploy is broken.
+  - name: COLLECTOR_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: durability-history-collector-token
+        key: token
+        optional: true
+  - name: LAKE_BUCKET
+    value: "foundry-signals"
+  - name: LAKE_ENDPOINT_URL
+    value: "http://minio.monitoring.svc.cluster.local:9000"
+  - name: REFRESH_MIN_INTERVAL_SECONDS
+    value: "300"
+  # FALSE, deliberately, and this is a measured decision rather than a scaffold
+  # default nobody revisited. A cold pass reads five nflverse feeds across the
+  # three-season window, measured 2026-08-01:
+  #
+  #   games.csv                     2.17 MB   once
+  #   players.csv                   7.32 MB   once
+  #   injuries_<n>.csv              0.75 MB   x3
+  #   snap_counts_<n>.csv           2.40 MB   x3
+  #   stats_player_week_<n>.csv     8.28 MB   x3
+  #                                --------
+  #                                 43.8 MB   per cold process
+  #
+  # Every pass after that is a handful of 304s carrying no body — all five
+  # assets honour If-None-Match, verified against the live endpoints. So the
+  # steady-state cost is near zero and the COLD cost is the whole problem: the
+  # Kind cluster is rebuilt on every CI run and every pod restart re-captures,
+  # which would put 43.8 MB of third-party traffic on every PR. `player-profile`
+  # (~44 MB cold) and `player-identity` (~5 MB) ship false for the same reason.
+  #
+  # Flip to "true" on a long-lived cluster, where one cold download buys a
+  # season of 304s. Consequence for the smoke hook: a dispatched POST /refresh
+  # reaches the upstream REGARDLESS of this flag, so
+  # services/durability-history/smoke.sh must not post one.
+  - name: CAPTURE_ENABLED
+    value: "false"
+  # How many seasons back "career" reaches, INCLUDING the scoped one. This is
+  # the cost dial: each extra season is ~11.4 MB on a cold process. Every
+  # published row carries `observation_window_first_season` and
+  # `career_history_complete` so a truncated total is never labelled complete.
+  - name: DURABILITY_HISTORY_SEASONS
+    value: "3"
+  # The recurrence rule's window, in days. It is also emitted in
+  # `upstream.adapter`, so changing it here is distinguishable in the lake from
+  # a change in the players.
+  - name: RECURRENCE_WINDOW_DAYS
+    value: "90"
+  # Resolved events below which the DERIVED rates publish null while the raw
+  # events still publish. A recurrence rate off two events is a coin flip
+  # wearing a decimal point.
+  - name: MIN_SAMPLE_EVENTS
+    value: "3"
+  # The narrowing seam. An EMPTY value is a refusal, not a stub: without it not
+  # one upstream row can be resolved, so not one row could ever be in scope, and
+  # the pass fails closed with `identity_unavailable` rather than fetching
+  # 43.8 MB to publish nothing.
+  - name: PLAYER_IDENTITY_URL
+    value: "http://player-identity:8002"
+  - name: CAPTURE_SEASON
+    value: "2026"
+  - name: CAPTURE_WEEK
+    value: "1"
+  # Wall-clock ceiling for one capture pass, so total upstream failure costs at
+  # most this much rather than items x per-call timeout.
+  - name: CAPTURE_DEADLINE_SECONDS
+    value: "300"
+  # Same optional:true pattern — the pod starts before the Secret exists and
+  # the lake simply has no credentials until it arrives.
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: durability-history-lake-credentials
+        key: access-key-id
+        optional: true
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: durability-history-lake-credentials
+        key: secret-access-key
+        optional: true
+  - name: AWS_DEFAULT_REGION
+    value: "us-east-1"

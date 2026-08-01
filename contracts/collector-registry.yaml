@@ -353,3 +353,85 @@ collectors:
     #     collector; the arrow reaches here through roster-scope already.
     # The three nflverse tables are third parties rather than collectors.
     depends_on: [player-identity, roster-scope]
+  - name: durability-history
+    path: /collectors/durability-history
+    stage: 8E
+    cadence_class: seasonal
+    envelope_version: "1"
+    signal_types: [player_durability_profile, player_injury_history, player_return_trajectory]
+    # Checked structurally by tests/test_scope_aware_gate.py; nothing verifies
+    # the reasoning below. True, and here it is a cost decision as much as a
+    # correctness one: a cold pass reads five nflverse feeds across a
+    # three-season window (43.8 MB, measured), and the per-season three are
+    # filtered to the ~380 resolved scope ids AS THEY STREAM. Narrowing is also
+    # the fail-closed path — no scope means zero upstream calls, and zero
+    # resolved rows means zero per-season fetches, so a player-identity outage
+    # cannot cost the whole budget every pass.
+    #
+    # Behavioural proof lives in services/durability-history/tests/
+    # test_scope_narrowing.py, which asserts call_count == 0 across EVERY URL
+    # this collector could reach rather than the one a test remembered.
+    scope_aware: true
+    # All three are real, and two of them are conceptual rather than runtime
+    # calls — this fleet's collectors do not call each other over HTTP except
+    # through player-identity:
+    #
+    #   player-identity — a RUNTIME dependency. Every upstream row's gsis_id is
+    #     resolved through POST /resolve/batch before anything is published, and
+    #     an empty PLAYER_IDENTITY_URL is a refusal rather than a stub: without
+    #     it not one row could ever be in scope.
+    #   roster-scope — read from the LAKE via collector_core.scope.ScopeClient,
+    #     never over HTTP, so the last good scope survives a roster-scope
+    #     outage.
+    #   injury-report — CONCEPTUAL, and the two do NOT share a feed or a
+    #     vocabulary. An earlier revision of this comment claimed they did; it
+    #     was wrong on both halves and is corrected here, because a generator
+    #     joining the two on a claimed agreement is the thing that breaks.
+    #
+    #     Different feeds: injury-report reads INJURY_REPORT_URL (season/week
+    #     templated, currently stub-mode); this collector reads the nflverse
+    #     injuries_{season}.csv archive. Same subject, different publishers.
+    #
+    #     Different `absence_reason` enums. A generator joining a current-week
+    #     reason to a historical one MUST TRANSLATE, and this is the table.
+    #
+    #     **Every quoted example below is EXECUTED** against
+    #     `durability_history.events.classify_absence` by
+    #     services/durability-history/tests/test_absence_reason_mapping.py. This
+    #     table is the whole deliverable of documenting the mismatch rather than
+    #     reconciling it, and a presence-only test cannot see a wrong row — a
+    #     first revision of it filed a healthy scratch under `discipline` when
+    #     the code maps it to `rest`, and nothing caught it.
+    #
+    #     ABSENCE_REASON_MAP_BEGIN
+    #       injury           -> injury       e.g. "Hamstring" | "Left Knee"
+    #       illness          -> illness      e.g. "Illness"
+    #       personal         -> personal     e.g. "Not injury related - personal matter" | "Jury Duty"
+    #       rest             -> rest         e.g. "Not injury related - resting player" | "Healthy Scratch"
+    #       discipline       -> suspension   e.g. "Coach's Decision" | "Suspended by the club" | "Not injury related - coach decision"
+    #       non_injury_other -> unspecified  e.g. "Not injury related - other"
+    #       undesignated     -> unspecified
+    #     ABSENCE_REASON_MAP_END
+    #
+    #     Only the first four rows are identities. `discipline` -> `suspension`
+    #     is NOT one: `discipline` also covers a coach's decision, which
+    #     injury-report has no member for at all. `non_injury_other` and
+    #     `undesignated` are one `unspecified` upstream, so the mapping is
+    #     many-to-one in that direction and lossy coming back. `undesignated`
+    #     carries no example because it is the ABSENCE of a designation row
+    #     rather than any text.
+    #
+    #     Reconciling the enums outright was considered and not done: renaming
+    #     `discipline` to `suspension` would mis-label a coach's decision, and
+    #     collapsing the last two would delete the distinction the guard exists
+    #     for — "the report said nothing" is precisely what the named failure
+    #     mode turns on. Stated rather than papered over.
+    #
+    #     The edge is still declared because a change to what a designation
+    #     MEANS upstream is a change to both collectors at once, and because
+    #     this table has to be maintained beside that fact. There is no call
+    #     between them and deliberately will not be: reading injury-report's
+    #     lake output would bound this collector's history to however far back
+    #     that collector has been deployed — weeks, not three seasons — with
+    #     nothing in the data to say so.
+    depends_on: [player-identity, roster-scope, injury-report]

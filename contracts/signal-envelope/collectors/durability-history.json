@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/durability-history.json",
+  "title": "durability-history collector signal fields",
+  "$defs": {
+    "bodyPart": {
+      "type": "string",
+      "enum": ["hamstring", "knee", "ankle", "shoulder", "foot", "groin", "back", "concussion", "hand", "other"]
+    },
+    "tissueClass": {
+      "type": "string",
+      "enum": ["soft_tissue", "joint", "bone", "head", "other"]
+    },
+    "absenceReason": {
+      "$comment": "The spec's guard, as a closed enum. `undesignated` is an explicit member rather than a null: 'we read the injury report and it said nothing about this player' is a fact, and only `injury` is ever counted in career_games_missed_injury.",
+      "type": "string",
+      "enum": ["injury", "illness", "personal", "discipline", "rest", "non_injury_other", "undesignated"]
+    },
+    "reasonCounts": {
+      "type": "object",
+      "required": ["injury", "illness", "personal", "discipline", "rest", "non_injury_other", "undesignated"],
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    }
+  },
+  "signal_types": {
+    "player_durability_profile": {
+      "type": "object",
+      "required": [
+        "player_id",
+        "position",
+        "career_games_possible",
+        "career_games_missed_injury",
+        "availability_rate",
+        "age_adjusted_availability_rate",
+        "age_years",
+        "age_cohort_size",
+        "min_age_cohort",
+        "body_part_history",
+        "soft_tissue_recurrence_rate",
+        "median_days_to_return_by_body_part",
+        "sample_size_events",
+        "games_missed_by_reason",
+        "designated_games",
+        "observation_window_first_season",
+        "career_history_complete"
+      ],
+      "properties": {
+        "player_id": { "type": "string", "minLength": 1, "pattern": "^fdy-" },
+        "position": { "type": "string", "enum": ["QB", "RB", "WR", "TE", "K"] },
+        "career_games_possible": { "type": "integer", "minimum": 0 },
+        "career_games_missed_injury": { "type": "integer", "minimum": 0 },
+        "availability_rate": {
+          "$comment": "Null, never 1.0, when career_games_possible is 0 -- a player with no observed games has no availability to report.",
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "age_adjusted_availability_rate": {
+          "$comment": "This player's availability_rate divided by the mean of same-position players within the age band. Null below the cohort floor -- read age_years and age_cohort_size to tell WHICH null this is.",
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "age_years": {
+          "$comment": "Null means no usable birth date, which is one of the two reasons age_adjusted_availability_rate can be null.",
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "age_cohort_size": {
+          "$comment": "Same-position players inside the age band this pass captured. Below min_age_cohort is the OTHER reason the adjusted rate is null. 0 whenever age_years is null.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "min_age_cohort": {
+          "$comment": "The floor, published beside what it suppresses -- the same reasoning as min_sample_events on the trajectory row.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_part_history": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["event_count", "total_games_missed", "last_onset_date"],
+            "properties": {
+              "event_count": { "type": "integer", "minimum": 1 },
+              "total_games_missed": { "type": "integer", "minimum": 0 },
+              "last_onset_date": { "type": ["string", "null"], "format": "date" }
+            }
+          }
+        },
+        "soft_tissue_recurrence_rate": {
+          "$comment": "Null below MIN_SAMPLE_EVENTS, and null when the player has had no soft-tissue events at all -- 0.0 would read as 'has had them and never re-aggravated'.",
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "median_days_to_return_by_body_part": {
+          "$comment": "The whole map is null below MIN_SAMPLE_EVENTS, per the spec's 'derived rates null' rule.",
+          "type": ["object", "null"],
+          "additionalProperties": { "type": "number", "minimum": 0 }
+        },
+        "sample_size_events": { "type": "integer", "minimum": 0 },
+        "games_missed_by_reason": { "$ref": "#/$defs/reasonCounts" },
+        "designated_games": {
+          "$comment": "The right-hand side of the spec's assertion: career_games_missed_injury must never exceed this.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "observation_window_first_season": {
+          "$comment": "The first season of the bounded history WINDOW, not the player's own first season. career_games_possible and career_games_missed_injury are counted from here; career_history_complete says whether that reaches the player's rookie season.",
+          "type": "integer",
+          "minimum": 1999
+        },
+        "career_history_complete": {
+          "$comment": "False whenever the bounded history window does not reach the player's rookie season, or a season could not be read. A truncated total labelled complete is a well-formed number that is silently wrong.",
+          "type": "boolean"
+        }
+      }
+    },
+    "player_injury_history": {
+      "type": "object",
+      "required": ["player_id", "injury_events", "absences", "sample_size_events", "recurrence_window_days"],
+      "properties": {
+        "player_id": { "type": "string", "minLength": 1, "pattern": "^fdy-" },
+        "injury_events": {
+          "$comment": "An empty array is a COMPLETE record, not a missing one: a clean history is data. The spec says so outright.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["event_id", "body_part", "injury_site", "tissue_class", "onset_date", "games_missed", "days_to_return", "is_recurrence_of"],
+            "properties": {
+              "event_id": { "type": "string", "minLength": 1 },
+              "body_part": { "$ref": "#/$defs/bodyPart" },
+              "injury_site": {
+                "$comment": "Finer than body_part, and the key the recurrence rule actually uses -- the spec's ten-value enum cannot tell a calf from a quad, and keying recurrence on it would link them as one re-aggravated tissue. Published so is_recurrence_of stays reproducible from the row.",
+                "type": "string",
+                "minLength": 1
+              },
+              "tissue_class": { "$ref": "#/$defs/tissueClass" },
+              "onset_date": { "type": "string", "format": "date" },
+              "games_missed": { "type": "integer", "minimum": 0 },
+              "days_to_return": {
+                "$comment": "Null when the event is unresolved. THREE cases, all deliberate: the player has not played since; the season ended before he returned (an offseason is not recovery time); or games_missed is 0, so he never left and there is nothing to return from. Only events with a non-null value count toward sample_size_events.",
+                "type": ["integer", "null"],
+                "minimum": 0
+              },
+              "is_recurrence_of": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "absences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["season", "week", "game_id", "absence_reason", "body_part"],
+            "properties": {
+              "season": { "type": "integer", "minimum": 1999 },
+              "week": { "type": "integer", "minimum": 1 },
+              "game_id": { "type": "string", "minLength": 1 },
+              "absence_reason": { "$ref": "#/$defs/absenceReason" },
+              "body_part": {
+                "$comment": "Non-null only for an injury absence; a suspension has no body part.",
+                "oneOf": [{ "$ref": "#/$defs/bodyPart" }, { "type": "null" }]
+              }
+            }
+          }
+        },
+        "sample_size_events": { "type": "integer", "minimum": 0 },
+        "recurrence_window_days": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "player_return_trajectory": {
+      "type": "object",
+      "required": ["player_id", "post_return_snap_trajectory", "post_return_production_delta", "sample_size_events", "min_sample_events"],
+      "properties": {
+        "player_id": { "type": "string", "minLength": 1, "pattern": "^fdy-" },
+        "post_return_snap_trajectory": {
+          "$comment": "Mean snap share as a fraction of the pre-injury baseline for weeks +1..+4 after return. The whole array is null below MIN_SAMPLE_EVENTS; an individual entry is null when no resolved event has a game at that distance.",
+          "type": ["array", "null"],
+          "minItems": 4,
+          "maxItems": 4,
+          "items": { "type": ["number", "null"], "minimum": 0 }
+        },
+        "post_return_production_delta": {
+          "$comment": "A DIFFERENCE in PPR points, not a ratio: a ratio against a baseline near zero is unbounded in a way a projection cannot absorb.",
+          "type": ["number", "null"]
+        },
+        "sample_size_events": { "type": "integer", "minimum": 0 },
+        "min_sample_events": {
+          "$comment": "Published so a null aggregate above is distinguishable from a bug.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}
