@@ -78,6 +78,15 @@ extraEnv:
   # the Kind cluster is rebuilt on every CI run, so a `true` here would pull
   # ~73 MiB from GitHub on every PR.
   #
+  # AND THE COLLECTOR HAS NO WORKING REGIME DETECTOR, which is a reason to
+  # keep the loop off rather than a reason to turn it on. Guard 2 -- the PROE
+  # changepoint test the spec asks for -- ships DISABLED: measured over five
+  # live seasons it fires on 65% of real team-seasons and 55% of
+  # week-SHUFFLED ones, and a properly calibrated permutation version has a
+  # recall of 0/13 against known coaching changes. See
+  # services/coaching-scheme/coaching_scheme/changepoint.py. Enabling capture
+  # would pull 73 MiB a pass to feed a detector that is switched off.
+  #
   # THE ARGUMENT THAT MADE broadcast-context SHIP "true" DOES NOT APPLY HERE,
   # and that is the part worth reading rather than the arithmetic.
   # broadcast-context ships true at 509 KB because its guard is *vacuous*

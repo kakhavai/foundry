@@ -101,17 +101,34 @@ async def test_a_multi_revision_capture_conforms(schema, lake: SpyLake):
     assert {r["effective_to_week"] for r in rows} == {6, None}
 
 
-async def test_a_flagged_changepoint_row_conforms(schema, lake: SpyLake):
-    """`changepoint_week` and `changepoint_shift` are null on every healthy
-    row, so only this fixture proves the schema accepts their populated
-    forms."""
+async def test_an_unchecked_changepoint_row_conforms(schema, lake: SpyLake):
+    """The shipped shape: guard 2 is disabled, so `changepoint_unexplained` is
+    **null** rather than `false` and carries a reason. A schema typing it as a
+    bare `boolean` — which the first revision did — rejects every row."""
+    envelopes = await run_capture(lake=lake)
+    validate_rows(schema, envelopes)
+    rows = envelopes[PROFILE].signals
+    assert rows
+    assert all(row["changepoint_unexplained"] is None for row in rows)
+    assert all(row["null_field_reason"]["changepoint_unexplained"] for row in rows)
+
+
+async def test_a_flagged_changepoint_row_conforms(schema, lake: SpyLake, monkeypatch):
+    """`changepoint_week`, `changepoint_shift` and `changepoint_p_value` are
+    null on every shipped row, so only this fixture proves the schema accepts
+    their populated forms — including `exclusiveMinimum: 0` on the p-value."""
+    from coaching_scheme import changepoint as changepoint_module
+
+    monkeypatch.setattr(changepoint_module, "CHANGEPOINT_ENABLED", True)
     envelopes = await run_capture(
-        Feeds(proe=proe_with_shift("AAA", at_week=7, shift=20.0)), lake=lake
+        Feeds(proe=proe_with_shift("AAA", at_week=7, shift=40.0, jitter=2.0)),
+        lake=lake,
     )
     validate_rows(schema, envelopes)
     flagged = [r for r in envelopes[PROFILE].signals if r["changepoint_unexplained"]]
     assert flagged
     assert flagged[0]["changepoint_week"] is not None
+    assert 0 < flagged[0]["changepoint_p_value"] <= 1
 
 
 async def test_a_capture_with_no_charting_feed_conforms(schema, lake: SpyLake):

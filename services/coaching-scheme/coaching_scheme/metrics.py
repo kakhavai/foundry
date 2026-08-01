@@ -68,15 +68,24 @@ class CoachingSchemeMetrics(CollectorMetrics):
         self._window_straddles.set(count, {"collector": self.collector})
 
     def unexplained_changepoints(self, count: int) -> None:
-        """Guard 2's firing count. **Non-zero is expected on a live season.**
+        """Guard 2's firing count. **Pinned at 0: the guard ships disabled.**
 
-        The opposite reading from `window_straddles`, and the difference
-        matters. `adapters/games.py` measured that nfldata's coach columns
-        carry no mid-season change for 2024 or 2025 despite several real ones,
-        so on a current season this gauge is where those changes appear. A
-        season-long zero here alongside `staff_revisions == 32` is not a quiet
-        year; it is both detectors reporting nothing, which for a league that
-        fires two to four coaches a year is the suspicious state.
+        Do not read this as "no regime changes were detected". Read it as "no
+        detection was attempted". `changepoint.py` carries the measurement:
+        a weekly-PROE mean-shift test fires on 65% of real team-seasons and
+        55% of *week-shuffled* ones, and a properly calibrated permutation
+        version has a measured recall of 0/13 against known coaching changes.
+        The series carries no regime signal, so the guard is off.
+
+        An earlier revision of this docstring said the opposite — that a
+        season-long zero here was "the suspicious state". That reading assumed
+        the detector worked. It does not, and the gauge is kept only so the
+        series stays present in PromQL, where an absent series and a healthy
+        idle one are indistinguishable.
+
+        **When this can become informative again:** only after guard 2 is
+        re-enabled over a series with demonstrated power. Alerting on it today
+        would alert on a constant.
         """
         self._unexplained_changepoints.set(count, {"collector": self.collector})
 
@@ -95,8 +104,13 @@ class CoachingSchemeMetrics(CollectorMetrics):
 
         Exactly 32 means one revision per team: either a genuinely stable
         season or, far more likely on a current one, the un-backfilled feed
-        described in `adapters/games.py`. Read next to
-        `unexplained_changepoints`.
+        described in `adapters/games.py`.
+
+        **This is currently the collector's only regime-change signal, and it
+        is known to under-report.** The intended cross-check —
+        `unexplained_changepoints` — is disabled, so a 32 here is not
+        corroborated by anything. Treat it as "the feed says nothing changed",
+        not as "nothing changed".
         """
         self._staff_revisions.set(count, {"collector": self.collector})
 

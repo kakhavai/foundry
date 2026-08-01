@@ -22,14 +22,13 @@ from coaching_scheme.capture import (
     PROFILE,
     REASON_NO_GAMES_SAMPLED,
     REASON_NO_REVISION,
+    REASON_PLAY_CALLER_REGISTER_EMPTY,
     STAFF,
 )
-from coaching_scheme.play_callers import (
-    REASON_UNKNOWN,
-    PlayCallerAssertion,
-)
+from coaching_scheme.play_callers import REASON_UNKNOWN, PlayCallerAssertion
 
 from .conftest import (
+    LATER,
     TEAMS,
     Feeds,
     SpyLake,
@@ -112,23 +111,66 @@ async def test_a_richer_season_raises_expected_above_the_floor(lake: SpyLake):
 # --------------------------------------------------------------------------
 
 
-async def test_staff_present_requires_a_non_null_play_caller(lake: SpyLake):
-    """**The spec's predicate, verbatim.** Every team here has a revision
-    covering week 1 and a head coach; the register is empty, so no team is
-    present. Delete the `if assertion is None` branch and this reads 4/32."""
+async def test_staff_present_measures_the_grid_clause_not_the_play_caller(
+    lake: SpyLake,
+):
+    """**DEVIATION 5, and the reason for it.**
+
+    The spec's coverage sentence has two clauses — a revision covering the
+    week, AND a non-null play-caller. Scoring both makes the second swallow
+    the first: with the register empty, `present` would be 0 whether
+    `games.csv` carried 32 teams or 3, so the ratio could never report a
+    truncated schedule feed. The clause that IS sourceable becomes
+    unobservable behind the clause that is not.
+
+    So `present` counts teams with a covering revision — true, checkable, and
+    otherwise unmeasured — and play-caller completeness moves to its own
+    gauge and the per-row reason. Every team here has a revision covering
+    week 1, so all four are present despite an empty register.
+    """
     envelopes = await run_capture(lake=lake)
     coverage = envelopes[STAFF].coverage
-    assert coverage.present == 0
-    assert set(coverage.missing) == set(TEAMS)
-    assert {error["reason"] for error in envelopes[STAFF].errors} >= {REASON_UNKNOWN}
+    assert coverage.present == len(TEAMS)
+    assert not set(coverage.missing) & set(TEAMS)
+    # The play-caller gap is not lost — it moves, losslessly, to three places.
+    assert REASON_PLAY_CALLER_REGISTER_EMPTY in {
+        error["reason"] for error in envelopes[STAFF].errors
+    }
+    assert all(
+        row["play_caller_missing_reason"] == REASON_UNKNOWN
+        for row in envelopes[STAFF].signals
+    )
 
 
-async def test_staff_present_when_the_register_covers_the_team(
+async def test_a_truncated_grid_now_lowers_the_staff_ratio(lake: SpyLake):
+    """**The failure deviation 5 exists to restore.**
+
+    One team instead of four. Under the literal two-clause predicate this was
+    unobservable — `present` was 0 either way — so the suite could only ever
+    assert `expected == 32` and never that the ratio moved. Now it moves.
+    """
+    full = await run_capture(lake=lake)
+    one_team = {"AAA": steady_coaches(("AAA",))["AAA"]}
+    truncated = await run_capture(Feeds(coaches=one_team), lake=SpyLake(), now=LATER)
+    assert full[STAFF].coverage.present == len(TEAMS)
+    assert truncated[STAFF].coverage.present == 1
+    assert truncated[STAFF].coverage.ratio < full[STAFF].coverage.ratio
+
+
+async def test_the_play_caller_gauge_moves_independently_of_coverage(
     lake: SpyLake, monkeypatch
 ):
-    """The other side of the same predicate. Without this, `present` could be
-    hardcoded to 0 and the test above would still pass."""
+    """The other half of deviation 5: the unsourced field keeps its own dial.
+
+    Same grid, same coverage, one curated entry — the gauge moves and the
+    ratio does not. Without this, play-caller completeness could have been
+    dropped rather than relocated, and the deviation would be a quiet loss of
+    information rather than a move.
+    """
     from coaching_scheme import play_callers
+
+    before = await run_capture(lake=lake)
+    assert before[STAFF].coverage.present == len(TEAMS)
 
     monkeypatch.setattr(
         play_callers,
@@ -140,15 +182,18 @@ async def test_staff_present_when_the_register_covers_the_team(
                 play_caller_id="coach-someone",
                 play_caller_role="offensive_coordinator",
                 effective_from_week=1,
-                asserted_through_week=6,
+                # The whole revision span, or `resolve_for_span` refuses it.
+                asserted_through_week=12,
                 source="https://example.test/report",
             ),
         ),
     )
-    envelopes = await run_capture(lake=lake)
-    coverage = envelopes[STAFF].coverage
-    assert coverage.present == 1
-    assert "AAA" not in coverage.missing
+    after = await run_capture(lake=SpyLake(), now=LATER)
+    assert after[STAFF].coverage.present == len(TEAMS)
+    resolved = [
+        row for row in after[STAFF].signals if row["play_caller_id"] is not None
+    ]
+    assert {row["team_id"] for row in resolved} == {"AAA"}
 
 
 async def test_a_team_with_no_revision_covering_the_week_is_missing(lake: SpyLake):
@@ -165,9 +210,10 @@ async def test_a_team_with_no_revision_covering_the_week_is_missing(lake: SpyLak
     errors = {error["reason"] for error in envelopes[STAFF].errors}
     assert REASON_NO_REVISION in errors
     assert "AAA" in envelopes[STAFF].coverage.missing
-    # And the teams that DO have a covering revision are missing for the
-    # play-caller reason instead — the two clauses must stay distinguishable.
-    assert REASON_UNKNOWN in errors
+    # The other three DO have a covering revision, so they are present — the
+    # grid clause is what coverage now measures, and the two failure modes
+    # stay distinguishable.
+    assert envelopes[STAFF].coverage.present == len(TEAMS) - 1
 
 
 async def test_profile_present_requires_a_sampled_game(lake: SpyLake):
@@ -249,3 +295,112 @@ async def test_a_failed_pass_still_writes_a_present_zero_envelope(lake: SpyLake)
         assert envelope.coverage.present == 0
         assert envelope.coverage.expected == 32
         assert envelope.errors
+
+
+# --------------------------------------------------------------------------
+# F7 — the priority error is the only entry that says where the fix goes
+# --------------------------------------------------------------------------
+
+
+async def test_the_priority_error_counts_only_teams_it_can_speak_for(
+    lake: SpyLake,
+):
+    """A team with no covering revision is missing for a different reason.
+
+    Counting it in "N teams have no in-force play-caller assertion" sends an
+    operator to curate `play_callers.py` for a team whose problem is that the
+    schedule feed does not carry it. This is the only error that names a
+    remedy, so a wrong attribution in it costs more than its size suggests.
+
+    AAA appears only from week 4, so at week 2 three of four teams are
+    covered — and the message must say three, not four.
+    """
+    partial = steady_coaches(weeks=6)
+    partial["AAA"] = {week: "Coach AAA" for week in range(4, 7)}
+    envelopes = await run_capture(Feeds(coaches=partial), lake=lake, week=2)
+
+    priority = [
+        error
+        for error in envelopes[STAFF].errors
+        if error["reason"] == REASON_PLAY_CALLER_REGISTER_EMPTY
+    ]
+    assert len(priority) == 1
+    detail = priority[0]["detail"]
+    assert "3 of 3 team(s)" in detail, detail
+    assert "week 2" in detail
+    assert "play_callers.py" in detail
+
+
+async def test_no_priority_error_when_every_covered_team_is_curated(
+    lake: SpyLake, monkeypatch
+):
+    """The negative control. Without it the error could be unconditional and
+    the attribution test above would still pass."""
+    from coaching_scheme import play_callers
+
+    monkeypatch.setattr(
+        play_callers,
+        "ASSERTIONS",
+        tuple(
+            PlayCallerAssertion(
+                team_id=team,
+                season=2026,
+                play_caller_id=f"coach-{team.lower()}",
+                play_caller_role="unknown",
+                effective_from_week=1,
+                asserted_through_week=12,
+                source="https://example.test/report",
+            )
+            for team in TEAMS
+        ),
+    )
+    envelopes = await run_capture(lake=lake)
+    assert REASON_PLAY_CALLER_REGISTER_EMPTY not in {
+        error["reason"] for error in envelopes[STAFF].errors
+    }
+    assert all(row["play_caller_id"] is not None for row in envelopes[STAFF].signals)
+
+
+def _register(teams, *, through=12, weeks_from=1):
+    return tuple(
+        PlayCallerAssertion(
+            team_id=team,
+            season=2026,
+            play_caller_id=f"coach-{team.lower()}",
+            play_caller_role="unknown",
+            effective_from_week=weeks_from,
+            asserted_through_week=through,
+            source="https://example.test/report",
+        )
+        for team in teams
+    )
+
+
+async def test_an_uncovered_team_does_not_trigger_the_curation_error(
+    lake: SpyLake, monkeypatch
+):
+    """**The condition, not just the message.**
+
+    Every team that HAS a covering revision is curated, and one team does not
+    have one. Counting against every team rather than against the covered ones
+    fires a spurious "0 of 3 team(s) have no in-force assertion" — an error
+    telling an operator to curate a file that is already complete.
+
+    The message alone cannot catch this: both readings render the same string
+    when nothing is curated, which is why
+    `test_the_priority_error_counts_only_teams_it_can_speak_for` passed against
+    the mutant.
+    """
+    from coaching_scheme import play_callers
+
+    partial = steady_coaches(weeks=6)
+    partial["AAA"] = {week: "Coach AAA" for week in range(4, 7)}
+    covered = [team for team in TEAMS if team != "AAA"]
+    monkeypatch.setattr(play_callers, "ASSERTIONS", _register(covered, through=6))
+
+    envelopes = await run_capture(Feeds(coaches=partial), lake=lake, week=2)
+    assert "AAA" in envelopes[STAFF].coverage.missing
+    assert envelopes[STAFF].coverage.present == len(covered)
+    assert REASON_PLAY_CALLER_REGISTER_EMPTY not in {
+        error["reason"] for error in envelopes[STAFF].errors
+    }

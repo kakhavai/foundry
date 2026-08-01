@@ -93,6 +93,19 @@ class Revision:
     known_last_week: int
 
     @property
+    def last_governed_week(self) -> int:
+        """The last week this revision governs, open-ended or not.
+
+        `effective_to_week` is null for the current revision, so a caller
+        asking "which weeks does this regime cover" cannot use it directly.
+        Not published: it is a fact about how far the schedule grid reaches,
+        not about the staff.
+        """
+        if self.effective_to_week is not None:
+            return self.effective_to_week
+        return self.known_last_week
+
+    @property
     def week_span(self) -> int:
         """How many weeks this revision governs, inclusive.
 
@@ -100,12 +113,7 @@ class Revision:
         plays at most one game a week, so a revision spanning six weeks cannot
         legitimately have sampled seven games.
         """
-        end = (
-            self.effective_to_week
-            if self.effective_to_week is not None
-            else (self.known_last_week)
-        )
-        return max(0, end - self.effective_from_week + 1)
+        return max(0, self.last_governed_week - self.effective_from_week + 1)
 
     def covers(self, week: int) -> bool:
         if week < self.effective_from_week:

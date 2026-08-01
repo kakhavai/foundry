@@ -66,32 +66,21 @@ feed 304s the pass is unchanged; if any one changed, the others are re-read
 unconditionally — see `capture.py` for why all-or-nothing would discard
 exactly the off-cycle coaching change this collector exists to catch.
 
-### CSV, not parquet — decided once, for `defense-vs-position` too
+### CSV, not parquet
 
-nflverse publishes parquet variants roughly 10x smaller than the plain CSVs,
-which would take a pass from 73.28 MiB to ~23.8 MiB. **Rejected**, on four
-grounds, the first of which is decisive:
+**The fleet rule and its measurements now live in
+[`docs/collectors.md`](../../docs/collectors.md#format-take-csvgz-where-it-exists-plain-csv-otherwise--not-parquet)**,
+because it binds twenty-six collectors and nobody writing `betting-lines` will
+read this file. The short version, and the correction that settles it: on
+play-by-play the parquet (19.40 MiB) is **larger** than the `.csv.gz` (18.22
+MiB), so the format that would justify a 47.8 MiB `pyarrow` wheel loses on the
+one feed this collector cannot avoid.
 
-1. **The parquet is *larger* than the gzipped CSV on the biggest unavoidable
-   feed.** `play_by_play_2025.parquet` is 19.40 MiB against
-   `play_by_play_2025.csv.gz` at 18.22 MiB. Parquet's win exists only on the
-   two feeds nflverse does not gzip.
-2. **`pyarrow` is a 47.8 MiB wheel** (cp312 manylinux, >100 MiB installed) to
-   save bandwidth on a loop that ships **disabled**. The image cost is paid on
-   every build and pull; the bandwidth cost is currently paid never.
-3. **Parquet's footer is at the end of the file**, so the body must be
-   buffered before any row can be read — structurally reversing the streaming
-   rule that fixed `roster-scope`'s OOMKill. Bounded here (4.52 MiB) but it is
-   a second I/O idiom in a library built around one.
-4. **CPU is not the constraint.** All four feeds stream in ~6.4s total through
-   the shipped path, against a 300s `CAPTURE_DEADLINE_SECONDS`.
-
-**`defense-vs-position` (collector 17) reads the same play-by-play document,
-where parquet is the larger artifact, so the answer there is the same and for
-a stronger reason.** Treat this as settled: take `.csv.gz` where nflverse
-publishes one, plain CSV otherwise, and do not add `pyarrow` fleet-wide.
-Revisit only for a collector that needs an nflverse asset which (a) has no
-`.gz` variant, (b) exceeds ~40 MiB, **and** (c) ships `CAPTURE_ENABLED=true`.
+One amendment specific to this collector, and it is the more useful framing:
+**85% of the available saving is `pbp_participation` alone, and that feed buys
+exactly one field of fourteen.** If the loop is ever enabled, the cheap fix is
+dropping or de-cadencing that feed — no new dependency — not adding parquet
+support. The question is field-per-megabyte, not format.
 
 ## The two guards
 
@@ -109,42 +98,67 @@ refuses on either (A) a sampled week outside the revision's span, or (B)
 arm B catches a duplicate fold that arm A cannot see. A refusal drops the row
 and records the revision missing with a reason.
 
-**Guard 2 — the changepoint the staff feed never saw** (`changepoint.py`).
-A sustained shift of more than 8 PROE points holding 3+ weeks with no revision
-boundary within 1 week of it. `detect` takes only a `(week, PROE)` series, so
-it structurally cannot be biased toward confirming a revision; `explains` is a
-separate function. Three arms: the mean shift, plus a run-length check on
-**both** windows. The third arm is not symmetry for its own sake — without it
-a lone outlier week is detected as a changepoint on the week *after* it,
-because the outlier inflates the baseline and the return to normal reads as a
-sustained drop. Measured and reproduced.
+**Guard 2 — the changepoint the staff feed never saw. IT DOES NOT WORK, AND IT
+SHIPS DISABLED.** This is the collector's biggest caveat and the first thing to
+know about it.
 
-Per the spec, a flagged changepoint is **surfaced, not corrected**: both
-sides' rates publish, carrying `changepoint_unexplained: true`, plus a
-priority error on the envelope.
+The spec asks for a >8-point sustained PROE shift with no matching revision.
+That was built, then measured against five live seasons (160 team-seasons,
+2,718 team-weeks) with a **week-order-shuffled null** in which no changepoint
+exists by construction:
 
-### Guard 2 is not optional on a live season
+| | real | shuffled null |
+|---|---|---|
+| spec's rule as written (>8 pts) | **65.0%** of team-seasons | **55.4%** |
 
-`games.csv`'s `away_coach`/`home_coach` columns **do** record mid-season head
-coach changes — but only for seasons nfldata has back-filled. Measured against
-the current file:
+Two thirds of the league flagged every year, at barely above the noise floor.
+A threshold sweep separates them nowhere (8/10/12/14/16/18 points: real
+65/39/19/7.5/3.8/1.9%, null 55/32/15/7.3/3.4/1.4%).
 
-| season | mid-season head-coach changes in the feed |
-|---|---|
-| 2022 | 3 (CAR wk6, IND wk10, DEN wk17) |
-| 2023 | 3 (LV wk9, CAR wk13, LAC wk16) |
-| 2024 | **0** |
-| 2025 | **0** |
+So the estimator was replaced with a pooled-variance max-t and the fixed
+threshold with a **per-team permutation test**. That worked exactly as
+designed — the false-positive rate lands on alpha at every level (5.0% at
+α=0.05, 2.2% at 0.02, **1.1% at 0.01**) — and found nothing: **recall 0/13**
+against known mid-season coaching changes, with the real firing rate sitting
+on the null firing rate.
 
-2024 and 2025 each had at least three real ones — NYJ (Saleh, after wk5), NO
-(Allen, wk9), CHI (Eberflus, wk13), TEN in 2025 (Callahan, wk6). The feed
-carries the season-opening coach for all seventeen games of each.
+Then the ceiling on *any* detector: hand one the true changepoint week for
+free, no search, no multiple-comparisons penalty.
 
-So on a current season the staff feed's hypothesis is "nothing ever changed",
-and the PROE changepoint test is the **only** detector there is.
-`coaching_scheme_staff_revisions` sitting at exactly 32 is the signature of
-that state, and it should be read next to
-`coaching_scheme_unexplained_changepoints`.
+    mean |shift| at a REAL coaching change     4.18 pts   mean |t| 1.05
+    mean |shift| at a RANDOM week, same teams  3.92 pts   mean |t| 1.02
+    within-team weekly PROE sd                 6.89 pts
+    nominally significant (|t| >= 2)           2 of 13
+
+A real coaching change is **indistinguishable from an arbitrary week**. NYJ
+2024 moves +0.16, TEN 2025 −0.16, CHI 2024 +1.11; NO 2024 moves +2.98, the
+wrong way. It is not the threshold, the estimator or the calibration — **the
+signal is not in this statistic.**
+
+`CHANGEPOINT_ENABLED = False`. Every row publishes `changepoint_unexplained:
+null` with a machine-readable reason, never `false` — `false` would assert
+"checked and clean", and a consumer filtering on it would treat unchecked rows
+as verified. No priority error is raised and the gauge stays at 0. The
+detector and its permutation harness are kept, not deleted, because the
+calibration machinery is correct and a future statistic needs it to prove
+itself; `test_flipping_the_flag_re_enables_the_wiring` keeps the disabled path
+a switch rather than dead code.
+
+**Follow-up:** weekly PROE may simply be the wrong series. `neutral_pass_rate`,
+`personnel_rates` or `sec_per_play_neutral` may carry a sharper regime signal.
+The oracle test above is the cheap way to check *before* building anything —
+if the true-week effect does not clearly exceed the random-week effect, stop.
+Those series were **not** tested here: swapping the spec's named statistic is a
+design change, not a bug fix.
+
+### What this costs, stated plainly
+
+`adapters/games.py` measures that nfldata's coach columns carry **no**
+mid-season change for 2024 or 2025 (2021-25: 2/3/3/0/0) despite several real
+ones. Guard 2 was supposed to be the independent detector for exactly that
+gap. With it disabled, **this collector has no working regime-change detector
+on a current season.** `coaching_scheme_staff_revisions` at 32 means "the feed
+says nothing changed", not "nothing changed", and nothing corroborates it.
 
 ## Play-caller identity, and the coverage tension
 
@@ -163,16 +177,24 @@ the full argument; the short form:
   returns to missing with `play_caller_assertion_expired`. That is the answer
   to "what happens in week 10 when the entry is three revisions stale": it
   stops applying, whether or not anyone remembers to revisit it.
+- **Resolution is per revision, over the revision's own span** — never at the
+  query week. Resolving once at the requested week and stamping the result on
+  every revision would attach a week-10 play-caller, and their cited source,
+  to a regime that ended in week 8. Requiring the assertion to cover the
+  *whole* span is also what stops an assertion sourced through week 12 being
+  stamped on a revision running to week 17 — the staleness bug, moved rather
+  than fixed. An assertion covering only part of a revision is refused with
+  `play_caller_changed_within_revision` rather than chosen between.
 - The register **ships empty**, because that is the honest state of this
-  repository's knowledge. `staff_assignment` therefore reports
-  `expected: 32, present: 0`, names every team in `coverage.missing`, and adds
-  one priority error saying where the fix goes.
+  repository's knowledge. Every row therefore carries `play_caller_id: null`
+  with a reason, and one priority error names the file to curate.
 
-Two things keep that from being a dead red light. It is **movable** — the
-remedy is a line in a committed file, not an upstream nobody controls — and it
-is **isolated**: `team_scheme_profile` has its own coverage over a fully
-sourceable universe and reaches 1.0 on a healthy pass. An operator sees a
-curation gap next to a working rate pipeline.
+**Coverage is not what reports this** — see deviation 5. Play-caller
+completeness lives on `coaching_scheme_play_callers_identified` (0..32) and on
+the per-row reason, so it moves independently of the schedule feed's health.
+The curation gap is **movable** (a line in a committed file, not an upstream
+nobody controls) and **separately visible**, which is what keeps it from
+reading as an outage.
 
 **What was refused.** Defaulting `play_caller_id` to the head coach. The spec
 itself says the play-caller is "frequently the head coach", which is exactly
@@ -224,6 +246,30 @@ Four, all disclosed rather than taken silently.
    `team_scheme_profile`, with `team_id`/`season`/`revision_id`/the effective
    weeks on both as the join.
 
+5. **`staff_assignment` coverage measures the grid clause only.** The spec's
+   coverage sentence has two clauses — a revision covering the requested week
+   AND a non-null play-caller. Scoring both makes the second **swallow** the
+   first: with the register empty, `present` is 0 whether `games.csv` carried
+   32 teams or 3, so the ratio can no longer report a truncated schedule feed
+   at all. The clause that is fully sourceable becomes unobservable behind the
+   clause that is not.
+
+   So `present` counts teams with a covering revision — true, checkable, and
+   otherwise unmeasured — and play-caller completeness is reported losslessly
+   in three other places: `coaching_scheme_play_callers_identified` (0..32),
+   the priority error naming the file to curate, and
+   `play_caller_missing_reason` on every row.
+
+   This is **not** the rejected option (c), which counted a null id as present
+   and reported 1.0 while knowing nothing. Here `present` means "this team has
+   a revision covering this week" — a narrower claim that is actually true —
+   and the unsourced field keeps its own dial.
+
+6. **Guard 2 ships disabled**, with `changepoint_unexplained: null` rather than
+   the boolean the spec's field table implies. See "The two guards" for the
+   five seasons of measurement; the spec asks for a detector that the
+   available statistic cannot support.
+
 ## Known limitations
 
 - **A play-calling handoff in weeks 1-2 is undetectable by guard 2** — there
@@ -238,6 +284,15 @@ Four, all disclosed rather than taken silently.
   five would push those snaps into whichever bucket was written last.
 - **`depends_on: schedule-context` is conceptual, not a call.** The season/week
   grid is read from `games.csv` directly, as `broadcast-context` does.
+- **`sec_per_play_neutral` is plausible but is NOT the published statistic.**
+  Measured against live 2025 through the shipped adapter: league mean
+  **32.37s**, median 32.58s, range 29.90 (NO) to 34.55 (BUF). That is ~3-4s
+  above commonly published neutral-pace figures, and the inter-team spread is
+  only **4.64s** where published spreads run wider — the signature of a noisy
+  estimator regressing to the mean. The season yields just **13,945 clock
+  samples** (~26 per team-week), because the drive-keyed reset discards the
+  first snap of every drive. Treat it as an internally consistent pace proxy,
+  not as a figure to compare against a public one.
 
 ## Cost
 

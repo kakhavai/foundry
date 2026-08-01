@@ -131,6 +131,7 @@
         "changepoint_unexplained",
         "changepoint_week",
         "changepoint_shift",
+        "changepoint_p_value",
         "degraded_upstreams",
         "null_field_reason"
       ],
@@ -192,13 +193,19 @@
           "description": "Null by necessity. nflfastR publishes wp and vegas_wp but no fourth-down recommendation; a baseline invented here would look like the well-known public one and not be it."
         },
         "changepoint_unexplained": {
-          "type": "boolean",
-          "description": "Guard 2. True means this team's weekly PROE series shifted with no corresponding staff revision, so the rates on BOTH sides are suspect. Surfaced, not corrected -- the spec's own instruction."
+          "type": ["boolean", "null"],
+          "description": "Guard 2. NULL means the detector is disabled and this row was NOT checked -- see null_field_reason and changepoint.py, which carries the five seasons of measurement showing a weekly-PROE mean-shift test has no discriminating power (real firing 65% vs shuffled-null 55%; permutation-calibrated recall 0/13). False would assert 'checked and clean', which this collector cannot support. True (unreachable today) means the series shifted with no corresponding staff revision, so the rates on BOTH sides are suspect -- surfaced, not corrected."
         },
         "changepoint_week": { "type": ["integer", "null"], "minimum": 1 },
         "changepoint_shift": {
           "type": ["number", "null"],
           "description": "PROE points, signed. Positive means the offense became more pass-happy than expected after the shift."
+        },
+        "changepoint_p_value": {
+          "type": ["number", "null"],
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "description": "Against the team's OWN week-permuted null, so it adapts to that team's volatility rather than to a league-wide constant. Never 0: the observed value is included in its own reference set, which is what keeps the test exact."
         },
         "degraded_upstreams": {
           "type": "array",
@@ -211,6 +218,7 @@
         "null_field_reason": {
           "type": "object",
           "required": ["fourth_down_go_rate_over_expected"],
+          "comment": "changepoint_unexplained appears here only while guard 2 is disabled; once it carries a real boolean it needs no excuse.",
           "additionalProperties": { "type": "string", "minLength": 1 },
           "properties": {
             "fourth_down_go_rate_over_expected": { "type": "string", "minLength": 1 }

@@ -88,12 +88,14 @@ from dataclasses import dataclass
 
 __all__ = [
     "ASSERTIONS",
+    "REASON_SPLIT_WITHIN_REVISION",
     "PLAY_CALLER_ROLES",
     "REASON_EXPIRED",
     "REASON_NOT_YET_EFFECTIVE",
     "REASON_UNKNOWN",
     "PlayCallerAssertion",
     "resolve",
+    "resolve_for_span",
     "validate",
 ]
 
@@ -108,6 +110,12 @@ PLAY_CALLER_ROLES: frozenset[str] = frozenset(
 REASON_UNKNOWN = "play_caller_unknown"
 REASON_EXPIRED = "play_caller_assertion_expired"
 REASON_NOT_YET_EFFECTIVE = "play_caller_assertion_not_yet_effective"
+# The register says the play-caller changed *inside* one staff revision — a
+# play-calling handoff with no staff change, which is a real event and the one
+# `change_event: play_calling_handoff` names. One row cannot state two
+# play-callers, and picking either would attach a fact about one regime to
+# another. Refused, with the ambiguity named.
+REASON_SPLIT_WITHIN_REVISION = "play_caller_changed_within_revision"
 
 
 @dataclass(frozen=True)
@@ -221,6 +229,52 @@ def resolve(
     if all(week < entry.effective_from_week for entry in candidates):
         return None, REASON_NOT_YET_EFFECTIVE
     return None, REASON_EXPIRED
+
+
+def resolve_for_span(
+    team_id: str,
+    season: int,
+    from_week: int,
+    to_week: int,
+    *,
+    assertions: tuple[PlayCallerAssertion, ...] | None = None,
+) -> tuple[PlayCallerAssertion | None, str | None]:
+    """The one assertion governing an ENTIRE revision span, or `(None, reason)`.
+
+    **This exists because resolving at the query week is a real defect, not a
+    simplification.** A register asserting a play-caller for weeks 9-12,
+    queried at week 10, would otherwise stamp that person — and their cited
+    source — onto the weeks 1-8 regime as well. That is the spec's own named
+    failure mode (a fact about one regime attached to another) applied to staff
+    identity instead of rates, and it is exactly what the expiry mechanism
+    exists to prevent, bypassed by evaluating the expiry at the wrong week.
+
+    Requiring the assertion to cover the **whole** span is what preserves the
+    expiry's guarantee in the other direction too. Resolving at the revision's
+    first week alone would let an assertion sourced through week 12 be stamped
+    on a revision running to week 17 — the staleness bug, moved rather than
+    fixed.
+
+    A revision whose weeks resolve to two different assertions is refused with
+    `REASON_SPLIT_WITHIN_REVISION` rather than given either: one row cannot
+    state two play-callers, and choosing one would be the same regime-mixing
+    error again.
+    """
+    governing: PlayCallerAssertion | None = None
+    for week in range(from_week, to_week + 1):
+        entry, reason = resolve(team_id, season, week, assertions=assertions)
+        if entry is None:
+            return None, reason
+        if governing is None:
+            governing = entry
+        elif entry is not governing:
+            return None, REASON_SPLIT_WITHIN_REVISION
+    if governing is None:
+        # An empty span. Not reachable from a well-formed revision, and a
+        # silent `None, None` would read as "resolved to nothing", which is
+        # not a state any caller should have to handle.
+        return None, REASON_UNKNOWN
+    return governing, None
 
 
 validate()

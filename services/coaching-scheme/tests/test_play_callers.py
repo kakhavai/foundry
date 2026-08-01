@@ -17,9 +17,11 @@ from coaching_scheme.play_callers import (
     ASSERTIONS,
     REASON_EXPIRED,
     REASON_NOT_YET_EFFECTIVE,
+    REASON_SPLIT_WITHIN_REVISION,
     REASON_UNKNOWN,
     PlayCallerAssertion,
     resolve,
+    resolve_for_span,
     validate,
 )
 
@@ -213,10 +215,14 @@ async def test_a_resolved_assertion_carries_its_provenance_onto_the_wire(
     lake: SpyLake, monkeypatch
 ):
     """A populated `play_caller_id` always ships with the evidence behind it,
-    so a consumer never has to take the claim on trust."""
+    so a consumer never has to take the claim on trust.
+
+    `asserted_through_week=12` covers the whole revision. Anything shorter is
+    refused by `resolve_for_span` — see the F2 tests below.
+    """
     from coaching_scheme import play_callers
 
-    monkeypatch.setattr(play_callers, "ASSERTIONS", (entry(),))
+    monkeypatch.setattr(play_callers, "ASSERTIONS", (entry(asserted_through_week=12),))
     envelopes = await run_capture(lake=lake)
     resolved = [
         row
@@ -229,3 +235,138 @@ async def test_a_resolved_assertion_carries_its_provenance_onto_the_wire(
         assert row["play_caller_source"] == "https://example.test/report"
         assert row["play_caller_missing_reason"] is None
         assert row["play_caller_id"] != row["head_coach_id"]
+
+
+# --------------------------------------------------------------------------
+# resolve_for_span — F2. The play-caller belongs to a REVISION, not a query.
+# --------------------------------------------------------------------------
+
+
+def test_an_assertion_covering_the_whole_span_resolves():
+    assertions = (entry(effective_from_week=1, asserted_through_week=12),)
+    found, reason = resolve_for_span("AAA", 2026, 1, 12, assertions=assertions)
+    assert reason is None
+    assert found is not None and found.play_caller_id == "coach-someone"
+
+
+def test_an_assertion_that_starts_mid_span_does_not_govern_the_span():
+    """**The F2 defect, as a unit test.**
+
+    A register asserting weeks 9-12, against the weeks 1-8 regime. Resolving
+    at the *query* week (say 10) returns the assertion and stamps it — and its
+    source — onto a regime that ended in week 8. Over the span it correctly
+    refuses.
+    """
+    assertions = (entry(effective_from_week=9, asserted_through_week=12),)
+    # The old behaviour, still available and still correct for a single week:
+    assert resolve("AAA", 2026, 10, assertions=assertions)[0] is not None
+    # The span-scoped question has a different, correct answer.
+    found, reason = resolve_for_span("AAA", 2026, 1, 8, assertions=assertions)
+    assert found is None
+    assert reason == REASON_NOT_YET_EFFECTIVE
+
+
+def test_an_assertion_that_expires_mid_span_does_not_govern_the_span():
+    """The other direction, and the reason resolving at the revision's FIRST
+    week is not good enough either.
+
+    An assertion sourced through week 12, against a revision running to week
+    17. Resolving at week 9 would return it and stamp an unevidenced claim on
+    weeks 13-17 — the staleness bug, moved rather than fixed.
+    """
+    assertions = (entry(effective_from_week=9, asserted_through_week=12),)
+    assert resolve("AAA", 2026, 9, assertions=assertions)[0] is not None
+    found, reason = resolve_for_span("AAA", 2026, 9, 17, assertions=assertions)
+    assert found is None
+    assert reason == REASON_EXPIRED
+
+
+def test_two_assertions_inside_one_revision_are_refused_not_chosen_between():
+    """A play-calling handoff with no staff change. One row cannot state two
+    play-callers, and picking either attaches a fact about one regime to
+    another — the same error again."""
+    assertions = (
+        entry(effective_from_week=1, asserted_through_week=6),
+        entry(
+            effective_from_week=7,
+            asserted_through_week=12,
+            play_caller_id="coach-other",
+        ),
+    )
+    found, reason = resolve_for_span("AAA", 2026, 1, 12, assertions=assertions)
+    assert found is None
+    assert reason == REASON_SPLIT_WITHIN_REVISION
+
+
+def test_an_empty_span_is_unknown_rather_than_silently_resolved():
+    found, reason = resolve_for_span("AAA", 2026, 5, 4, assertions=(entry(),))
+    assert found is None
+    assert reason == REASON_UNKNOWN
+
+
+async def test_a_partial_assertion_is_not_stamped_on_the_earlier_regime(
+    lake: SpyLake, monkeypatch
+):
+    """**F2 end to end, on the rows a consumer actually reads.**
+
+    AAA's coach changes at week 7, so it has two revisions: weeks 1-6 and
+    7-12. The register asserts a play-caller for weeks 7-12 only. The weeks
+    1-6 row must carry `None` — and, critically, must NOT carry the week-7
+    source as evidence for a regime that ended in week 6.
+
+    This is served on `/signals` and on `GET /teams/{id}/revisions`, which is
+    the timeline route where a consumer reads revisions side by side.
+    """
+    from coaching_scheme import play_callers
+
+    from .conftest import Feeds, coaches_with_change
+
+    monkeypatch.setattr(
+        play_callers,
+        "ASSERTIONS",
+        (entry(effective_from_week=7, asserted_through_week=12),),
+    )
+    envelopes = await run_capture(
+        Feeds(coaches=coaches_with_change("AAA", at_week=7)), lake=lake
+    )
+    rows = {
+        row["revision_id"]: row
+        for row in envelopes["staff_assignment"].signals
+        if row["team_id"] == "AAA"
+    }
+    assert len(rows) == 2
+
+    earlier = rows["AAA-2026-r1"]
+    later = rows["AAA-2026-r2"]
+    assert earlier["effective_to_week"] == 6
+    assert earlier["play_caller_id"] is None
+    assert earlier["play_caller_source"] is None
+    assert earlier["play_caller_missing_reason"] == REASON_NOT_YET_EFFECTIVE
+    assert later["play_caller_id"] == "coach-someone"
+    assert later["play_caller_source"] == "https://example.test/report"
+
+
+async def test_an_assertion_that_expires_before_the_regime_ends_is_refused(
+    lake: SpyLake, monkeypatch
+):
+    """**The other half of F2, and the half a unit test cannot reach.**
+
+    `capture` must resolve over the revision's WHOLE span, not just its first
+    week. One steady revision runs weeks 1-12; the register asserts weeks 1-6.
+    Resolving at the revision's start alone returns the assertion and stamps
+    an unevidenced claim on weeks 7-12 — the staleness bug relocated rather
+    than fixed, and invisible to `test_an_assertion_that_expires_mid_span_...`
+    because that one calls `resolve_for_span` with explicit weeks.
+    """
+    from coaching_scheme import play_callers
+
+    monkeypatch.setattr(play_callers, "ASSERTIONS", (entry(asserted_through_week=6),))
+    envelopes = await run_capture(lake=lake)
+    rows = [
+        row for row in envelopes["staff_assignment"].signals if row["team_id"] == "AAA"
+    ]
+    assert len(rows) == 1
+    assert rows[0]["effective_to_week"] is None  # runs to the end of the grid
+    assert rows[0]["play_caller_id"] is None
+    assert rows[0]["play_caller_source"] is None
+    assert rows[0]["play_caller_missing_reason"] == REASON_EXPIRED

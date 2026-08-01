@@ -261,3 +261,63 @@ def test_every_feed_unchanged_needs_all_of_them():
     assert every_feed_unchanged({"games": True, "pbp": True}) is True
     assert every_feed_unchanged({"games": True, "pbp": False}) is False
     assert every_feed_unchanged({"games": False}) is False
+
+
+# --------------------------------------------------------------------------
+# F6 — what RATE_PRECISION actually does
+# --------------------------------------------------------------------------
+
+
+async def test_a_published_rate_is_bounded_to_four_decimals(lake: SpyLake):
+    """`RATE_PRECISION` is a **contract** property, not a stability one.
+
+    The claim it used to carry — that rounding protects the digest from
+    floating-point summation order — did not survive being checked: 300,000
+    trials at PROE and clock magnitudes produced zero order-dependent sums,
+    and `aggregate` folds in sorted-week order regardless. The comment in
+    `rates.py` is corrected rather than propped up with a contrived fixture.
+
+    What is true, and what this pins, is that consumers get four decimals.
+    Widening `RATE_PRECISION` changes every published rate, which is
+    observable here and was observable nowhere before.
+    """
+    from coaching_scheme.rates import RATE_PRECISION
+
+    assert RATE_PRECISION == 4
+    envelopes = await run_capture(lake=lake)
+    rates = [
+        (row["revision_id"], name, value)
+        for row in envelopes[PROFILE].signals
+        for name in (
+            "neutral_pass_rate",
+            "pass_rate_over_expected",
+            "sec_per_play_neutral",
+            "no_huddle_rate",
+            "shotgun_rate",
+            "play_action_rate",
+            "pre_snap_motion_rate",
+            "fourth_down_go_rate",
+        )
+        if (value := row[name]) is not None
+    ]
+    assert rates, "no populated rates — the fixture is broken, not the rounding"
+    for revision_id, name, value in rates:
+        assert value == round(value, 4), f"{revision_id}.{name} = {value!r}"
+
+    personnel = [
+        value
+        for row in envelopes[PROFILE].signals
+        if row["personnel_rates"]
+        for value in row["personnel_rates"].values()
+    ]
+    assert personnel
+    assert all(value == round(value, 4) for value in personnel)
+
+
+def test_the_rounding_helper_actually_rounds():
+    """A repeating decimal, so the mutant that widens the precision changes
+    the answer rather than merely the type."""
+    from coaching_scheme.rates import _rate
+
+    assert _rate(1.0, 3.0) == 0.3333
+    assert _rate(2.0, 7.0) == 0.2857

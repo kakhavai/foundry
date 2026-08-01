@@ -64,13 +64,37 @@ async def test_a_quiet_pass_reports_zero_straddles_and_zero_changepoints(
     assert sample("coaching_scheme_unexplained_changepoints") == 0
 
 
-async def test_an_unexplained_changepoint_moves_its_gauge(lake: SpyLake):
-    """The other side. Without it the gauge could be hardcoded to 0 and the
-    test above would still pass."""
+async def test_the_changepoint_gauge_stays_at_zero_because_the_guard_is_off(
+    lake: SpyLake,
+):
+    """**0 means "not attempted", not "nothing found".**
+
+    Guard 2 ships disabled — see `changepoint.py`. A 25-point step that the
+    old detector would have flagged must leave this gauge alone, or the
+    disabled path is not actually disabled.
+    """
     from .conftest import proe_with_shift
 
     await run_capture(
-        Feeds(proe=proe_with_shift("AAA", at_week=7, shift=20.0)), lake=lake
+        Feeds(proe=proe_with_shift("AAA", at_week=7, shift=25.0)), lake=lake
+    )
+    assert sample("coaching_scheme_unexplained_changepoints") == 0
+
+
+async def test_the_changepoint_gauge_moves_when_the_guard_is_enabled(
+    lake: SpyLake, monkeypatch
+):
+    """The other side. Without it the gauge could be hardcoded to 0 and the
+    test above would still pass — and re-enabling the guard would silently
+    leave the metric dead."""
+    from coaching_scheme import changepoint as changepoint_module
+
+    from .conftest import proe_with_shift
+
+    monkeypatch.setattr(changepoint_module, "CHANGEPOINT_ENABLED", True)
+    await run_capture(
+        Feeds(proe=proe_with_shift("AAA", at_week=7, shift=40.0, jitter=2.0)),
+        lake=lake,
     )
     assert sample("coaching_scheme_unexplained_changepoints") == 1
 
@@ -114,7 +138,9 @@ async def test_play_callers_identified_tracks_the_curation_backlog(
                 play_caller_id="coach-someone",
                 play_caller_role="unknown",
                 effective_from_week=1,
-                asserted_through_week=6,
+                # The whole 12-week revision: `resolve_for_span` refuses an
+                # assertion that does not cover the regime it is asked about.
+                asserted_through_week=12,
                 source="https://example.test/report",
             ),
         ),

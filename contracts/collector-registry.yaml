@@ -552,5 +552,16 @@ collectors:
     # feeds is the largest footprint in the fleet, and unlike
     # broadcast-context both of this collector's guards are computable from a
     # single pass — nothing here reads back a prior lake snapshot — so the
-    # size argument is uncontested. See services/coaching-scheme/README.md.
+    # size argument is uncontested.
+    #
+    # KNOWN GAP, stated here because a consumer reading the registry should
+    # not have to find it in a service README: the spec's PROE changepoint
+    # test (guard 2) ships DISABLED. Measured over five live seasons it has
+    # no discriminating power — 65% firing on real series against 55% on
+    # week-shuffled ones, and 0/13 recall once properly calibrated. Combined
+    # with nfldata's coach columns carrying no mid-season change for 2024 or
+    # 2025, this collector currently detects no regime change on a live
+    # season. `staff_assignment` is still correct about what the feed says;
+    # it is the independent cross-check that is missing.
+    # See services/coaching-scheme/README.md.
     depends_on: [schedule-context]

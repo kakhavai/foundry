@@ -259,3 +259,67 @@ async def test_a_refused_window_costs_coverage_and_is_named(lake: SpyLake, monke
     assert seen[0] not in published
     assert seen[0] in profile.coverage.missing
     assert REASON_WEEK_OUTSIDE_REVISION in {error["reason"] for error in profile.errors}
+
+
+# --------------------------------------------------------------------------
+# F4 — guard 1 arm B at span 1, its tightest point
+# --------------------------------------------------------------------------
+
+
+def test_a_one_week_revision_admits_exactly_one_game():
+    """Where arm B binds hardest. Off by one here permits a two-game sample on
+    a one-week interim, which is the blend the guard exists to refuse — and a
+    one-game interim is exactly when a consumer most needs the rate to be
+    about the right regime."""
+    one_week = revision(from_week=5, to_week=5)
+    assert one_week.week_span == 1
+    assert assert_window_within_revision(one_week, [5], 1) is None
+    with pytest.raises(WindowStraddlesRevision) as caught:
+        assert_window_within_revision(one_week, [5], 2)
+    assert caught.value.reason == REASON_GAMES_EXCEED_SPAN
+
+
+def test_a_one_week_revision_refuses_a_neighbouring_week():
+    """Arm A at span 1. Both arms need the case, because at span 1 they are
+    one week apart and an implementation that conflated them would look
+    correct on every wider revision."""
+    with pytest.raises(WindowStraddlesRevision) as caught:
+        assert_window_within_revision(revision(from_week=5, to_week=5), [5, 6], 2)
+    assert caught.value.reason == REASON_WEEK_OUTSIDE_REVISION
+
+
+# --------------------------------------------------------------------------
+# F5 — the sampled_weeks narrowing, which arm A reads
+# --------------------------------------------------------------------------
+
+
+def test_sampled_weeks_excludes_weeks_with_no_offensive_snaps():
+    """`sampled_weeks` is what arm A inspects, so widening what feeds it
+    weakens arm A silently — a bye or an unplayed week would be reported as
+    part of the rate window and would pass the boundary check.
+
+    Removing the `offensive_plays > 0` filter survived the whole suite before
+    this test existed.
+    """
+    from coaching_scheme.adapters.pbp import WeeklyBucket
+    from coaching_scheme.rates import aggregate
+
+    buckets = {}
+    for week in (1, 2, 3, 4):
+        bucket = WeeklyBucket(team_id="AAA", week=week)
+        if week in (1, 2):
+            bucket.offensive_plays = 10
+            bucket.games.add(f"g{week}")
+            bucket.neutral_plays = 10
+            bucket.neutral_passes = 5
+        buckets[("AAA", week)] = bucket
+
+    profile = aggregate(
+        revision(from_week=1, to_week=4),
+        [1, 2, 3, 4],
+        play_buckets=buckets,
+        charting_buckets=None,
+        personnel_buckets=None,
+    )
+    assert profile.sampled_weeks == (1, 2)
+    assert profile.games_sampled == 2

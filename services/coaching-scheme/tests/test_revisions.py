@@ -190,3 +190,47 @@ def test_an_open_revisions_span_stops_at_the_last_known_week():
     revisions = build_revisions(rows("AAA", weeks), season=SEASON)["AAA"]
     assert revisions[1].effective_to_week is None
     assert revisions[1].week_span == 3
+
+
+# --------------------------------------------------------------------------
+# F4 — the one-week regime, where guard 1 arm B is at its tightest
+# --------------------------------------------------------------------------
+
+
+def test_a_one_week_regime_is_its_own_revision():
+    """A one-game interim is a real and common event, and it is the input on
+    which `week_span == 1` makes guard 1 arm B strictest — `games_sampled > 1`
+    must refuse. Nothing asserted this before, so a `build_revisions` that
+    collapsed any run shorter than two weeks into the previous one passed the
+    whole suite.
+    """
+    weeks = {1: "A", 2: "A", 3: "A", 4: "A", 5: "B", 6: "C", 7: "C", 8: "C"}
+    revisions = build_revisions(rows("AAA", weeks), season=SEASON)["AAA"]
+
+    assert [r.effective_from_week for r in revisions] == [1, 5, 6]
+    middle = revisions[1]
+    assert (middle.effective_from_week, middle.effective_to_week) == (5, 5)
+    assert middle.week_span == 1
+    assert middle.covers(5)
+    assert not middle.covers(4) and not middle.covers(6)
+    assert middle.head_coach_name == "B"
+
+
+def test_back_to_back_one_week_regimes_do_not_merge():
+    """Three coaches in three weeks. A collapse rule keyed on span rather than
+    on the name would fuse them and lose two regime changes."""
+    weeks = {1: "A", 2: "A", 3: "A", 4: "B", 5: "C", 6: "D", 7: "D", 8: "D"}
+    revisions = build_revisions(rows("AAA", weeks), season=SEASON)["AAA"]
+    assert [r.effective_from_week for r in revisions] == [1, 4, 5, 6]
+    assert [r.week_span for r in revisions[1:3]] == [1, 1]
+
+
+def test_a_one_week_regime_at_the_end_of_the_grid_stays_open():
+    """The last revision is always open-ended, span 1 included. Its ceiling
+    comes from `known_last_week`, so arm B still has one."""
+    weeks = {1: "A", 2: "A", 3: "A", 4: "A", 5: "A", 6: "B"}
+    revisions = build_revisions(rows("AAA", weeks), season=SEASON)["AAA"]
+    last = revisions[-1]
+    assert last.effective_to_week is None
+    assert last.last_governed_week == 6
+    assert last.week_span == 1

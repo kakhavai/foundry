@@ -654,6 +654,50 @@ carry is simply absent from the rows — say `required_columns` when you need it
 to exist. This buys CPU and allocation churn, not headroom: rows are yielded
 one at a time either way.
 
+### Format: take `.csv.gz` where it exists, plain CSV otherwise — not parquet
+
+**Decided once, fleet-wide, with live measurements. Do not re-litigate it per
+collector.** nflverse publishes most release assets four ways, and the parquet
+variants look dramatically smaller until you check the one that matters.
+Measured over the wire on 2026-08-01 with `Accept-Encoding: gzip` offered:
+
+| artifact | csv | csv.gz | parquet |
+|---|---|---|---|
+| `play_by_play_2025` | 93.41 MiB | **18.22 MiB** | 19.40 MiB |
+| `ftn_charting_2025` | 7.75 MiB | *(none published)* | 0.53 MiB |
+| `pbp_participation_2025` | 46.82 MiB | *(none published)* | 4.52 MiB |
+
+**On play-by-play — the document most collectors reach for — the parquet is
+LARGER than the gzipped CSV.** Parquet's win exists only on the assets
+nflverse does not gzip. Against that, `pyarrow` is a 47.8 MiB cp312 manylinux
+wheel (>100 MiB installed) added to *every* collector image, and parquet's
+footer-at-the-end layout means the body must be buffered before any row can be
+read — reversing the streaming rule that fixed `roster-scope`'s OOMKill. So:
+
+- take `.csv.gz` with `gzipped=True` where nflverse publishes one;
+- take plain CSV with `columns=` otherwise;
+- **do not add `pyarrow` to the fleet.**
+
+**When a big ungzipped feed really is the problem, the cheap fix is not a new
+dependency — it is asking what the feed buys.** `coaching-scheme` reads all
+three of the above: 73.28 MiB a pass, of which `pbp_participation` alone is
+46.82 MiB (64%) and buys exactly **one field of fourteen**
+(`personnel_rates`). 85% of the total available parquet saving is that single
+feed. Dropping or de-cadencing it costs one field and no dependency; adding
+`pyarrow` costs a fleet-wide wheel and keeps the feed. Measure the
+field-per-megabyte before reaching for a format change.
+
+Revisit this rule only for a collector needing an nflverse asset that (a) has
+no `.gz` variant, (b) exceeds ~40 MiB, **and** (c) ships
+`CAPTURE_ENABLED=true`. All three, not any one — a large feed behind a
+disabled loop costs image size and no bandwidth.
+
+**Scope of the `play_by_play` finding:** it settles the pbp document for every
+collector that reads it, `defense-vs-position` included. It does **not**
+settle a collector that also wants `pbp_participation` — that feed meets the
+46.82 MiB question on its own terms, and the answer there is the
+field-per-megabyte one above rather than this one.
+
 ## Conditional GET: skip a re-fetch the upstream itself says is unnecessary
 
 **Opt-in, one argument wide, for an upstream that changes slower than your

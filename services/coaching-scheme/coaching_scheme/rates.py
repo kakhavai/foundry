@@ -70,10 +70,23 @@ __all__ = [
 REASON_WEEK_OUTSIDE_REVISION = "rate_window_straddles_revision_boundary"
 REASON_GAMES_EXCEED_SPAN = "games_sampled_exceeds_revision_span"
 
-# Rates are reported to four decimal places. Not cosmetic: the digest gate in
-# `capture.py` compares published rows, and an unrounded float would make a
-# re-fetch of identical upstream data produce a different digest through
-# floating-point summation order, defeating the gate on every pass.
+# Rates are reported to four decimal places.
+#
+# **An earlier revision of this comment claimed rounding was what kept the
+# digest gate stable against floating-point summation order. That was wrong,
+# and it is corrected here rather than defended with a contrived test.**
+# Searched for it: 300,000 trials over PROE-magnitude signed values (-35..20)
+# at 50, 120 and 300 terms produced **zero** sums whose value depended on
+# addition order, and the same for clock-magnitude positives. At these
+# magnitudes and counts the instability does not arise, and `aggregate` folds
+# in sorted-week order anyway, so the arithmetic is deterministic without any
+# help from rounding.
+#
+# What rounding actually does is bound the *published* precision, which is a
+# contract property rather than a stability one: consumers get four decimals,
+# and `test_a_published_rate_is_bounded_to_four_decimals` pins it. Digest
+# stability comes from the determinism of the fold, which the digest-gate
+# tests exercise directly.
 RATE_PRECISION = 4
 
 

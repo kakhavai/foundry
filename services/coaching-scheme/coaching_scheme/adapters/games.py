@@ -19,10 +19,15 @@ the current file:
 
 | season | teams with a mid-season head-coach change in the feed |
 |---|---|
+| 2021 | 2 — LV wk6, JAX wk15 |
 | 2022 | 3 — CAR wk6 Rhule->Wilks, IND wk10 Reich->Saturday, DEN wk17 |
 | 2023 | 3 — LV wk9 McDaniels->Pierce, CAR wk13, LAC wk16 |
 | 2024 | **0** |
 | 2025 | **0** |
+
+2021 is included because it rules out the alternative reading: the zeros are
+not a change in how the league behaved, they are a back-fill that has not
+happened yet.
 
 2024 and 2025 each had at least three real ones. NYJ fired Robert Saleh after
 week 5 of 2024; the feed carries `Robert Saleh` for all seventeen NYJ games.
@@ -31,15 +36,19 @@ in 2025 (Brian Callahan, week 6). The column is populated forward from the
 season opener and reconciled later, if at all.
 
 So on a **live** season this feed reports one revision per team and will miss
-the change the collector exists to detect. That is not a reason to distrust the
-collector; it is the reason `changepoint.py` exists and is not optional. The
-staff feed is a *hypothesis* about when the regime changed, and the PROE series
-is an independent test of it. Where they disagree on a live season, the feed is
-the one that is usually wrong.
+the change the collector exists to detect.
 
-`metrics.CoachingSchemeMetrics.staff_revisions` makes the consequence legible:
-a season sitting at exactly 32 revisions is the feed's un-backfilled state, not
-a quiet year.
+`changepoint.py` was built to be the independent cross-check for exactly this
+gap — and **it does not work.** Measured over five live seasons, a PROE
+changepoint test fires on 65% of real team-seasons and 55% of week-shuffled
+ones, and a properly calibrated permutation version has 0/13 recall. It ships
+disabled. Read that module before assuming this collector can see a coaching
+change that the feed cannot.
+
+The consequence, stated rather than left to be inferred: **on a current season
+this collector has no working regime-change detector at all.**
+`metrics.CoachingSchemeMetrics.staff_revisions` sitting at exactly 32 means
+"the feed says nothing changed", and nothing corroborates it.
 """
 
 import os

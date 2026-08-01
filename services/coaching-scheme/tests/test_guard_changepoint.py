@@ -1,30 +1,45 @@
-"""Guard 2: a PROE changepoint with no corresponding staff revision.
+"""Guard 2: the estimator, its calibration, and the fact that it ships OFF.
 
-**Two arms, and they need separate fixtures** for the same reason guard 1's
-do — both end in "a changepoint was found", and only the second half tells
-them apart:
+`changepoint.py` carries the measurement. What is pinned here:
 
-* **Arm A, a changepoint WITH a matching revision.** Must not alarm. Without
-  this fixture, `explains` could return a constant `False` and every alarm
-  test would still pass — the collector would flag every real coaching change
-  as unexplained, which is the loudest possible false positive.
-* **Arm B, a changepoint WITHOUT one.** Must alarm. Without this fixture,
-  `explains` could return a constant `True` and the guard would be off.
+* the **estimator** (`max_t`) does what it claims — normalises by scatter,
+  finds the split, is sign-agnostic;
+* the **calibration** holds: `detect` fires on pure noise at approximately its
+  own alpha, machine-checked rather than asserted in a docstring. That is the
+  one property a permutation test must have, and the property the original
+  fixed-threshold detector lacked;
+* the **seed is stable across processes**, because a p-value that moved
+  between passes would silently disable the digest gate;
+* `explains` still has both arms; and
+* the guard is **disabled**, the rows say so with a null rather than a
+  `false`, and flipping the flag genuinely re-enables it — so the disabled
+  path is a switch, not dead code.
 
-`detect` and `explains` are separate functions precisely so a test can pin
-each independently; see `changepoint.py` on why fusing them would let the
-search quietly narrow to weeks near a boundary.
+**No test here computes its fixture from a constant it is trying to pin.** The
+previous revision had two "boundary" tests that both derived their input from
+`MIN_SHIFT`, so they pinned `>` versus `>=` and nothing about the value —
+lowering the constant survived them both. `MIN_SHIFT` is gone entirely, and
+`SIGNIFICANCE_ALPHA` is asserted as a literal below while the calibration
+tests pass their alpha explicitly.
 """
+
+import random
+import statistics
 
 import pytest
 
+from coaching_scheme import changepoint as changepoint_module
+from coaching_scheme.capture import PROFILE
 from coaching_scheme.changepoint import (
+    CHANGEPOINT_ENABLED,
+    CHANGEPOINT_UNCALIBRATED,
     MAX_WINDOW,
     MIN_RUN,
-    MIN_SHIFT,
-    REASON_UNEXPLAINED_CHANGEPOINT,
+    SIGNIFICANCE_ALPHA,
     detect,
     explains,
+    max_t,
+    permutation_seed,
 )
 from coaching_scheme.revisions import build_revisions
 
@@ -33,298 +48,366 @@ from .conftest import (
     Feeds,
     SpyLake,
     coaches_with_change,
-    games_document,
     proe_with_shift,
     run_capture,
     steady_coaches,
 )
 
+SEED = 20260801
 
-def series(*levels_by_week: float, start: int = 1) -> list[tuple[int, float]]:
-    return [(start + index, value) for index, value in enumerate(levels_by_week)]
+
+def noisy(values, *, jitter=0.4, seed=7):
+    """Real data is never perfectly flat, and `max_t` skips a zero-variance
+    window on purpose. Fixtures therefore carry a little scatter, or they would
+    exercise the degenerate branch instead of the statistic."""
+    rng = random.Random(seed)
+    return [v + rng.uniform(-jitter, jitter) for v in values]
+
+
+def weeks(values):
+    return list(enumerate(values, start=1))
 
 
 # --------------------------------------------------------------------------
-# detect — the shift itself
+# The constants, as literals
 # --------------------------------------------------------------------------
 
 
-def test_a_flat_series_has_no_changepoint():
-    """The negative control. A detector that always fired would pass every
-    positive test in this file."""
-    assert detect(series(*([2.0] * 12))) is None
+def test_the_constants_are_what_the_measurement_used():
+    """Asserted as literals, never recomputed from themselves.
 
-
-def test_a_sustained_shift_past_the_threshold_is_detected():
-    found = detect(series(0, 0, 0, 0, 12, 12, 12, 12))
-    assert found is not None
-    assert found.week == 5
-    assert found.shift == pytest.approx(12.0)
-    assert found.before_mean == pytest.approx(0.0)
-    assert found.after_mean == pytest.approx(12.0)
-
-
-def test_a_downward_shift_is_detected_too():
-    """The sign is not the trigger. A detector comparing `shift > MIN_SHIFT`
-    rather than `abs(shift)` misses every offense that got more run-heavy,
-    which is the commoner direction after a firing."""
-    found = detect(series(15, 15, 15, 15, 0, 0, 0, 0))
-    assert found is not None
-    assert found.week == 5
-    assert found.shift == pytest.approx(-15.0)
-
-
-def test_a_shift_at_exactly_the_threshold_does_not_fire():
-    """`>` not `>=`. The spec says 'more than roughly eight points'."""
-    at = MIN_SHIFT
-    assert detect(series(0, 0, 0, 0, at, at, at, at)) is None
-
-
-def test_a_shift_just_past_the_threshold_does_fire():
-    """The non-equivalent neighbour of the test above. Together they pin the
-    boundary at MIN_SHIFT rather than merely somewhere near it."""
-    over = MIN_SHIFT + 0.5
-    found = detect(series(0, 0, 0, 0, over, over, over, over))
-    assert found is not None
-    assert found.shift == pytest.approx(over)
-
-
-def test_a_single_spike_is_not_a_changepoint():
-    """'Holding three or more weeks', made mechanical — **and arm 3's test**.
-
-    A lone 60-point week. The trap is that the spurious detection lands on the
-    week AFTER the spike, not on the spike: at split 5 the baseline is
-    `[0,0,0,60]` (mean 15) and the three following zeros all sit below it, so
-    arms 1 and 2 both pass and the detector reports a sustained 15-point drop
-    in a series where nothing changed. Only arm 3 — three *before* weeks on
-    the far side of the after-mean — refuses it, because just one of the four
-    baseline weeks is above zero.
-
-    Delete `held_before` and this test is the one that dies. It was a real
-    false positive, not a hypothetical: it is why arm 3 exists.
+    The alpha is the one `changepoint.py`'s measured-FPR table was produced
+    at; changing it silently would leave that table describing a different
+    test.
     """
-    assert detect(series(0, 0, 0, 0, 60, 0, 0, 0)) is None
+    assert SIGNIFICANCE_ALPHA == 0.01
+    assert MIN_RUN == 3
+    assert MAX_WINDOW == 4
+    assert changepoint_module.PERMUTATIONS == 299
 
 
-def test_a_shift_holding_exactly_the_minimum_run_fires():
-    """The neighbour of the spike test: three weeks on the shifted side, not
-    one. Pins that the run-length arm counts to MIN_RUN and not higher."""
-    found = detect(series(0, 0, 0, 20, 20, 20))
+# --------------------------------------------------------------------------
+# max_t — the estimator
+# --------------------------------------------------------------------------
+
+
+def test_max_t_finds_the_split_and_reports_the_shift():
+    statistic, split, shift, before, after, n1, n2 = max_t(
+        noisy([0, 0, 0, 0, 12, 12, 12, 12])
+    )
+    assert split == 4
+    assert shift == pytest.approx(12.0, abs=0.6)
+    assert statistic > 5
+    assert (n1, n2) == (4, 4)
+    assert before == pytest.approx(0.0, abs=0.4)
+    assert after == pytest.approx(12.0, abs=0.4)
+
+
+def test_max_t_is_sign_agnostic():
+    """A detector comparing a signed statistic misses every offence that got
+    more run-heavy, which is the commoner direction after a firing."""
+    up = max_t(noisy([0, 0, 0, 0, 12, 12, 12, 12]))
+    down = max_t(noisy([12, 12, 12, 12, 0, 0, 0, 0]))
+    assert up[0] == pytest.approx(down[0], rel=0.4)
+    assert up[2] > 0 > down[2]
+
+
+def test_max_t_normalises_by_the_teams_own_scatter():
+    """**The estimator fix, as a test.**
+
+    Two teams with the same six-point shift, one steady and one volatile. The
+    raw mean difference the first implementation used scores them identically.
+    A `t` does not, and should not — six points means different things for an
+    offence that never moves and one swinging twenty a week.
+    """
+    steady = max_t(noisy([0, 0, 0, 0, 6, 6, 6, 6], jitter=0.5, seed=1))
+    volatile = max_t(noisy([0, 0, 0, 0, 6, 6, 6, 6], jitter=6.0, seed=2))
+    assert steady[2] == pytest.approx(volatile[2], abs=5.0)
+    assert steady[0] > volatile[0] * 2
+
+
+def test_max_t_refuses_a_degenerate_zero_variance_window():
+    """`t` would be infinite. That is an artefact of a synthetic sample rather
+    than evidence, and admitting it would make every flat fixture fire."""
+    statistic, split = max_t([0.0, 0.0, 0.0, 5.0, 5.0, 5.0])[:2]
+    assert split is None
+    assert statistic == 0.0
+
+
+def test_max_t_caps_both_windows():
+    _, split, _, before, _, n1, n2 = max_t(
+        noisy([7, 7, 7, 7, 0, 0, 0, 0, 12, 12, 12, 12])
+    )
+    assert n1 <= MAX_WINDOW and n2 <= MAX_WINDOW
+    # Against the four weeks immediately before, not the 7s: an uncapped
+    # baseline averages all eight priors to ~3.5, a level never played at.
+    assert split == 8
+    assert before == pytest.approx(0.0, abs=0.4)
+
+
+# --------------------------------------------------------------------------
+# Calibration — the property the original detector lacked
+# --------------------------------------------------------------------------
+
+
+def test_the_false_positive_rate_tracks_alpha_on_pure_noise():
+    """**The headline property, machine-checked.**
+
+    150 pure-Gaussian series of 17 weeks at the real sd. No changepoint exists
+    in any of them, so every firing is a false positive. A permutation test
+    delivers its alpha by construction; this checks the implementation does
+    what the theory says.
+
+    The original fixed-threshold detector fired on **55%** of week-shuffled
+    real series. That is the number this test exists to make unreintroducible.
+
+    Bounds are binomial slack, not a fudge: at alpha=0.05 over 150 series the
+    expectation is 7.5 with sd ~2.7, so 25 is >6 sd out. The lower bound
+    catches the opposite failure — a detector that never fires is also
+    "calibrated" on a naive reading.
+    """
+    rng = random.Random(99)
+    fires = 0
+    trials = 150
+    for index in range(trials):
+        values = [rng.gauss(0.0, 8.0) for _ in range(17)]
+        if detect(weeks(values), seed=index, alpha=0.05, permutations=99):
+            fires += 1
+    assert 0 < fires <= 25, f"{fires}/{trials} false positives at alpha=0.05"
+
+
+def test_a_tighter_alpha_fires_strictly_less():
+    """The alpha is a real dial. Without this it could be ignored entirely and
+    the test above would still pass at its loose bound."""
+    rng = random.Random(1234)
+    corpus = [weeks([rng.gauss(0.0, 8.0) for _ in range(17)]) for _ in range(120)]
+
+    def fires(alpha):
+        return sum(
+            1
+            for i, s in enumerate(corpus)
+            if detect(s, seed=i, alpha=alpha, permutations=99)
+        )
+
+    loose, tight = fires(0.20), fires(0.01)
+    assert tight < loose
+
+
+def test_an_overwhelming_shift_is_still_detected():
+    """Calibration must not mean "never fires".
+
+    **A minority shifted segment, deliberately.** A permutation test has
+    surprisingly little power against a *balanced* step, because the null
+    contains the reorderings that recreate it: an 8-and-8 split of the same
+    30-point step measures p=0.03, not 0.003, since a shuffle can easily land
+    four lows next to four highs. Four high weeks among seventeen is much
+    harder to reassemble by chance, so this fires at the floor.
+
+    That is not a fixture convenience — it is a real property of the test and
+    a second reason (independent of the effect-size finding) that guard 2 is
+    weak on a 17-week season.
+    """
+    found = detect(
+        weeks(noisy([0] * 13 + [30] * 4, jitter=2.0, seed=3)),
+        seed=SEED,
+        alpha=0.05,
+    )
     assert found is not None
-    assert found.weeks_after == MIN_RUN
+    assert found.week == 14
+    assert found.shift == pytest.approx(30.0, abs=2.5)
+
+
+def test_a_p_value_is_never_zero_and_never_exceeds_one():
+    """The observed value is included in its own reference set — that is what
+    keeps the test exact rather than anti-conservative, and why the schema
+    types `changepoint_p_value` with `exclusiveMinimum: 0`."""
+    found = detect(
+        weeks(noisy([0] * 13 + [40] * 4, jitter=1.0, seed=5)),
+        seed=SEED,
+        alpha=0.5,
+        permutations=99,
+    )
+    assert found is not None
+    assert 0 < found.p_value <= 1.0
+    # The floor is 1/(B+1), never 0 — that is the +1 in the numerator.
+    assert found.p_value == pytest.approx(1 / 100)
 
 
 def test_a_series_shorter_than_two_runs_returns_none():
-    """A handoff in weeks 1-2 is undetectable — stated in changepoint.py as a
-    known hole rather than papered over with a one-week baseline."""
-    assert detect(series(0, 0, 0, 30, 30)) is None
-    assert detect([]) is None
-
-
-def test_the_windows_are_capped_so_an_old_regime_cannot_contaminate():
-    """Both sides read at most MAX_WINDOW weeks.
-
-    Weeks 1-4 sit at 7, weeks 5-8 at 0, weeks 9-12 at 12. The first step is
-    deliberately below `MIN_SHIFT` so it does not fire on its own and week 9
-    is the only changepoint in the series.
-
-    The cap is what makes the reported baseline `0.0`. An uncapped `before`
-    at that split averages all eight prior weeks to 3.5 — a level the offense
-    never played at — and reports an 8.5-point shift instead of a 12-point
-    one. It still fires, which is why asserting `before_mean` rather than
-    merely `is not None` is what kills the uncapped mutant.
-    """
-    found = detect(series(7, 7, 7, 7, 0, 0, 0, 0, 12, 12, 12, 12))
-    assert found is not None
-    assert found.weeks_before <= MAX_WINDOW
-    assert found.weeks_after <= MAX_WINDOW
-    # Against the four weeks immediately before, not against the 7s.
-    assert found.week == 9
-    assert found.before_mean == pytest.approx(0.0)
-    assert found.shift == pytest.approx(12.0)
-
-
-def test_the_strongest_candidate_wins_when_several_qualify():
-    found = detect(series(0, 0, 0, 10, 10, 10, 40, 40, 40, 40))
-    assert found is not None
-    assert found.week == 7
+    """A handoff in weeks 1-2 is undetectable — a known hole, stated rather
+    than papered over with a one-week baseline."""
+    assert detect(weeks([0, 0, 0, 30, 30]), seed=SEED) is None
+    assert detect([], seed=SEED) is None
 
 
 # --------------------------------------------------------------------------
-# explains — arm A vs arm B
+# Determinism — the digest gate depends on it
+# --------------------------------------------------------------------------
+
+
+def test_the_seed_is_stable_across_processes():
+    """**Not `hash()`.** Python salts `hash()` on `str` per process, so two
+    pods would draw different nulls for one team and a single pod would
+    disagree with itself across a restart. A p-value that moves between passes
+    over identical upstream data makes every digest unique and silently
+    disables the unchanged-snapshot gate.
+
+    The literal is the point: recomputing it with `blake2b` here would pass
+    against a `hash()` implementation too, on any single run.
+    """
+    value = permutation_seed("coaching-scheme", 2026, "KC")
+    assert value == 16613222523932242960
+    assert permutation_seed("coaching-scheme", 2026, "SF") != value
+    assert permutation_seed("coaching-scheme", 2025, "KC") != value
+
+
+def test_the_same_seed_gives_the_same_p_value():
+    series = weeks(noisy([0] * 8 + [20] * 8, jitter=3.0, seed=11))
+    first = detect(series, seed=SEED, alpha=0.5, permutations=99)
+    second = detect(series, seed=SEED, alpha=0.5, permutations=99)
+    assert first == second
+
+
+# --------------------------------------------------------------------------
+# explains — both arms
 # --------------------------------------------------------------------------
 
 
 def _revisions(grid):
+    from coaching_scheme.adapters.games import TeamWeekCoach
+
     return build_revisions(
-        [row for row in _coach_rows(grid)],
-        season=SEASON,
+        [TeamWeekCoach("AAA", w, n) for w, n in sorted(grid.items())], season=SEASON
     )["AAA"]
 
 
-def _coach_rows(grid):
-    from coaching_scheme.adapters.games import TeamWeekCoach
-
-    return [TeamWeekCoach("AAA", week, name) for week, name in sorted(grid.items())]
+def _changepoint(week):
+    return changepoint_module.Changepoint(
+        week=week,
+        shift=20.0,
+        p_value=0.005,
+        statistic=6.0,
+        before_mean=0.0,
+        after_mean=20.0,
+        weeks_before=4,
+        weeks_after=4,
+    )
 
 
 def test_a_changepoint_matching_a_revision_is_explained():
-    """**Arm A.** A real firing at week 7 that the feed did record. Alarming
-    here would flag every genuine coaching change as a missed one."""
+    """**Arm A.** Alarming here would flag every genuine coaching change as a
+    missed one."""
     revisions = _revisions(coaches_with_change("AAA", at_week=7)["AAA"])
-    found = detect(series(0, 0, 0, 0, 0, 0, 20, 20, 20, 20))
-    assert found is not None and found.week == 7
-    assert explains(found, revisions) is True
+    assert explains(_changepoint(7), revisions)
 
 
 def test_a_changepoint_one_week_off_a_revision_is_still_explained():
-    """A coach fired on a Monday inherits a half-written game plan, so the
-    rate shift routinely lands a week after the boundary."""
     revisions = _revisions(coaches_with_change("AAA", at_week=7)["AAA"])
-    found = detect(series(0, 0, 0, 0, 0, 0, 0, 20, 20, 20))
-    assert found is not None and found.week == 8
-    assert explains(found, revisions) is True
+    assert explains(_changepoint(8), revisions)
 
 
 def test_a_changepoint_two_weeks_off_a_revision_is_not_explained():
-    """The neighbour that pins the tolerance at 1 rather than 'some slack'."""
+    """The neighbour that pins the tolerance at 1 rather than "some slack"."""
     revisions = _revisions(coaches_with_change("AAA", at_week=7)["AAA"])
-    found = detect(series(0, 0, 0, 0, 0, 0, 0, 0, 20, 20, 20))
-    assert found is not None and found.week == 9
-    assert explains(found, revisions) is False
+    assert not explains(_changepoint(9), revisions)
 
 
 def test_a_changepoint_with_no_revision_at_all_is_unexplained():
-    """**Arm B.** The un-backfilled feed: a real handoff the staff column
-    never recorded. This is the normal case on a live season."""
+    """**Arm B**, and the normal case on a live season — see adapters/games.py."""
     revisions = _revisions(steady_coaches()["AAA"])
     assert len(revisions) == 1
-    found = detect(series(0, 0, 0, 0, 20, 20, 20, 20))
-    assert found is not None
-    assert explains(found, revisions) is False
+    assert not explains(_changepoint(7), revisions)
 
 
 def test_the_first_revision_never_explains_anything():
-    """`revisions[1:]` is load-bearing.
-
-    Every team's first revision begins in week 1 by construction. Counting it
-    would let week 1 'explain' changepoints, and since `detect` cannot return
-    a week below MIN_RUN+1 that would look harmless — until a tolerance change
-    or a feed that starts a team at week 2 made week 1 reachable. Asserted
-    directly rather than left to the arithmetic.
-    """
+    """`revisions[1:]` is load-bearing. Asserted with a wide tolerance so the
+    arithmetic cannot hide it."""
     revisions = _revisions(steady_coaches()["AAA"])
-    found = detect(series(0, 0, 0, 20, 20, 20))
-    assert found is not None
     assert revisions[0].effective_from_week == 1
-    assert explains(found, revisions, tolerance=99) is False
+    assert not explains(_changepoint(4), revisions, tolerance=99)
 
 
 # --------------------------------------------------------------------------
-# End to end — the guard as `capture` applies it
+# The guard is OFF, and the rows say so
 # --------------------------------------------------------------------------
 
 
-async def test_an_unexplained_shift_is_surfaced_on_the_row_and_the_envelope(
+def test_the_guard_ships_disabled():
+    """Asserted, so re-enabling it reds this test and forces whoever does it to
+    read `changepoint.py`'s measurement first."""
+    assert CHANGEPOINT_ENABLED is False
+
+
+async def test_every_profile_row_reports_not_checked_rather_than_clean(
     lake: SpyLake,
 ):
-    """The spec: 'surface it; do not silently correct it'.
-
-    AAA's PROE steps 20 points at week 7 with the staff feed reporting no
-    change at all — the 2024/2025 shape `adapters/games.py` measured. Both the
-    row flag and the envelope error must appear, and the rates must STILL be
-    published: dropping them would leave a consumer with a missing profile and
-    no reason, which is the silent correction the spec forbids.
-    """
+    """**Null, not False.** `false` asserts "we checked and this row is
+    clean". The collector has not checked, and a consumer filtering on
+    `changepoint_unexplained == false` would silently treat unchecked rows as
+    verified ones."""
     envelopes = await run_capture(
-        Feeds(proe=proe_with_shift("AAA", at_week=7, shift=20.0)), lake=lake
+        Feeds(proe=proe_with_shift("AAA", at_week=7, shift=25.0)), lake=lake
     )
-    profile = envelopes["team_scheme_profile"]
-    flagged = [row for row in profile.signals if row["changepoint_unexplained"]]
-
-    assert len(flagged) == 1
-    assert flagged[0]["team_id"] == "AAA"
-    assert flagged[0]["changepoint_week"] == 7
-    assert flagged[0]["changepoint_shift"] == pytest.approx(20.0)
-    # Surfaced, not dropped.
-    assert flagged[0]["pass_rate_over_expected"] is not None
-
-    reasons = [error["reason"] for error in profile.errors]
-    assert REASON_UNEXPLAINED_CHANGEPOINT in reasons
-    # A priority error, so it survives the 50-entry cap ahead of routine
-    # per-revision failures.
-    assert reasons.index(REASON_UNEXPLAINED_CHANGEPOINT) < len(reasons)
+    rows = envelopes[PROFILE].signals
+    assert rows
+    for row in rows:
+        assert row["changepoint_unexplained"] is None
+        assert row["changepoint_week"] is None
+        assert row["changepoint_shift"] is None
+        assert row["changepoint_p_value"] is None
+        assert (
+            row["null_field_reason"]["changepoint_unexplained"]
+            == CHANGEPOINT_UNCALIBRATED
+        )
 
 
-async def test_a_shift_the_staff_feed_explains_is_not_flagged(lake: SpyLake):
-    """**Arm A end to end.** Same 20-point shift at week 7, but this time the
-    feed records the coaching change. Nothing may be flagged — and the fact
-    that the shift is identical is what makes this a test of `explains`
-    rather than of `detect`."""
+async def test_a_disabled_guard_raises_no_priority_error(lake: SpyLake):
+    """The twenty-errors-a-pass pathology. A disabled detector must be silent,
+    not quietly firing into the errors array."""
     envelopes = await run_capture(
-        Feeds(
-            coaches=coaches_with_change("AAA", at_week=7),
-            proe=proe_with_shift("AAA", at_week=7, shift=20.0),
-        ),
+        Feeds(proe=proe_with_shift("AAA", at_week=7, shift=25.0)), lake=lake
+    )
+    reasons = {e["reason"] for e in envelopes[PROFILE].errors}
+    assert changepoint_module.REASON_UNEXPLAINED_CHANGEPOINT not in reasons
+
+
+async def test_flipping_the_flag_re_enables_the_wiring(lake: SpyLake, monkeypatch):
+    """**The disabled path is a switch, not dead code.**
+
+    Without this, `capture.py` could stop calling `detect` altogether and every
+    test above would still pass — so re-enabling the guard later would silently
+    do nothing.
+    """
+    monkeypatch.setattr(changepoint_module, "CHANGEPOINT_ENABLED", True)
+    envelopes = await run_capture(
+        Feeds(proe=proe_with_shift("AAA", at_week=7, shift=40.0, jitter=2.0)),
         lake=lake,
     )
-    profile = envelopes["team_scheme_profile"]
-    assert profile.signals, "no rows at all — the fixture is broken, not the guard"
-    assert not [row for row in profile.signals if row["changepoint_unexplained"]]
-    assert REASON_UNEXPLAINED_CHANGEPOINT not in {
-        error["reason"] for error in profile.errors
+    flagged = [r for r in envelopes[PROFILE].signals if r["changepoint_unexplained"]]
+    assert flagged, "the flag no longer reaches the detector"
+    assert {r["team_id"] for r in flagged} == {"AAA"}
+    assert flagged[0]["changepoint_week"] == 7
+    assert flagged[0]["changepoint_p_value"] is not None
+    assert "changepoint_unexplained" not in flagged[0]["null_field_reason"]
+    assert changepoint_module.REASON_UNEXPLAINED_CHANGEPOINT in {
+        e["reason"] for e in envelopes[PROFILE].errors
     }
 
 
-async def test_a_quiet_season_flags_nothing(lake: SpyLake):
-    """The other negative control, through the pipeline."""
-    envelopes = await run_capture(lake=lake)
-    rows = envelopes["team_scheme_profile"].signals
-    assert rows
-    assert not [row for row in rows if row["changepoint_unexplained"]]
+def test_the_fixture_grid_is_what_it_claims():
+    """A guard on the fixtures the assertions above rest on."""
+    from .conftest import games_document
+
+    assert "Interim AAA" not in games_document(steady_coaches())
+    assert "Interim AAA" in games_document(coaches_with_change("AAA", at_week=7))
 
 
-async def test_the_series_is_built_without_consulting_the_staff_feed(lake: SpyLake):
-    """'Independently of the staff feed' — proved by changing only the feed.
+def test_the_fixtures_are_far_cleaner_than_real_data():
+    """A reader's guard rail, not a behaviour test.
 
-    Two passes over identical play-by-play: one where the staff feed reports a
-    week-7 change, one where it reports none. `detect` must find the same
-    changepoint in both; only `explains` may differ. A detector that took
-    revisions as a hint would find nothing in the second pass.
+    Every fixture here is near-noiseless by construction, so `detect` looks far
+    more powerful than it is. Real weekly PROE has sd ~6.9 points *within* a
+    team-season, which is the whole reason the guard ships off. Stated in-suite
+    so nobody concludes from a green run that guard 2 works.
     """
-    from coaching_scheme.adapters.pbp import weekly_proe_series
-    from coaching_scheme.capture import PROFILE
-
-    shifted = proe_with_shift("AAA", at_week=7, shift=20.0)
-
-    with_change = await run_capture(
-        Feeds(coaches=coaches_with_change("AAA", at_week=7), proe=shifted), lake=lake
-    )
-    without = await run_capture(
-        Feeds(coaches=steady_coaches(), proe=shifted), lake=SpyLake()
-    )
-
-    # The detector's own input is identical in both passes.
-    assert weekly_proe_series  # imported for the reader; the series is internal
-    flagged_with = [
-        r for r in with_change[PROFILE].signals if r["changepoint_unexplained"]
-    ]
-    flagged_without = [
-        r for r in without[PROFILE].signals if r["changepoint_unexplained"]
-    ]
-    assert flagged_with == []
-    assert len(flagged_without) == 1
-    assert flagged_without[0]["changepoint_week"] == 7
-
-
-def test_the_documents_agree_the_fixture_grid_is_what_it_claims():
-    """A guard on the fixtures themselves.
-
-    `coaches_with_change` and `steady_coaches` are the inputs half the
-    assertions above rest on. A silent change to either would make several
-    tests pass for the wrong reason, so their shape is asserted once here.
-    """
-    steady = games_document(steady_coaches())
-    changed = games_document(coaches_with_change("AAA", at_week=7))
-    assert "Interim AAA" not in steady
-    assert "Interim AAA" in changed
+    assert statistics.stdev(noisy([0] * 8)) < 1.0

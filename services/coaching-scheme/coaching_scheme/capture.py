@@ -285,10 +285,14 @@ def build_profile_row(
     """One revision's scheme profile as a `team_scheme_profile` signal row.
 
     `changepoint_unexplained` is the spec's "surface it; do not silently
-    correct it". The rates on both sides of an unexplained shift are wrong,
-    and they are published anyway — marked. Dropping them would leave a
-    consumer with a missing profile and no reason, which is the silent
-    correction the spec forbids.
+    correct it" — and it is **null**, not `false`, because guard 2 ships
+    disabled. `false` would assert "we checked and this row is clean"; the
+    honest statement is "not checked", with the reason attached. See
+    `changepoint.py` for the five seasons of measurement behind that.
+
+    Were the guard enabled, a flagged row would still publish its rates,
+    marked. Dropping them would leave a consumer with a missing profile and no
+    reason, which is the silent correction the spec forbids.
     """
     return {
         "team_id": revision.team_id,
@@ -308,14 +312,30 @@ def build_profile_row(
         "pre_snap_motion_rate": profile.pre_snap_motion_rate,
         "fourth_down_go_rate": profile.fourth_down_go_rate,
         "fourth_down_go_rate_over_expected": None,
-        "changepoint_unexplained": unexplained is not None,
+        "changepoint_unexplained": (
+            None
+            if not changepoint_module.CHANGEPOINT_ENABLED
+            else unexplained is not None
+        ),
         "changepoint_week": unexplained.week if unexplained else None,
         "changepoint_shift": unexplained.shift if unexplained else None,
+        "changepoint_p_value": unexplained.p_value if unexplained else None,
         "degraded_upstreams": list(degraded),
-        "null_field_reason": {
-            "fourth_down_go_rate_over_expected": NULL_FOURTH_DOWN_OE,
-        },
+        "null_field_reason": _profile_null_reasons(),
     }
+
+
+def _profile_null_reasons() -> dict[str, str]:
+    """Why each null on a profile row is a null.
+
+    `changepoint_unexplained` appears here only while the guard is disabled —
+    once it is enabled the field carries a real boolean and needs no excuse,
+    so the key is conditional rather than always present.
+    """
+    reasons = {"fourth_down_go_rate_over_expected": NULL_FOURTH_DOWN_OE}
+    if not changepoint_module.CHANGEPOINT_ENABLED:
+        reasons["changepoint_unexplained"] = changepoint_module.CHANGEPOINT_UNCALIBRATED
+    return reasons
 
 
 def _staff_envelope(
@@ -336,6 +356,7 @@ def _staff_envelope(
     acc = CoverageAccumulator(floor=EXPECTED_FLOOR[STAFF])
     rows: list[dict] = []
     identified = 0
+    covered = 0
 
     for team_id, team_revisions in sorted(revisions.items()):
         # Expected because the team EXISTS in the grid and is therefore owed —
@@ -347,7 +368,18 @@ def _staff_envelope(
 
         covering = next((r for r in team_revisions if r.covers(week)), None)
         for revision in team_revisions:
-            assertion, reason = play_callers.resolve(team_id, season, week)
+            # **Per revision, over the revision's OWN span** — never at the
+            # query week. Resolving once at `week` and stamping the result on
+            # every revision attaches a fact about one regime to another,
+            # which is the spec's named failure mode applied to staff
+            # identity, and it bypasses the expiry by evaluating it at the
+            # wrong week. See `play_callers.resolve_for_span`.
+            assertion, reason = play_callers.resolve_for_span(
+                team_id,
+                season,
+                revision.effective_from_week,
+                revision.last_governed_week,
+            )
             rows.append(
                 build_staff_row(
                     revision, assertion=assertion, play_caller_reason=reason
@@ -357,29 +389,56 @@ def _staff_envelope(
         if covering is None:
             acc.fail(team_id, REASON_NO_REVISION)
             continue
-        assertion, reason = play_callers.resolve(team_id, season, week)
-        if assertion is None:
-            # The spec's predicate, unmodified: a null play_caller_id is NOT
-            # present, and `unknown` counts only as a *role* beside a real id.
-            acc.fail(team_id, reason or play_callers.REASON_UNKNOWN)
-            continue
-        identified += 1
+
+        # ---- DEVIATION 5: coverage measures the GRID clause only ----------
+        #
+        # The spec's sentence has two clauses — "every team has at least one
+        # revision covering the requested week" AND "with play_caller_id and
+        # play_caller_role non-null". Scoring both here means the second
+        # swallows the first: with the register empty, `present` is 0 whether
+        # games.csv carried 32 teams or 3, so the ratio can no longer report a
+        # truncated schedule feed at all. The clause that IS fully sourceable
+        # becomes unobservable behind the clause that is not.
+        #
+        # So `present` measures the grid clause, which is true, checkable, and
+        # otherwise unmeasured. Play-caller completeness is reported
+        # separately and losslessly: `coaching_scheme_play_callers_identified`
+        # (0..32), the priority error below, and
+        # `play_caller_missing_reason` on every row.
+        #
+        # This is NOT the rejected option (c), which counted a null id as
+        # present and reported 1.0 while knowing nothing. Here `present` means
+        # "this team has a revision covering this week" — a narrower claim
+        # that is actually true — and the unsourced field keeps its own gauge,
+        # free to move independently.
         acc.record(team_id)
+        covered += 1
+
+        assertion, _ = play_callers.resolve_for_span(
+            team_id, season, covering.effective_from_week, covering.last_governed_week
+        )
+        if assertion is not None:
+            identified += 1
 
     metrics.play_callers_identified(identified)
     metrics.staff_revisions(sum(len(v) for v in revisions.values()))
 
-    if identified < len(revisions):
+    if identified < covered:
         # `add_priority_error`, not `add_error`: `errors` is capped at 50 and
-        # the cap is applied when the property is read, so on an empty
-        # register this entry would be queued behind 32 routine per-team
-        # failures and could be the one dropped. It is also the only entry
-        # that says where the fix goes.
+        # the cap is applied when the property is read, so this entry would be
+        # queued behind routine per-team failures and could be the one dropped.
+        # It is also the only entry that says where the fix goes.
+        #
+        # Counted against `covered`, not against every team: a team with no
+        # revision covering this week is missing for a different reason
+        # entirely, and saying it "has no in-force play-caller assertion"
+        # would send an operator to curate a file that is not the problem.
         acc.add_priority_error(
             REASON_PLAY_CALLER_REGISTER_EMPTY,
-            f"{len(revisions) - identified} of {len(revisions)} team(s) have no "
-            f"in-force play-caller assertion for season {season} week {week}; "
-            "curate services/coaching-scheme/coaching_scheme/play_callers.py",
+            f"{covered - identified} of {covered} team(s) with a revision "
+            f"covering week {week} have no in-force play-caller assertion for "
+            f"season {season}; curate "
+            "services/coaching-scheme/coaching_scheme/play_callers.py",
         )
 
     return (
@@ -434,21 +493,36 @@ def _profile_envelope(
     for team_id, team_revisions in sorted(revisions.items()):
         observed_weeks = [week for (t, week) in play_buckets if t == team_id]
 
-        # Guard 2 runs per TEAM, once, on a series built from play-by-play
-        # alone — see changepoint.py on why detection cannot see a revision.
-        found = changepoint_module.detect(proe_series.get(team_id, []))
+        # Guard 2, per TEAM, on a series built from play-by-play alone — see
+        # changepoint.py on why detection cannot see a revision.
+        #
+        # **Skipped entirely while `CHANGEPOINT_ENABLED` is False**, rather
+        # than run and discarded. Running it would burn ~299 permutations x 32
+        # teams per pass to produce a verdict nothing publishes, and it would
+        # make the disabled path silently depend on the detector still
+        # working.
         unexplained = None
-        if found is not None and not changepoint_module.explains(found, team_revisions):
-            unexplained = found
-            unexplained_count += 1
-            acc.add_priority_error(
-                changepoint_module.REASON_UNEXPLAINED_CHANGEPOINT,
-                f"{team_id} PROE shifted {found.shift:+.1f} points at week "
-                f"{found.week} ({found.before_mean:.1f} -> {found.after_mean:.1f}) "
-                "with no staff revision within "
-                f"{changepoint_module.REVISION_MATCH_TOLERANCE_WEEKS} week(s); "
-                "the rates on BOTH sides of it are suspect",
+        if changepoint_module.CHANGEPOINT_ENABLED:
+            found = changepoint_module.detect(
+                proe_series.get(team_id, []),
+                seed=changepoint_module.permutation_seed(
+                    COLLECTOR_NAME, season, team_id
+                ),
             )
+            if found is not None and not changepoint_module.explains(
+                found, team_revisions
+            ):
+                unexplained = found
+                unexplained_count += 1
+                acc.add_priority_error(
+                    changepoint_module.REASON_UNEXPLAINED_CHANGEPOINT,
+                    f"{team_id} PROE shifted {found.shift:+.1f} points at week "
+                    f"{found.week} ({found.before_mean:.1f} -> "
+                    f"{found.after_mean:.1f}, p={found.p_value:.4f}) with no "
+                    "staff revision within "
+                    f"{changepoint_module.REVISION_MATCH_TOLERANCE_WEEKS} "
+                    "week(s); the rates on BOTH sides of it are suspect",
+                )
 
         for revision in team_revisions:
             acc.expect(revision.revision_id)

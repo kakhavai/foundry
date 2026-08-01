@@ -17,6 +17,7 @@ real coverage accounting. Only the socket is fake.
 """
 
 import gzip
+import random
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 
@@ -293,10 +294,28 @@ def season_plays(
 
 
 def flat_proe(
-    teams: Sequence[str] = TEAMS, *, weeks: int = 12, level: float = 1.0
+    teams: Sequence[str] = TEAMS,
+    *,
+    weeks: int = 12,
+    level: float = 1.0,
+    jitter: float = 0.0,
 ) -> dict[str, dict[int, float]]:
-    """A season in which no team's PROE moves. No changepoint anywhere."""
-    return {team: {week: level for week in range(1, weeks + 1)} for team in teams}
+    """A season in which no team's PROE moves. No changepoint anywhere.
+
+    `jitter` adds a deterministic per-week wobble. Default 0, because most
+    tests want exact rates they can assert on — but guard 2's estimator skips
+    a zero-variance window on purpose, so any test that actually exercises
+    `detect` must ask for scatter or it exercises the degenerate branch
+    instead.
+    """
+    rng = random.Random(4242)
+    return {
+        team: {
+            week: level + (rng.uniform(-jitter, jitter) if jitter else 0.0)
+            for week in range(1, weeks + 1)
+        }
+        for team in teams
+    }
 
 
 def proe_with_shift(
@@ -307,11 +326,12 @@ def proe_with_shift(
     teams: Sequence[str] = TEAMS,
     weeks: int = 12,
     level: float = 1.0,
+    jitter: float = 0.0,
 ) -> dict[str, dict[int, float]]:
     """One team's PROE steps by `shift` at `at_week` and stays there."""
-    grid = flat_proe(teams, weeks=weeks, level=level)
+    grid = flat_proe(teams, weeks=weeks, level=level, jitter=jitter)
     for week in range(at_week, weeks + 1):
-        grid[team][week] = level + shift
+        grid[team][week] = grid[team][week] + shift
     return grid
 
 
