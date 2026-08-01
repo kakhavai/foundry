@@ -264,16 +264,24 @@ jobs:
           # implementation of either, and collector-core already declares
           # boto3 as its own runtime dependency, so this pulls both in.
           #
-          # --python 3.12 is REQUIRED, and its absence is not a style slip.
-          # The ci-runner image's ambient python3 is 3.10, `--no-project`
-          # means uv resolves against that ambient interpreter rather than
-          # the workspace's, and collector-core declares
-          # `requires-python = ">=3.12"`. Without the pin uv fails at
-          # RESOLUTION with "the current Python version (3.10.12) does not
-          # satisfy Python>=3.12", before the script is ever imported — a
-          # red REQUIRED check whose message points at collector-core rather
-          # than at this line. The neighbouring --no-project steps need no
-          # pin only because ruff and pyyaml still support 3.10.
+          # --python 3.12 is deliberate, and it is what makes this step work
+          # against BOTH ci-runner images during the bump.
+          #
+          # `--no-project` resolves against the ambient interpreter rather
+          # than the workspace's, and collector-core declares
+          # `requires-python = ">=3.12"`. The pre-bump image (ubuntu 22.04)
+          # had python3 3.10, so without this pin uv failed at RESOLUTION —
+          # "the current Python version (3.10.12) does not satisfy
+          # Python>=3.12" — before the script was ever imported, reddening a
+          # REQUIRED check with a message naming collector-core rather than
+          # this line. infra/ci/Dockerfile now bases on 24.04 (python 3.12.3),
+          # which fixes it at the source.
+          #
+          # The pin stays anyway. ci-runner:latest is rebuilt only by a push
+          # to main touching infra/ci/Dockerfile, and every consumer pins
+          # `:latest`, so runs between the merge and that rebuild still get
+          # the 3.10 image. Keeping the pin means this step never depended on
+          # which of the two it landed on. Verified working on both.
           LAKE_BUCKET=foundry-signals \
           LAKE_ENDPOINT_URL=http://localhost:9000 \
           AWS_ACCESS_KEY_ID=foundry \
