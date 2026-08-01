@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/durability-history.json",
+  "title": "durability-history collector signal fields",
+  "signal_types": {
+    "player_durability_profile": {
+      "$comment": "TODO(new-collector): placeholder fields. Replace these with this collector's real signal shape, then delete this $comment. Kept deliberately meaningless -- the generated build_signal agrees with them by construction, so leaving both in place would prove only that two placeholders match.",
+      "type": "object",
+      "required": ["key", "observed_at", "value"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "value": { "type": "number" }
+      }
+    },
+    "player_injury_history": {
+      "$comment": "TODO(new-collector): placeholder fields. Replace these with this collector's real signal shape, then delete this $comment. Kept deliberately meaningless -- the generated build_signal agrees with them by construction, so leaving both in place would prove only that two placeholders match.",
+      "type": "object",
+      "required": ["key", "observed_at", "value"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "value": { "type": "number" }
+      }
+    },
+    "player_return_trajectory": {
+      "$comment": "TODO(new-collector): placeholder fields. Replace these with this collector's real signal shape, then delete this $comment. Kept deliberately meaningless -- the generated build_signal agrees with them by construction, so leaving both in place would prove only that two placeholders match.",
+      "type": "object",
+      "required": ["key", "observed_at", "value"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "value": { "type": "number" }
+      }
+    }
+  }
+}
