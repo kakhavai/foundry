@@ -1069,7 +1069,7 @@ Answers whether a game is one of eight simultaneous 1 p.m. kickoffs or the only 
 | Field | Type | Meaning |
 |---|---|---|
 | `game_id` | string | Joinable to `schedule-context` |
-| `window_id` | enum | `intl_early`, `sun_early`, `sun_late`, `snf`, `mnf`, `tnf`, `sat_special`, `holiday`, `playoff` |
+| `window_id` | enum | `intl_early`, `sun_early`, `sun_late`, `snf`, `mnf`, `tnf`, `sat_special`, `holiday`, `playoff`, `weeknight_special` |
 | `network` | string | Distributing network or platform |
 | `distribution` | enum | `national`, `regional`, `streaming_exclusive` |
 | `games_in_window` | int | Total games kicking off in the same slot, this one included |
@@ -1091,6 +1091,30 @@ Answers whether a game is one of eight simultaneous 1 p.m. kickoffs or the only 
 **Failure mode to watch:** Retroactive certainty. The `/signals` route serves the current broadcast state for a past week, so a game that was flexed into Sunday night in Week 12 appears to have always been a Sunday night game, and any model fit on that history has foreknowledge it could never have had at projection time. The lake is append-only and therefore correct; the API is where the leak happens. Guard it by requiring an `as_of` parameter on historical queries and asserting `announced_at <= as_of` on every returned record, and add a consistency check that any game with `flex_status != original` has at least two distinct snapshots with differing `window_id` in the lake — one snapshot plus a non-original flex status means the earlier state was never captured.
 
 **Candidate upstreams (non-normative):** nflverse schedule tables (network and window columns), 506sports regional coverage maps, league flex-scheduling announcements
+
+**Amendments from the shipped 8E implementation.** Four deviations were taken
+deliberately and are argued in full in
+[`services/broadcast-context/README.md`](../../services/broadcast-context/README.md);
+two of them change this section rather than merely departing from it, so they
+are recorded here:
+
+- **`weeknight_special` is added to the `window_id` enum above.** The real feed
+  carries standalone games on a Wednesday and on a non-holiday Friday (the
+  2025 and 2026 openers, plus a 2026 Thanksgiving-eve game) that none of the
+  nine original values describes. Leaving them unassigned would make each a
+  permanent coverage miss *and* null `games_in_window` for every other game in
+  the same week.
+- **The consistency check above is unsatisfiable as written for
+  `time_changed`.** "Two distinct snapshots with differing `window_id`" cannot
+  be met by a status that, by construction, has one `window_id` and two
+  kickoff instants. The implementation requires two observed states differing
+  in the dimension the claimed status is about — equal-or-stronger for
+  `flexed_in`/`flexed_out`, satisfiable for `time_changed`.
+
+The other two (an optional rather than required `as_of` filter, and
+`distribution` derived from slot structure with `streaming_exclusive` never
+emitted) leave this section's wording intact and are disclosed in the service
+README and the collector registry.
 
 #### `officiating`
 

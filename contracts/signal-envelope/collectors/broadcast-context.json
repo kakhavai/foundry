@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/broadcast-context.json",
+  "title": "broadcast-context collector signal fields",
+  "signal_types": {
+    "game_broadcast_window": {
+      "description": "One scheduled game's broadcast window, as a POINT-IN-TIME fact rather than a property of the game. The flex fields are derived by comparing this fetch against this collector's own append-only snapshots, never read from upstream -- the feed publishes the current schedule and nothing else. On a first capture every game is flex_status: original with previous_window_id null, which is correct: fabricating a flex history from one fetch is the failure this collector exists to avoid. Four spec fields are NULL BY NECESSITY and every one carries its reason in null_field_reasons: network (no free feed has a network or tv column), kickoff_local_time (the feed's clock is Eastern and the venue-to-IANA table is another service's), announced_at and flex_decided_at (no publication instant is published, and stamping the fetch time is what the spec forbids), and regional_coverage_pct (the spec's own candidate source is a scraped image-based coverage map). first_observed_at carries the sound upper bound announced_at cannot, and point_in_time_basis says which of the two the as_of filter used.",
+      "type": "object",
+      "required": [
+        "game_id",
+        "season",
+        "week",
+        "game_type",
+        "window_id",
+        "network",
+        "distribution",
+        "games_in_window",
+        "is_standalone",
+        "is_primetime",
+        "kickoff_at",
+        "kickoff_eastern_time",
+        "kickoff_local_time",
+        "regional_coverage_pct",
+        "flex_status",
+        "previous_window_id",
+        "flex_decided_at",
+        "announced_at",
+        "first_observed_at",
+        "observed_window_count",
+        "point_in_time_basis",
+        "null_field_reasons"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "window_id": {
+          "description": "The spec's enum plus weeknight_special, a DISCLOSED ADDITION. The 2025 season opens on a Friday night and the 2026 season on a Wednesday night, and 2026 carries a second Wednesday game; none is a Saturday, a holiday or a playoff. Leaving them unassigned would make them a permanent coverage miss and would null games_in_window for every other game in the same week. See services/broadcast-context/README.md.",
+          "type": "string",
+          "enum": [
+            "intl_early",
+            "sun_early",
+            "sun_late",
+            "snf",
+            "mnf",
+            "tnf",
+            "sat_special",
+            "holiday",
+            "playoff",
+            "weeknight_special"
+          ]
+        }
+      },
+      "properties": {
+        "game_id": {
+          "description": "The nflverse game id (2026_01_DAL_PHI). Joinable to schedule-context.",
+          "type": "string",
+          "minLength": 1
+        },
+        "season": { "type": "integer", "minimum": 1999 },
+        "week": { "type": "integer", "minimum": 1 },
+        "game_type": {
+          "description": "REG, WC, DIV, CON or SB. Preseason is excluded by the adapter.",
+          "type": "string",
+          "minLength": 1
+        },
+        "window_id": {
+          "description": "Null when the feed lists the game with no kickoff time, which is a COVERAGE MISS rather than a default. The spec names defaulting to sun_early as the silent failure.",
+          "oneOf": [{ "$ref": "#/$defs/window_id" }, { "type": "null" }]
+        },
+        "network": {
+          "description": "NULL BY NECESSITY. The distributing network or platform. games.csv carries no network and no tv column -- checked, not assumed -- and no free feed does. A licensed schedule feed would fill it.",
+          "type": "null"
+        },
+        "distribution": {
+          "description": "Derived from slot structure, not from a network feed: a game that is the only one kicking off at its instant reaches every market and is national; one sharing its instant with others is regionally split. streaming_exclusive is in the enum because the spec defines it and is NEVER EMITTED, because nothing free distinguishes a Prime or Netflix exclusive from a broadcast one -- so national here is a claim about REACH, not about carriage. Null for every game in a week whose slate could not be shown complete, for the same reason games_in_window is.",
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["national", "regional", "streaming_exclusive"]
+            },
+            { "type": "null" }
+          ]
+        },
+        "games_in_window": {
+          "description": "Games kicking off at the same INSTANT, this one included -- not games sharing a window_id. The four Divisional Round games all carry window_id: playoff and are each the only football on television when they kick off; counting by window would report 4 for each. Null for every game in a week whose slate could not be shown complete: a partial fetch produces a wrong value for every game in the window, not only the missing one, and an undercount manufactures standalone primetime games that do not exist.",
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "is_standalone": {
+          "description": "games_in_window == 1. Inherits games_in_window's nullability for the same reason.",
+          "type": ["boolean", "null"]
+        },
+        "is_primetime": {
+          "description": "Kickoff at or after 20:00 on the EASTERN clock, which is where the NFL defines its primetime packages. The spec says 'local time'; the feed's clock is Eastern for every game, and reading the spec literally would make a 20:20 ET kickoff in Los Angeles a 17:20 local one and therefore not primetime. Consequence: a 19:00 or 19:15 ET Monday game is false here while sitting in the mnf window -- a consumer meaning 'national primetime package' should read window_id. Null when the kickoff time is unpublished; false would claim a fact this pass does not have.",
+          "type": ["boolean", "null"]
+        },
+        "kickoff_at": {
+          "description": "UTC, authoritative. Null when the feed lists the game with no kickoff time.",
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "kickoff_eastern_time": {
+          "description": "The feed's own wall clock, HH:MM, named for the zone it is actually in. Emitted in place of kickoff_local_time rather than mislabelled as it.",
+          "type": ["string", "null"],
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+        },
+        "kickoff_local_time": {
+          "description": "NULL BY NECESSITY. The venue wall clock. The feed publishes Eastern for every game, and the stadium-to-IANA-zone table lives in the venue collector -- a separate service and a separate Python package, and not in this collector's depends_on. Reading venue's lake output or duplicating its committed table are both larger prices than a documented null for a display field. See services/broadcast-context/README.md.",
+          "type": "null"
+        },
+        "regional_coverage_pct": {
+          "description": "NULL BY NECESSITY on every row, for TWO different reasons that null_field_reasons keeps apart: national_broadcast (the spec's own 'null for national' case) and no_free_regional_coverage_source (the spec's candidate upstream is 506sports' scraped image-based coverage maps, which is not a feed).",
+          "type": "null"
+        },
+        "flex_status": {
+          "description": "Derived by comparing against this collector's own prior snapshots. flexed_in/flexed_out are defined against the three national primetime packages (snf, mnf, tnf), which are what flex scheduling actually moves a game between; a move between two afternoon windows, or a kickoff shifting inside one window, is time_changed.",
+          "type": "string",
+          "enum": ["original", "flexed_in", "flexed_out", "time_changed"]
+        },
+        "previous_window_id": {
+          "description": "The window this game held before the most recent observed change; null when flex_status is original. Equal to window_id for a time_changed row whose window did not move -- the kickoff instant did.",
+          "oneOf": [{ "$ref": "#/$defs/window_id" }, { "type": "null" }]
+        },
+        "flex_decided_at": {
+          "description": "NULL BY NECESSITY. When the change was announced. Same gap as announced_at: no publication instant is published, and inferring one from the fetch time is what the spec explicitly forbids. first_observed_at carries the sound upper bound instead.",
+          "type": "null"
+        },
+        "announced_at": {
+          "description": "NULL BY NECESSITY. When this record's state became publicly known. The spec requires it be stamped from the source's publication time and never inferred from the fetch time; this feed carries no publication time at all.",
+          "type": "null"
+        },
+        "first_observed_at": {
+          "description": "The capture instant of the first snapshot in this collector's own lake carrying this game's CURRENT broadcast state -- where 'state' is window_id, kickoff_at AND games_in_window together. The slot count is part of it deliberately: games_in_window, is_standalone and distribution are recomputed from today's slate, so without it a game whose own window never moved kept an early instant, passed the as_of filter, and arrived carrying slot facts from after the cutoff. Not announced_at and not claiming to be: it is an UPPER BOUND on the announcement, which is what makes it sound for the as_of filter -- first_observed_at <= as_of implies the state was certainly already public at as_of. It can withhold a record announced before as_of that we observed after it, and can never admit one that was not yet announced.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "observed_window_count": {
+          "description": "Distinct WINDOWS this collector has observed this game in, counted over its own window transitions. 1 on a first capture, and 1 for a game that has never moved however many times its slot population changed around it. The spec's consistency check made readable from a single row, as a biconditional: observed_window_count == 1 if and only if flex_status == 'original'. A flex_status other than original with this at 1 would be a record claiming a history it cannot evidence, and capture.py refuses to emit one. It counts windows rather than published states deliberately -- once games_in_window became part of the point-in-time state, a state count would have reported 2 for a game that sat in one window the whole time, and no amount of contract text fixes a field name that contradicts what it counts.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "point_in_time_basis": {
+          "description": "Which timestamp the as_of filter compares against for this row. 'announced' when announced_at is populated, 'first_observed' otherwise -- which is every row today. Emitted so the fallback is never silent.",
+          "type": "string",
+          "enum": ["announced", "first_observed"]
+        },
+        "null_field_reasons": {
+          "description": "A machine-readable reason for every field this row emits as null, and only those. Both halves are derived from one table in capture.py, so 'every null is explained and every explanation names a null' holds by construction.",
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}
