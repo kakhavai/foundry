@@ -39,6 +39,8 @@ from .conftest import (
     ALPHA,
     BRAVO,
     CANONICAL_IDS,
+    CHARLIE,
+    FIXTURE_PLAYERS,
     HISTORY_SEASONS,
     NOW,
     SEASON,
@@ -52,6 +54,12 @@ from .conftest import (
     snap_counts_csv,
     stats_csv,
 )
+
+# The pfr keys the snap feed is keyed by, for the two players the superset tests
+# use. Taken from FIXTURE_PLAYERS rather than retyped, so a fixture edit cannot
+# leave these silently naming nobody.
+BRAVO_PFR = next(r[1] for r in FIXTURE_PLAYERS if r[0] == BRAVO)
+CHARLIE_PFR = next(r[1] for r in FIXTURE_PLAYERS if r[0] == CHARLIE)
 
 CURRENT_SEASON = HISTORY_SEASONS[-1]
 PRIOR_SEASONS = HISTORY_SEASONS[:-1]
@@ -423,6 +431,98 @@ async def test_the_ADAPTER_returns_only_the_keep_set_even_from_a_superset_memo()
     assert set(narrow.by_player) == {BRAVO_GSIS}, (
         "a superset memo leaked a player who is not in this pass's scope"
     )
+
+
+@respx.mock
+async def test_the_ADAPTER_does_not_leak_snap_rows_from_a_superset_memo():
+    """The same contract, for the second of three readers.
+
+    `Participation.snap_pct` and `.team_of` are dict-shaped and iterable exactly
+    like `by_player`, and the argument that justified pinning the designation
+    filter at the adapter applies verbatim. Pinning one reader and leaving two
+    free is the same shape as the gap the round-1 mutations found.
+    """
+    for season in HISTORY_SEASONS:
+        respx.mock.get(upstream_mod.SNAP_COUNTS_URL.format(season=season)).respond(
+            200, text=snap_counts_csv(season)
+        )
+
+    async with httpx.AsyncClient() as client:
+        wide = await upstream_mod.fetch_participation(
+            HISTORY_SEASONS,
+            client=client,
+            keep_pfr=frozenset({BRAVO_PFR, CHARLIE_PFR}),
+        )
+        assert {key[0] for key in wide.snap_pct} == {BRAVO_PFR, CHARLIE_PFR}
+
+        narrow = await upstream_mod.fetch_participation(
+            HISTORY_SEASONS, client=client, keep_pfr=frozenset({BRAVO_PFR})
+        )
+
+    assert {key[0] for key in narrow.snap_pct} == {BRAVO_PFR}, (
+        "a superset memo leaked snap rows for a player out of this pass's scope"
+    )
+    assert {key[0] for key in narrow.team_of} == {BRAVO_PFR}, (
+        "team_of leaked even though snap_pct did not — both are filtered on emit"
+    )
+
+
+@respx.mock
+async def test_the_ADAPTER_does_not_leak_production_rows_from_a_superset_memo():
+    """And the third. `Production.points` completes the set."""
+    for season in HISTORY_SEASONS:
+        respx.mock.get(upstream_mod.STATS_URL.format(season=season)).respond(
+            200, text=stats_csv(season)
+        )
+
+    from .conftest import BRAVO as BRAVO_GSIS
+    from .conftest import CHARLIE as CHARLIE_GSIS
+
+    async with httpx.AsyncClient() as client:
+        wide = await upstream_mod.fetch_production(
+            HISTORY_SEASONS,
+            client=client,
+            keep_gsis=frozenset({BRAVO_GSIS, CHARLIE_GSIS}),
+        )
+        assert {key[0] for key in wide.points} == {BRAVO_GSIS, CHARLIE_GSIS}
+
+        narrow = await upstream_mod.fetch_production(
+            HISTORY_SEASONS, client=client, keep_gsis=frozenset({BRAVO_GSIS})
+        )
+
+    assert {key[0] for key in narrow.points} == {BRAVO_GSIS}, (
+        "a superset memo leaked production rows for a player out of scope"
+    )
+
+
+def test_the_scope_independent_memos_stay_scope_independent():
+    """`_SCHEDULE_MEMO` and `_PLAYERS_MEMO` are keyed WITHOUT a keep-set, and
+    that is only safe because neither reader narrows by scope.
+
+    It is more structurally protected than it looks: `fetch_players` runs before
+    identity resolution, so no keep-set exists at that point, and filtering
+    `players.csv` by scope would need a backward `fdy -> gsis` join that reverses
+    the "forward, not backward" decision in `adapters/scope.py`. Two deliberate
+    changes, not one.
+
+    Still worth eight lines, because it fails at the moment of the mistake rather
+    than months later in a lake object nobody re-reads. This is the one residual
+    the round-2 report flagged as untested.
+    """
+    import inspect
+
+    for fetch in (upstream_mod.fetch_players, upstream_mod.fetch_schedule):
+        narrowing = [
+            name
+            for name in inspect.signature(fetch).parameters
+            if name.startswith("keep")
+        ]
+        assert not narrowing, (
+            f"{fetch.__name__} now narrows by {narrowing}, so its season-keyed "
+            "memo is only complete for the scope that built it. Carry the "
+            "keep-set on the memo the way the three per-season readers do, or "
+            "this is the Critical again in a file no mutation covers."
+        )
 
 
 def test_memo_coverage_is_a_subset_test_not_an_equality_test():

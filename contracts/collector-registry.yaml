@@ -360,36 +360,39 @@ collectors:
     #     injuries_{season}.csv archive. Same subject, different publishers.
     #
     #     Different `absence_reason` enums. A generator joining a current-week
-    #     reason to a historical one MUST TRANSLATE, and this is the table:
+    #     reason to a historical one MUST TRANSLATE, and this is the table.
     #
-    #       durability-history   injury-report   relationship
-    #       ------------------   -------------   ---------------------------
-    #       injury               injury          identical
-    #       illness              illness         identical
-    #       personal             personal        identical
-    #       rest                 rest            identical
-    #       discipline           suspension      NOT identical. `discipline`
-    #                                            also covers a coach's decision
-    #                                            / healthy scratch, which
-    #                                            injury-report has no member
-    #                                            for at all.
-    #       non_injury_other     unspecified     a designation naming a
-    #                                            non-injury cause this
-    #                                            collector cannot classify
-    #                                            further
-    #       undesignated         unspecified     NO designation existed. This
-    #                                            and the row above are one
-    #                                            value upstream; splitting them
-    #                                            is deliberate here, because
-    #                                            "the report said nothing" is
-    #                                            what the named failure mode's
-    #                                            guard turns on.
+    #     **Every quoted example below is EXECUTED** against
+    #     `durability_history.events.classify_absence` by
+    #     services/durability-history/tests/test_absence_reason_mapping.py. This
+    #     table is the whole deliverable of documenting the mismatch rather than
+    #     reconciling it, and a presence-only test cannot see a wrong row — a
+    #     first revision of it filed a healthy scratch under `discipline` when
+    #     the code maps it to `rest`, and nothing caught it.
     #
-    #     So the mapping is many-to-one in one direction and lossy in the other.
+    #     ABSENCE_REASON_MAP_BEGIN
+    #       injury           -> injury       e.g. "Hamstring" | "Left Knee"
+    #       illness          -> illness      e.g. "Illness"
+    #       personal         -> personal     e.g. "Not injury related - personal matter" | "Jury Duty"
+    #       rest             -> rest         e.g. "Not injury related - resting player" | "Healthy Scratch"
+    #       discipline       -> suspension   e.g. "Coach's Decision" | "Suspended by the club" | "Not injury related - coach decision"
+    #       non_injury_other -> unspecified  e.g. "Not injury related - other"
+    #       undesignated     -> unspecified
+    #     ABSENCE_REASON_MAP_END
+    #
+    #     Only the first four rows are identities. `discipline` -> `suspension`
+    #     is NOT one: `discipline` also covers a coach's decision, which
+    #     injury-report has no member for at all. `non_injury_other` and
+    #     `undesignated` are one `unspecified` upstream, so the mapping is
+    #     many-to-one in that direction and lossy coming back. `undesignated`
+    #     carries no example because it is the ABSENCE of a designation row
+    #     rather than any text.
+    #
     #     Reconciling the enums outright was considered and not done: renaming
-    #     `discipline` to `suspension` would mis-label a healthy scratch, and
+    #     `discipline` to `suspension` would mis-label a coach's decision, and
     #     collapsing the last two would delete the distinction the guard exists
-    #     for. Stated rather than papered over.
+    #     for — "the report said nothing" is precisely what the named failure
+    #     mode turns on. Stated rather than papered over.
     #
     #     The edge is still declared because a change to what a designation
     #     MEANS upstream is a change to both collectors at once, and because

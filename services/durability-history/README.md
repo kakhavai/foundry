@@ -181,16 +181,19 @@ current-week reason to a historical one **must translate**:
 | durability-history | injury-report | relationship |
 |---|---|---|
 | `injury` / `illness` / `personal` / `rest` | same | identical |
-| `discipline` | `suspension` | **not** identical — `discipline` also covers a coach's decision / healthy scratch, which `injury-report` has no member for |
+| `discipline` | `suspension` | **not** identical — `discipline` also covers a coach's decision, which `injury-report` has no member for. A **healthy scratch is `rest`**, not `discipline` |
 | `non_injury_other` | `unspecified` | a designation naming a non-injury cause this collector cannot classify further |
 | `undesignated` | `unspecified` | **no designation existed.** One value upstream; split here because "the report said nothing" is what the named failure mode's guard turns on |
 
 Reconciling the enums outright was considered and not done: renaming
-`discipline` to `suspension` would mis-label a healthy scratch, and collapsing the
+`discipline` to `suspension` would mis-label a coach's decision, and collapsing the
 last two would delete the distinction the guard exists for. The table is
 maintained in `contracts/collector-registry.yaml` beside this collector's
-`depends_on`, which is where the generator reads the fleet's inventory, and
-`tests/test_helm_values.py` fails if a published enum value is missing from it.
+`depends_on`, which is where the generator reads the fleet's inventory — and
+`tests/test_absence_reason_mapping.py` parses that table out of the registry and
+**runs `classify_absence` on every example it quotes**, so a wrong row is a
+failing test rather than misleading prose. (The first revision of the table filed
+a healthy scratch under `discipline`; a presence-only test could not see it.)
 
 ## Known gaps, stated rather than papered over
 
