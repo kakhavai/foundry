@@ -214,11 +214,24 @@ async def test_a_capture_before_the_table_makes_any_claim_names_what_it_owes():
     """`today` earlier than TABLE_COMPILED_ON: nothing is describable, and every
     venue the season uses must be NAMED in `coverage.missing`.
 
-    Before the fix `missing` was empty here — the venue set came from assignment
-    rows, all of which had also failed, so the envelope reported `present: 0`
-    against a floor with no indication of which venues were owed. "Zero of
-    thirty, and here are the thirty" is an operator's starting point; "zero of
-    thirty" alone is not.
+    **What this does and does not pin, established by mutation rather than
+    assumed — two drafts of this docstring were wrong before this one.**
+
+    It is *not* a test of the season-venue-set fix above (M16 leaves it green):
+    these games all kick off inside the table's window, so their assignment rows
+    succeed either way and the venue set is identical before and after it.
+
+    Nor is it a test of `acc.expect(venue_id)` alone. `_static_envelope`
+    declares an undescribable venue owed **twice over** — `acc.expect` before
+    the lookup, and `acc.fail` on the miss, which declares expectation itself
+    ("a failure is evidence the key was owed"). Removing either one on its own
+    changes nothing here, which is the point of having both.
+
+    What it guards is that an undescribable venue is not **silently dropped**:
+    remove both declarations and `missing` empties out, leaving `present: 0`
+    against a bare floor with no indication of which venues were owed. That is
+    mutation M20. "Zero of thirty, and here are the thirty" is an operator's
+    starting point; "zero of thirty" alone is not.
     """
     from datetime import UTC, datetime
 
