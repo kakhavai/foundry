@@ -54,8 +54,10 @@ extraEnv:
     value: "http://minio.monitoring.svc.cluster.local:9000"
   - name: REFRESH_MIN_INTERVAL_SECONDS
     value: "300"
-  # "true", and it is the only collector in the fleet other than weather and
-  # stub-mode injury-report that ships enabled. Three reasons, in order:
+  # "true", against the fleet default. `weather` is the ONLY other collector
+  # that reaches a third party from its loop -- injury-report also ships true
+  # but is in stub mode with empty URLs, and usage-share ships false. Three
+  # reasons, in order:
   #
   #   1. ONE feed, 509 KB on the wire. Every collector shipping false does so
   #      because its upstream is 5-44 MiB; officiating reads 19.9 MiB a pass.

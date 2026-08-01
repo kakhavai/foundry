@@ -16,6 +16,8 @@ from fastapi import HTTPException
 
 from broadcast_context.signals import ROW_FILTERS, SUPPORTED_FILTERS, signal_matches
 
+from .conftest import NOW, SpyLake, by_game, feed_document, run_capture, week_rows
+
 BEFORE = "2026-09-01T00:00:00Z"
 AFTER = "2026-12-01T00:00:00Z"
 OBSERVED = "2026-10-01T12:00:00Z"
@@ -132,6 +134,58 @@ def test_as_of_composes_with_the_equality_filters():
     assert signal_matches(row(), {"game_id": "someone-else", "as_of": AFTER}) is False
     assert signal_matches(row(), {"game_id": "2026_12_A_B", "as_of": BEFORE}) is False
     assert signal_matches(row(), {"game_id": "2026_12_A_B", "as_of": AFTER}) is True
+
+
+# --------------------------------------------------------------------------
+# The slate-fact leak, end to end through two real captures
+# --------------------------------------------------------------------------
+
+
+async def test_a_game_whose_slot_mate_flexed_is_withheld_not_admitted():
+    """**The leak the predicate alone could not close.**
+
+    `games_in_window`, `is_standalone` and `distribution` are recomputed from
+    today's slate, so before `games_in_window` joined the observed state a game
+    whose OWN window never moved kept its early `first_observed_at`, passed
+    this filter, and arrived carrying a post-cutoff slot count. Reproduced
+    exactly: two 16:25 games in week 1, one flexed to Sunday night on the
+    second pass, and the survivor read `first_observed_at: 2026-09-15`,
+    `flex_status: original`, `games_in_window: 1`, `is_standalone: true`,
+    `distribution: national`.
+
+    An `as_of` before the flex must now return the survivor NOT AT ALL, rather
+    than returning it with facts from after the cutoff. Withhold, never admit.
+    """
+    lake = SpyLake()
+    before = week_rows(1)
+    await run_capture(feed_document(before), lake=lake)
+
+    # Index 13 is the second of the fixture week's two 16:25 games; index 12 is
+    # its slot-mate, which does not move.
+    after = list(before)
+    after[13] = after[13].replace(",16:25,", ",20:20,")
+    envelopes = await run_capture(
+        feed_document(after), lake=lake, now=NOW.replace(day=16)
+    )
+
+    survivor = by_game(envelopes)["2026_01_A12_B12"]
+    assert survivor["flex_status"] == "original", "this game itself never moved"
+    assert survivor["games_in_window"] == 1
+    assert survivor["is_standalone"] is True
+    assert survivor["distribution"] == "national"
+    # The instant advanced with the slot fact, so the row describes a state
+    # that only became true on the 16th.
+    assert survivor["first_observed_at"] == "2026-09-16T12:00:00Z"
+
+    cutoff = "2026-09-15T18:00:00Z"
+    assert signal_matches(survivor, {"as_of": cutoff}) is False
+
+    # And a game in an untouched slot, captured at the same two instants, is
+    # still admitted — otherwise this test would pass against a filter that
+    # withholds everything.
+    untouched = by_game(envelopes)["2026_01_A00_B00"]
+    assert untouched["first_observed_at"] == "2026-09-15T12:00:00Z"
+    assert signal_matches(untouched, {"as_of": cutoff}) is True
 
 
 def test_every_declared_filter_is_actually_implemented():

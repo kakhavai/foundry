@@ -28,18 +28,43 @@ a disclosed deviation, argued in the README, and it has three parts:
    means the 422 fires only when rows happen to exist, so the same query
    answers 200 against an empty cache and 422 against a populated one. A guard
    whose firing depends on cache state is not a guard.
-3. The leak it defends against is narrower than the spec assumes on this API.
-   `/signals` serves `CaptureState`, which holds exactly one capture, and the
-   router drops any envelope whose scope does not match a requested
-   `season`/`week` — so asking this collector for a past week returns nothing
-   at all rather than today's state wearing that week's label. The residual
-   leak is real but specific: `POST /refresh {"week": N}` re-scopes the cache
-   to week N using **today's** upstream, and `as_of` is what closes it.
+3. **Every row is self-describing, so a consumer can filter point-in-time
+   without `as_of` at all.** `first_observed_at`, `flex_status`,
+   `previous_window_id`, `observed_window_count` and `point_in_time_basis`
+   are on every row, and `first_observed_at` now covers **every** published
+   point-in-time fact — the slot count included — so `as_of` is a
+   server-side convenience over a filter the client could apply itself, not
+   the only place the information exists.
+
+**What a bare `GET /signals` really returns, stated plainly.** An earlier
+revision of this docstring claimed that asking this collector for a past week
+returns nothing, because the router filters envelopes by scope
+(`routes.py`) and the scope's `week` is `CAPTURE_WEEK`. That was **wrong**,
+and it mattered, because the decision above rested on it. The capture is
+**season-wide**: one envelope carries all 272 games across all 18 weeks, each
+row with its own `week` field. A bare `GET /signals` in week 15 therefore
+returns week-12 rows showing their post-flex windows — the spec's named
+failure, reachable through the fleet-standard call rather than only through
+`POST /refresh {"week": N}`.
+
+That is not a data defect: those rows are honest, and reason 3 above is what
+makes them usable. But a consumer that wants the state as it stood must pass
+`as_of`, and the reason it is not forced to is reasons 1 and 2, not any claim
+that the leak is unreachable.
 
 **When `as_of` is supplied it is applied strictly, and a row with no usable
 instant is EXCLUDED.** A record that passes a point-in-time filter because its
 timestamp is null is precisely the leak the guard exists to close, so the
 predicate fails closed rather than open.
+
+**The predicate is only half the guard; the other half is what
+`first_observed_at` covers.** It is derived from the whole published
+point-in-time state — `window_id`, `kickoff_at` **and** `games_in_window` —
+because `games_in_window`, `is_standalone` and `distribution` are recomputed
+from today's slate on every pass. Leaving the count out let a game whose own
+window never moved keep its early instant, pass this predicate, and arrive
+carrying slot facts from after the cutoff. See `ObservedState` in
+`history.py`.
 
 **What it compares against when `announced_at` is null — which is every row
 today.** The feed carries no publication instant, so `announced_at` is null

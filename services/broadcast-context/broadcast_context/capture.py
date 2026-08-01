@@ -33,6 +33,12 @@ derived by comparing this fetch against our own append-only snapshots. On a
 first capture every game is `original`; fabricating a flex history from one
 fetch is the failure.
 
+`first_observed_at` covers **every** point-in-time fact the row publishes,
+`games_in_window` included, while `flex_status` reads only this game's own
+window and kickoff. Two dimensions on purpose: the slot count changes when a
+*different* game moves, so it must advance the instant (or an `as_of` admits
+a row carrying post-cutoff slot facts) without being reported as a flex.
+
 A failed history read is routed into `fail_capture` rather than degraded to
 "no history", because "no history" would publish a snapshot claiming
 `original` for games previously recorded as flexed — into an append-only lake
@@ -44,10 +50,15 @@ where that claim becomes the evidence the next pass reads back.
 
 The spec: *"a partial fetch produces a wrong value for every game in the
 window, not just the missing one"*. `windows.build_slate` decides which weeks
-can be shown to be complete, and for every game in a week that cannot,
-`games_in_window`, `is_standalone` and `distribution` are **null with a
-reason** rather than a plausible count. An undercount is the dangerous
-direction: it manufactures standalone primetime games that do not exist.
+can be shown to be complete, on three findings — an unslotted game, a
+regular-season week under the 13-game floor, and a week that **shrank** since
+the last snapshot. The third exists because 13 is a floor rather than a
+completeness proof: a stream truncated mid-document leaves the tail week with
+13-15 games that all have kickoffs, and neither other arm fires. For every
+game in a week that cannot be shown complete, `games_in_window`,
+`is_standalone` and `distribution` are **null with a reason** rather than a
+plausible count. An undercount is the dangerous direction: it manufactures
+standalone primetime games that do not exist.
 
 --------------------------------------------------------------------------
 4. A `weekly` cadence must not append an identical snapshot every day
@@ -91,6 +102,7 @@ from .adapters.upstream import (
 from .history import (
     FLEX_ORIGINAL,
     FlexVerdict,
+    History,
     derive_flex,
     flex_is_evidenced,
     read_history,
@@ -106,6 +118,7 @@ __all__ = [
     "SIGNAL_TYPES",
     "build_signal",
     "capture_broadcast_context",
+    "games_in_window_for",
     "reset_published_digests",
 ]
 
@@ -231,6 +244,18 @@ def _null_field_reasons(row: dict) -> dict[str, str]:
     return {field: reason for field, reason in table.items() if row[field] is None}
 
 
+def games_in_window_for(game: ScheduledGame, slate: Slate) -> int | None:
+    """The slot count this pass would publish for one game.
+
+    One function rather than two call sites, because the value has to reach
+    **both** the row and `derive_flex` — it is part of the point-in-time state
+    now, not merely a field on the row. Two independent computations of it
+    would be free to drift, and the symptom would be a `first_observed_at`
+    that no longer describes the `games_in_window` beside it.
+    """
+    return slate.games_in_window(game)
+
+
 def build_signal(
     game: ScheduledGame,
     *,
@@ -259,7 +284,7 @@ def build_signal(
       image-based coverage map, not a feed.
     """
     kickoff_at = _rfc3339(game.kickoff_at)
-    games_in_window = slate.games_in_window(game)
+    games_in_window = games_in_window_for(game, slate)
     is_standalone = None if games_in_window is None else games_in_window == 1
     distribution = (
         None
@@ -303,16 +328,15 @@ def build_signal(
 
 def _build_envelope(
     games: list[ScheduledGame],
-    history: dict,
+    history: History,
     *,
-    history_truncated: int,
     now: datetime,
     scope: dict,
     upstream: Upstream,
     deadline: datetime | None,
 ) -> tuple[Envelope, list[dict]]:
     """Every listed game as a row, with coverage accounted alongside."""
-    slate = build_slate(games)
+    slate = build_slate(games, previous_week_counts=history.week_counts)
     acc = CoverageAccumulator(floor=EXPECTED_FLOOR[SIGNAL])
     now_iso = _rfc3339(now)
 
@@ -337,9 +361,15 @@ def _build_envelope(
             kickoff_eastern=game.kickoff_eastern, game_type=game.game_type
         )
         verdict = derive_flex(
-            history.get(game.game_id, ()),
+            history.chains.get(game.game_id, ()),
             window_id=window_id,
             kickoff_at=_rfc3339(game.kickoff_at),
+            # Part of the point-in-time state, not merely a field on the row:
+            # without it a game whose own window never moved keeps an early
+            # `first_observed_at` and is ADMITTED by an `as_of` while carrying
+            # a slot count that only became true after the cutoff. See
+            # `ObservedState`.
+            games_in_window=games_in_window_for(game, slate),
             now=now_iso,
         )
 
@@ -375,13 +405,16 @@ def _build_envelope(
     if slate.incomplete_weeks:
         acc.add_error(
             REASON_INCOMPLETE_SLATE,
-            "games_in_window/is_standalone/distribution withheld for week(s) "
-            + ", ".join(str(week) for week in sorted(slate.incomplete_weeks)),
+            "games_in_window/is_standalone/distribution withheld for "
+            + ", ".join(
+                f"week {week}: {slate.incomplete_reasons[week]}"
+                for week in sorted(slate.incomplete_weeks)
+            ),
         )
-    if history_truncated:
+    if history.truncated:
         acc.add_error(
             REASON_HISTORY_TRUNCATED,
-            f"{history_truncated} snapshot(s) older than the newest "
+            f"{history.truncated} snapshot(s) older than the newest "
             "MAX_HISTORY_SNAPSHOTS were not read",
         )
 
@@ -435,7 +468,7 @@ async def capture_broadcast_context(
         # object-store latency, and so a `304` costs one round trip and no
         # lake reads at all.
         games = await fetch_season_games(season, client=client)
-        history, history_truncated = await read_history(
+        history = await read_history(
             lake,
             collector=COLLECTOR_NAME,
             signal_type=SIGNAL,
@@ -469,7 +502,6 @@ async def capture_broadcast_context(
     envelope, rows = _build_envelope(
         games,
         history,
-        history_truncated=history_truncated,
         now=now,
         scope=scope,
         upstream=upstream,

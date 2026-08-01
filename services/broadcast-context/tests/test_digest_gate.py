@@ -20,7 +20,17 @@ from .conftest import NOW, SpyLake, feed_document, run_capture, week_rows
 LATER = NOW.replace(day=16)
 
 
-async def test_an_identical_second_pass_is_reported_unchanged():
+# Every capture-scope-sensitive test below runs at week 1 AND week 5. Both
+# the digest key and the history partition are keyed by `(season, week)`, and
+# a literal `1` in either place passed the whole suite — the exact shape
+# `officiating` shipped, where a digest read keyed to week 1 was green
+# everywhere. Nothing about this collector is week-1 specific; the fixture
+# just happened to be.
+CAPTURE_WEEKS = (1, 5)
+
+
+@pytest.mark.parametrize("week", CAPTURE_WEEKS)
+async def test_an_identical_second_pass_is_reported_unchanged(week):
     """`run_capture_loop` and `_run_capture` treat `UpstreamUnchanged` as a
     successful pass: `last_capture_at` advances and
     `collector_upstream_unchanged_total` increments, while `/signals` keeps
@@ -28,24 +38,25 @@ async def test_an_identical_second_pass_is_reported_unchanged():
     lake = SpyLake()
     document = feed_document(week_rows(1))
 
-    await run_capture(document, lake=lake)
+    await run_capture(document, lake=lake, week=week)
     assert len(lake.writes) == 1
 
     with pytest.raises(UpstreamUnchanged):
-        await run_capture(document, lake=lake, now=LATER)
+        await run_capture(document, lake=lake, week=week, now=LATER)
     assert len(lake.writes) == 1, "an unchanged pass must not append"
 
 
-async def test_a_changed_slate_publishes_again():
+@pytest.mark.parametrize("week", CAPTURE_WEEKS)
+async def test_a_changed_slate_publishes_again(week):
     """The other arm. Without it, a gate that raised unconditionally would
     pass every assertion above."""
     lake = SpyLake()
-    await run_capture(feed_document(week_rows(1)), lake=lake)
+    await run_capture(feed_document(week_rows(1)), lake=lake, week=week)
 
     moved = week_rows(1)
     # Move the last early-window game to Sunday night: a real flex.
     moved[0] = moved[0].replace(",13:00,", ",20:20,")
-    await run_capture(feed_document(moved), lake=lake, now=LATER)
+    await run_capture(feed_document(moved), lake=lake, week=week, now=LATER)
 
     assert len(lake.writes) == 2
     flexed = {
@@ -58,6 +69,85 @@ async def test_a_changed_slate_publishes_again():
     assert flexed["2026_01_A00_B00"]["previous_window_id"] == "sun_early"
     assert flexed["2026_01_A00_B00"]["observed_window_count"] == 2
     assert flexed["2026_01_A00_B00"]["first_observed_at"] == "2026-09-16T12:00:00Z"
+
+
+async def test_the_digest_table_is_keyed_by_the_capture_week():
+    """Two partitions, one process, identical content.
+
+    A digest key with a literal week would match the first partition's entry
+    and raise `UpstreamUnchanged` for the second — so the second partition
+    would never receive its first object at all. Both passes use the same
+    `now` deliberately, so the rows really are byte-identical and only the key
+    can tell them apart.
+    """
+    lake = SpyLake()
+    document = feed_document(week_rows(1))
+
+    await run_capture(document, lake=lake, week=1)
+    await run_capture(document, lake=lake, week=5)
+
+    assert len(lake.writes) == 2
+    assert {envelope.scope["week"] for envelope in lake.writes} == {1, 5}
+
+
+async def test_a_capture_reads_history_from_its_own_partition():
+    """`read_history`'s own partition test calls it directly, so the
+    `week=week` wiring inside `capture_broadcast_context` is unproven by it.
+
+    Week 1 gets a real history; week 5's partition is empty, so every game
+    there must read `original`. A literal week in the history read would let
+    week 1's snapshot describe week 5's capture and report a flex that this
+    partition has no evidence for.
+    """
+    lake = SpyLake()
+    await run_capture(feed_document(week_rows(1)), lake=lake, week=1)
+
+    moved = week_rows(1)
+    moved[0] = moved[0].replace(",13:00,", ",20:20,")
+    envelopes = await run_capture(feed_document(moved), lake=lake, week=5, now=LATER)
+
+    rows = envelopes[SIGNAL].signals
+    assert len(rows) == 16
+    assert {row["flex_status"] for row in rows} == {"original"}
+    assert {row["observed_window_count"] for row in rows} == {1}
+
+
+async def test_a_time_change_is_followed_across_a_third_pass():
+    """Three passes, because a kickoff-only move looks correct on the second.
+
+    Deduping the history chain on `window_id` alone instead of the whole
+    broadcast state passes every two-pass test: pass 2 still classifies the
+    move correctly. It breaks on pass 3, where pass 2's state was never
+    recorded — so the chain still holds only the ORIGINAL kickoff, the state
+    reads as changed again, and `first_observed_at` restamps to `now` on every
+    pass forever. That is the retroactive-certainty failure by the back door,
+    plus a digest that changes every pass and fills an append-only lake with
+    daily objects.
+
+    The third pass asserting `UpstreamUnchanged` is what catches it.
+    """
+    lake = SpyLake()
+    original = week_rows(1)
+    await run_capture(feed_document(original), lake=lake)
+
+    # 13:00 -> 15:00 on the same Sunday: the kickoff moved, the window
+    # (`sun_early`, anything before 16:00) did not.
+    moved = list(original)
+    moved[0] = moved[0].replace(",13:00,", ",15:00,")
+    second = await run_capture(feed_document(moved), lake=lake, now=LATER)
+
+    row = next(r for r in second[SIGNAL].signals if r["game_id"] == "2026_01_A00_B00")
+    assert row["flex_status"] == "time_changed"
+    assert row["window_id"] == "sun_early"
+    assert row["previous_window_id"] == "sun_early"
+    assert row["observed_window_count"] == 2
+    assert row["first_observed_at"] == "2026-09-16T12:00:00Z"
+    assert len(lake.writes) == 2
+
+    # Pass three, unchanged. The chain must already hold the moved state.
+    with pytest.raises(UpstreamUnchanged):
+        await run_capture(feed_document(moved), lake=lake, now=NOW.replace(day=17))
+    assert len(lake.writes) == 2
 
 
 async def test_a_failed_write_still_serves_the_capture():

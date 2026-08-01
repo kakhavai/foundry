@@ -150,6 +150,34 @@ async def test_the_etag_is_committed_only_after_a_complete_read():
     assert ETAGS.get(UPSTREAM_URL) == '"v2"'
 
 
+async def test_only_the_projected_columns_reach_the_row_mapper(monkeypatch):
+    """`columns=` narrows each row dict to the six columns this adapter reads,
+    out of the feed's 46.
+
+    Observed rather than asserted-on-the-call: this spies the dicts that
+    actually arrive at `_to_game`, so it fails if the projection is dropped
+    even though the parsed output is identical either way. What it does NOT
+    prove is the memory claim in the module docstring — peak memory needs a
+    harness this suite does not have, and rows are yielded one at a time
+    regardless. It holds the projection through a refactor; it does not
+    measure it.
+    """
+    from broadcast_context.adapters import upstream
+
+    seen: list[frozenset[str]] = []
+    real = upstream._to_game
+
+    def spy(row):
+        seen.append(frozenset(row))
+        return real(row)
+
+    monkeypatch.setattr(upstream, "_to_game", spy)
+    await _fetch(feed_document([feed_row("2026_01_A_B"), feed_row("2026_01_C_D")]))
+
+    assert len(seen) == 2
+    assert set(seen) == {frozenset(upstream.REQUIRED_COLUMNS)}
+
+
 def test_the_source_ref_is_the_etag_cache_key():
     """The same string the envelope records, deliberately: two copies of a URL
     is one copy too many, and drift between them is invisible."""

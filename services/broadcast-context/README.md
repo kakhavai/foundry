@@ -112,6 +112,22 @@ this collector's own lake carrying the game's *current* broadcast state. That
 is an **upper bound** on the announcement: the change was announced at or
 before the moment we first saw it.
 
+**"State" means every point-in-time fact the row publishes, including
+`games_in_window`.** That is a correctness requirement, not tidiness.
+`games_in_window`, `is_standalone` and `distribution` are recomputed from
+today's slate on every pass, so with the count left out of the state a game
+whose *own* window never moved kept its early `first_observed_at`, passed the
+`as_of` filter, and arrived carrying slot facts from **after** the cutoff.
+Reproduced: two 16:25 games, one flexed to Sunday night, and the survivor read
+`first_observed_at: 2026-09-15`, `flex_status: original`,
+`games_in_window: 1`, `is_standalone: true`, `distribution: national` —
+retroactive certainty reaching a consumer through a game that never changed.
+With the count in the state that row's instant advances, so an earlier `as_of`
+**withholds** it. The flex fields read a narrower dimension (this game's own
+window and kickoff), so a slot-population change is never mis-reported as a
+flex; `observed_window_count` can therefore exceed 1 while `flex_status` stays
+`original`.
+
 The bound is sound in the direction the guard cares about. `first_observed_at
 <= as_of` implies the state was certainly already public at `as_of`. It can
 *withhold* a record announced before `as_of` that we did not observe until
@@ -142,15 +158,26 @@ sharing a `window_id`. The Divisional Round decides that: all four games carry
 off, so counting by window would report 4 for every one of them and
 `is_standalone: false` for four standalone games.
 
-A week is published only if its slate can be shown complete. It cannot be if
-**any** game in it lacks a kickoff instant (that game could belong to any slot
-in the week) or if a regular-season week lists fewer than 13 games (six byes is
-the league maximum, so a shorter week means the document was truncated —
-which `stream_csv_dicts` cannot detect on an uncompressed body). For every game
-in such a week, `games_in_window`, `is_standalone` and `distribution` are null
-with `incomplete_slate`, and `broadcast_context_incomplete_slate_weeks`
-reports how many. **An undercount is the dangerous direction**: it
-manufactures standalone primetime games that do not exist.
+A week is published only if its slate can be shown complete, on **three**
+independent findings — each reported with its own reason in the envelope's
+`errors`, because each implies a different operator response:
+
+| Finding | Reason | What it catches |
+|---|---|---|
+| any game in the week has no kickoff instant | `unslotted_game` | the ordinary late-season "flex TBD" case — that game could belong to any slot in the week |
+| a regular-season week lists fewer than 13 games | `below_minimum_games` | six byes is the league maximum, so a shorter week means the document was truncated |
+| the week holds fewer games than the last snapshot recorded | `week_shrank` | **the gap the first two leave.** 13 is a *floor*, not a completeness proof: a stream truncated mid-document leaves the tail week with 13–15 games that all have kickoffs, so neither other arm fires. Reproduced: a 14-game week that lost one of its two 16:25 games published `games_in_window: 1`, `is_standalone: true`, `distribution: national` for the survivor with no `incomplete_slate` anywhere |
+
+The baseline for the third comes from the newest lake snapshot that carried
+rows — an empty `present: 0` failure envelope deliberately does not reset it,
+or the check would go inert on exactly the pass after an outage. It is empty
+on a first capture, which makes the arm inert rather than a guess.
+
+For every game in an incomplete week, `games_in_window`, `is_standalone` and
+`distribution` are null with `incomplete_slate`, and
+`broadcast_context_incomplete_slate_weeks` reports how many. **An undercount is
+the dangerous direction**: it manufactures standalone primetime games that do
+not exist.
 
 ## Spec deviations
 
@@ -171,13 +198,28 @@ query without it still returns the current state. Three reasons:
    error can only be raised from inside a row loop — which means the same
    query answers 200 against an empty cache and 422 against a populated one. A
    guard whose firing depends on cache state is not a guard.
-3. **The leak is narrower on this API than the spec assumes.** `/signals`
-   serves `CaptureState`, which holds exactly one capture, and the router
-   drops any envelope whose scope does not match a requested `season`/`week`.
-   Asking this collector for a past week returns *nothing*, not today's state
-   wearing that week's label. The reachable residual is
-   `POST /refresh {"week": N}`, which re-scopes the cache to week N using
-   today's upstream — and `as_of` is exactly what closes it.
+3. **Every row is self-describing, so a consumer can filter point-in-time
+   without `as_of` at all.** `first_observed_at`, `flex_status`,
+   `previous_window_id`, `observed_window_count` and `point_in_time_basis` are
+   on every row, and `first_observed_at` covers **every** published
+   point-in-time fact including the slot count. `as_of` is a server-side
+   convenience over a filter the client could apply itself, not the only place
+   the information exists.
+
+**A correction, because the decision above used to rest on a false premise.**
+An earlier revision of this section claimed that asking this collector for a
+past week "returns nothing, not today's state wearing that week's label", with
+`POST /refresh {"week": N}` as the only residual. That is **wrong**. The scope
+filter in the shared router works on the *envelope*, and this capture is
+season-wide: one envelope carries all 272 games across all 18 weeks, each row
+with its own `week` field. A bare `GET /signals` in week 15 returns week-12
+rows showing their post-flex windows — the spec's named failure, reachable
+through the fleet-standard call rather than only through a re-scoped refresh.
+
+The rows are still honest, and reason 3 is what makes them usable. But the
+reason `as_of` is not mandatory is reasons 1 and 2, not any claim that the
+leak is unreachable. A consumer that wants the state as it stood must pass
+`as_of`.
 
 The lake, which is what a historical consumer actually reads, is append-only
 and carries every snapshot's own `captured_at`, so point-in-time
@@ -241,6 +283,13 @@ three orders of magnitude cheaper, and the feed serves an ETag and answers
 `If-None-Match` with a 304 carrying zero bytes, so the steady state is one
 round trip.
 
+**Precedent, stated accurately:** `weather` is the **only** other collector
+that reaches a third party from the loop. `injury-report` also ships `true`
+but is in stub mode with both its URLs empty, so it reaches nothing;
+`usage-share` ships `false`. `weather`'s dependency is the heavier of the two
+— Open-Meteo is rate-limited and it makes per-stadium requests, against one
+static file on GitHub raw here.
+
 The decisive argument is not the size, though: **the flex history only exists
 if the loop runs.** `flex_status`, `previous_window_id` and
 `first_observed_at` are derived from this collector's own prior snapshots, so
@@ -268,6 +317,20 @@ still caps at the newest 64 snapshots and says so in `errors` if it hits it.
 vary by season or week, so `POST /refresh {"season": 2025}` after a 2026
 capture can 304 into a no-op that still returns 202. Confirm a backfill by
 reading `/signals`, not by the 202. See `docs/collectors.md`.
+
+## Follow-ups (not done here)
+
+- **`schedule-context` reads this same 509 KB document with no conditional
+  GET.** Confirmed: its adapter passes neither `etag_key=` nor `columns=` to
+  `stream_csv_dicts`. Two collectors now poll the same artifact and only one
+  of them speaks `If-None-Match`. Deliberately out of scope for this change —
+  it is an edit to another service.
+- **CI could reach zero outbound bytes without flipping this flag.**
+  `SCHEDULE_URL` is already environment-overridable precisely so a fixture can
+  stand in. Pointing it at an in-cluster fixture in the integration test's
+  deploy step keeps `CAPTURE_ENABLED=true` for the long-lived cluster while
+  costing CI nothing. That is a workflow change, and it is the right home for
+  the concern.
 
 ## Tests
 

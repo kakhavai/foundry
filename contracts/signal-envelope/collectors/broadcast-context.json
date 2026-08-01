@@ -129,12 +129,12 @@
           "type": "null"
         },
         "first_observed_at": {
-          "description": "The capture instant of the first snapshot in this collector's own lake carrying this game's CURRENT broadcast state. Not announced_at and not claiming to be: it is an UPPER BOUND on the announcement, which is what makes it sound for the as_of filter -- first_observed_at <= as_of implies the state was certainly already public at as_of. It can withhold a record announced before as_of that we observed after it, and can never admit one that was not yet announced.",
+          "description": "The capture instant of the first snapshot in this collector's own lake carrying this game's CURRENT broadcast state -- where 'state' is window_id, kickoff_at AND games_in_window together. The slot count is part of it deliberately: games_in_window, is_standalone and distribution are recomputed from today's slate, so without it a game whose own window never moved kept an early instant, passed the as_of filter, and arrived carrying slot facts from after the cutoff. Not announced_at and not claiming to be: it is an UPPER BOUND on the announcement, which is what makes it sound for the as_of filter -- first_observed_at <= as_of implies the state was certainly already public at as_of. It can withhold a record announced before as_of that we observed after it, and can never admit one that was not yet announced.",
           "type": "string",
           "format": "date-time"
         },
         "observed_window_count": {
-          "description": "Distinct broadcast states this collector has evidence of for this game. 1 on a first capture. The spec's consistency check made readable from a single row: a flex_status other than original with this at 1 would be a record claiming a history it cannot evidence, and capture.py refuses to emit one.",
+          "description": "Distinct published states this collector has evidence of for this game -- counting a change to its slot count, not only to its own window. 1 on a first capture. The spec's consistency check made readable from a single row: a flex_status other than original with this at 1 would be a record claiming a history it cannot evidence, and capture.py refuses to emit one. Note the converse does NOT hold: this can exceed 1 while flex_status stays original, because a slot-mate moving is a new published state and not a flex.",
           "type": "integer",
           "minimum": 1
         },

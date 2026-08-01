@@ -2,8 +2,9 @@
 
 This is the collector's product and the spec's named failure mode, so the
 fixtures are built one per arm: flexed-in versus flexed-out, one snapshot
-versus two, a window change versus a kickoff change. A guard whose two arms
-share a fixture cannot tell its sides apart.
+versus two, a window change versus a kickoff change, a change to this game
+versus a change to its slot-mate. A guard whose two arms share a fixture
+cannot tell its sides apart.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -16,6 +17,7 @@ from broadcast_context.history import (
     FLEX_OUT,
     FLEX_TIME_CHANGED,
     MAX_HISTORY_SNAPSHOTS,
+    History,
     ObservedState,
     classify_transition,
     derive_flex,
@@ -23,14 +25,7 @@ from broadcast_context.history import (
     read_history,
 )
 
-from .conftest import (
-    SEASON,
-    SpyLake,
-    feed_document,
-    run_capture,
-    snapshot,
-    week_rows,
-)
+from .conftest import SEASON, SpyLake, feed_document, run_capture, snapshot, week_rows
 
 T1 = "2026-09-01T12:00:00Z"
 T2 = "2026-10-01T12:00:00Z"
@@ -40,8 +35,18 @@ SUN_LATE_KICK = "2026-11-15T21:25:00Z"
 SNF_KICK = "2026-11-16T01:20:00Z"
 
 
-def state(window_id, kickoff, captured_at):
-    return ObservedState(window_id, kickoff, captured_at)
+def state(window_id, kickoff, captured_at, games_in_window=1):
+    return ObservedState(window_id, kickoff, games_in_window, captured_at)
+
+
+def flex(prior, *, window_id, kickoff_at, games_in_window=1, now=NOW_ISO):
+    return derive_flex(
+        prior,
+        window_id=window_id,
+        kickoff_at=kickoff_at,
+        games_in_window=games_in_window,
+        now=now,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -82,9 +87,7 @@ def test_a_first_capture_claims_no_history():
     """The spec's own consequence: on a first capture every game is
     `original`, and that is correct. Inventing a flex history out of one fetch
     is the failure this collector exists to avoid."""
-    verdict = derive_flex(
-        (), window_id="sun_early", kickoff_at=SUN_LATE_KICK, now=NOW_ISO
-    )
+    verdict = flex((), window_id="sun_early", kickoff_at=SUN_LATE_KICK)
     assert verdict.flex_status == FLEX_ORIGINAL
     assert verdict.previous_window_id is None
     assert verdict.first_observed_at == NOW_ISO
@@ -102,9 +105,7 @@ def test_an_unchanged_state_keeps_the_instant_it_was_first_seen():
     alone.
     """
     prior = [state("sun_early", SUN_LATE_KICK, T1)]
-    verdict = derive_flex(
-        prior, window_id="sun_early", kickoff_at=SUN_LATE_KICK, now=NOW_ISO
-    )
+    verdict = flex(prior, window_id="sun_early", kickoff_at=SUN_LATE_KICK)
     assert verdict.first_observed_at == T1
     assert verdict.flex_status == FLEX_ORIGINAL
     assert verdict.observed_window_count == 1
@@ -112,7 +113,7 @@ def test_an_unchanged_state_keeps_the_instant_it_was_first_seen():
 
 def test_a_flex_into_primetime_this_pass():
     prior = [state("sun_early", SUN_LATE_KICK, T1)]
-    verdict = derive_flex(prior, window_id="snf", kickoff_at=SNF_KICK, now=NOW_ISO)
+    verdict = flex(prior, window_id="snf", kickoff_at=SNF_KICK)
     assert verdict.flex_status == FLEX_IN
     assert verdict.previous_window_id == "sun_early"
     assert verdict.first_observed_at == NOW_ISO
@@ -123,9 +124,7 @@ def test_a_flex_out_of_primetime_this_pass():
     """The other arm, with its own fixture. A set that only ever moves games
     INTO primetime passes with `flexed_out` deleted entirely."""
     prior = [state("snf", SNF_KICK, T1)]
-    verdict = derive_flex(
-        prior, window_id="sun_late", kickoff_at=SUN_LATE_KICK, now=NOW_ISO
-    )
+    verdict = flex(prior, window_id="sun_late", kickoff_at=SUN_LATE_KICK)
     assert verdict.flex_status == FLEX_OUT
     assert verdict.previous_window_id == "snf"
     assert verdict.observed_window_count == 2
@@ -133,12 +132,7 @@ def test_a_flex_out_of_primetime_this_pass():
 
 def test_a_kickoff_move_inside_one_window_is_a_time_change():
     prior = [state("sun_early", "2026-11-15T18:00:00Z", T1)]
-    verdict = derive_flex(
-        prior,
-        window_id="sun_early",
-        kickoff_at="2026-11-15T20:00:00Z",
-        now=NOW_ISO,
-    )
+    verdict = flex(prior, window_id="sun_early", kickoff_at="2026-11-15T20:00:00Z")
     assert verdict.flex_status == FLEX_TIME_CHANGED
     # The spec's field says "the window this game held before the most recent
     # change". For a time change the window did not move, so it is equal to
@@ -158,7 +152,7 @@ def test_a_change_observed_on_an_earlier_pass_still_reports_itself():
         state("sun_early", SUN_LATE_KICK, T1),
         state("snf", SNF_KICK, T2),
     ]
-    verdict = derive_flex(prior, window_id="snf", kickoff_at=SNF_KICK, now=NOW_ISO)
+    verdict = flex(prior, window_id="snf", kickoff_at=SNF_KICK)
     assert verdict.flex_status == FLEX_IN
     assert verdict.previous_window_id == "sun_early"
     assert verdict.first_observed_at == T2
@@ -170,13 +164,64 @@ def test_a_second_change_reports_the_most_recent_one():
         state("sun_early", SUN_LATE_KICK, T1),
         state("snf", SNF_KICK, T2),
     ]
-    verdict = derive_flex(
-        prior, window_id="sun_late", kickoff_at=SUN_LATE_KICK, now=NOW_ISO
-    )
+    verdict = flex(prior, window_id="sun_late", kickoff_at=SUN_LATE_KICK)
     assert verdict.flex_status == FLEX_OUT
     assert verdict.previous_window_id == "snf"
     assert verdict.first_observed_at == NOW_ISO
     assert verdict.observed_window_count == 3
+
+
+# --------------------------------------------------------------------------
+# The slate-fact leak: `games_in_window` is part of the point-in-time state
+# --------------------------------------------------------------------------
+
+
+def test_a_slot_population_change_advances_first_observed_at():
+    """**The leak, closed.** This game did not move; its slot-mate did.
+
+    `games_in_window`, `is_standalone` and `distribution` are recomputed from
+    today's slate, so leaving the count out of the observed state let a game
+    whose own window never moved keep its early `first_observed_at`, pass the
+    `as_of` filter, and arrive carrying a post-cutoff slot count. With the
+    count in the state the instant advances, so an earlier `as_of` WITHHOLDS
+    the row instead of admitting it wrong.
+    """
+    prior = [state("sun_late", SUN_LATE_KICK, T1, games_in_window=2)]
+    verdict = flex(
+        prior, window_id="sun_late", kickoff_at=SUN_LATE_KICK, games_in_window=1
+    )
+    assert verdict.first_observed_at == NOW_ISO
+    assert verdict.observed_window_count == 2
+
+
+def test_a_slot_population_change_is_not_reported_as_a_flex():
+    """The other half of the same fix, and it needs its own assertion.
+
+    `classify_transition` returns `time_changed` whenever the two windows are
+    equal, so reading the raw chain would report a fabricated `time_changed`
+    for a game whose kickoff never moved — and that claim would then need
+    evidence it does not have.
+    """
+    prior = [state("sun_late", SUN_LATE_KICK, T1, games_in_window=2)]
+    verdict = flex(
+        prior, window_id="sun_late", kickoff_at=SUN_LATE_KICK, games_in_window=1
+    )
+    assert verdict.flex_status == FLEX_ORIGINAL
+    assert verdict.previous_window_id is None
+
+
+def test_a_real_flex_still_reports_itself_across_a_slot_change():
+    """The dimensions must stay separable in both directions: a chain whose
+    middle entry is a slot-count-only change must still report the window move
+    that came before it."""
+    prior = [
+        state("sun_early", SUN_LATE_KICK, T1, games_in_window=8),
+        state("snf", SNF_KICK, T2, games_in_window=1),
+    ]
+    verdict = flex(prior, window_id="snf", kickoff_at=SNF_KICK, games_in_window=2)
+    assert verdict.flex_status == FLEX_IN
+    assert verdict.previous_window_id == "sun_early"
+    assert verdict.first_observed_at == NOW_ISO
 
 
 # --------------------------------------------------------------------------
@@ -227,6 +272,20 @@ def test_a_time_change_is_evidenced_by_two_kickoffs_in_one_window():
     assert flex_is_evidenced(FLEX_TIME_CHANGED, identical) is False
 
 
+def test_a_slot_count_difference_is_not_evidence_of_a_time_change():
+    """The evidence check reads `window_state`, not `broadcast_state`.
+
+    Two states differing only in `games_in_window` are evidence that a
+    DIFFERENT game moved. Accepting them would let the slot-count fix hand a
+    fabricated `time_changed` the evidence it needs to be published.
+    """
+    slot_change_only = [
+        state("sun_late", SUN_LATE_KICK, T1, games_in_window=2),
+        state("sun_late", SUN_LATE_KICK, T2, games_in_window=1),
+    ]
+    assert flex_is_evidenced(FLEX_TIME_CHANGED, slot_change_only) is False
+
+
 def test_a_flex_with_two_distinct_windows_is_evidenced():
     evidence = [
         state("sun_early", SUN_LATE_KICK, T1),
@@ -237,26 +296,35 @@ def test_a_flex_with_two_distinct_windows_is_evidenced():
 
 
 def test_every_derived_verdict_is_self_evidencing():
-    """A property, over the four transitions a real pass can produce.
+    """A property, over every transition a real pass can produce.
 
     Paired with a length assertion: `all([])` is `True`, and an empty case
     list would make this test pass while checking nothing.
     """
     cases = [
-        ((), "sun_early", SUN_LATE_KICK),
-        ([state("sun_early", SUN_LATE_KICK, T1)], "snf", SNF_KICK),
-        ([state("snf", SNF_KICK, T1)], "sun_late", SUN_LATE_KICK),
+        ((), "sun_early", SUN_LATE_KICK, 1),
+        ([state("sun_early", SUN_LATE_KICK, T1)], "snf", SNF_KICK, 1),
+        ([state("snf", SNF_KICK, T1)], "sun_late", SUN_LATE_KICK, 1),
         (
             [state("sun_early", "2026-11-15T18:00:00Z", T1)],
             "sun_early",
             "2026-11-15T20:00:00Z",
+            1,
         ),
-        ([state("sun_early", SUN_LATE_KICK, T1)], "sun_early", SUN_LATE_KICK),
+        ([state("sun_early", SUN_LATE_KICK, T1)], "sun_early", SUN_LATE_KICK, 1),
+        # The slot-count-only change, which must derive as `original` and so
+        # need no evidence at all.
+        (
+            [state("sun_late", SUN_LATE_KICK, T1, games_in_window=2)],
+            "sun_late",
+            SUN_LATE_KICK,
+            1,
+        ),
     ]
-    assert len(cases) == 5
-    for prior, window_id, kickoff in cases:
-        verdict = derive_flex(
-            prior, window_id=window_id, kickoff_at=kickoff, now=NOW_ISO
+    assert len(cases) == 6
+    for prior, window_id, kickoff, count in cases:
+        verdict = flex(
+            prior, window_id=window_id, kickoff_at=kickoff, games_in_window=count
         )
         assert flex_is_evidenced(verdict.flex_status, verdict.evidence), verdict
 
@@ -277,14 +345,21 @@ async def _read(lake, *, week=1, limit=MAX_HISTORY_SNAPSHOTS):
     )
 
 
-def _row(game_id, window_id, kickoff):
-    return {"game_id": game_id, "window_id": window_id, "kickoff_at": kickoff}
+def _row(game_id, window_id, kickoff, *, games_in_window=1, week=1):
+    return {
+        "game_id": game_id,
+        "window_id": window_id,
+        "kickoff_at": kickoff,
+        "games_in_window": games_in_window,
+        "week": week,
+    }
 
 
 async def test_an_empty_partition_yields_no_history():
-    history, truncated = await _read(SpyLake())
-    assert history == {}
-    assert truncated == 0
+    history = await _read(SpyLake())
+    assert history.chains == {}
+    assert history.truncated == 0
+    assert history.week_counts == {}
 
 
 async def test_snapshots_fold_oldest_first_and_dedupe_repeats():
@@ -306,13 +381,67 @@ async def test_snapshots_fold_oldest_first_and_dedupe_repeats():
         captured_at=base + timedelta(days=2),
     )
 
-    history, truncated = await _read(lake)
-    assert truncated == 0
-    chain = history["g1"]
+    history = await _read(lake)
+    assert history.truncated == 0
+    chain = history.chains["g1"]
     assert [s.window_id for s in chain] == ["sun_early", "snf"]
     # The FIRST appearance, not the latest snapshot still showing it.
     assert chain[0].captured_at == "2026-09-01T12:00:00Z"
     assert chain[1].captured_at == "2026-09-03T12:00:00Z"
+
+
+async def test_a_slot_count_change_alone_appends_to_the_chain():
+    """The dedupe key is `broadcast_state`, so a snapshot differing only in
+    `games_in_window` is a distinct observed state — that is what makes the
+    instant advance and the row get withheld."""
+    lake = SpyLake()
+    base = datetime(2026, 9, 1, 12, tzinfo=UTC)
+    snapshot(
+        lake,
+        [_row("g1", "sun_late", SUN_LATE_KICK, games_in_window=2)],
+        captured_at=base,
+    )
+    snapshot(
+        lake,
+        [_row("g1", "sun_late", SUN_LATE_KICK, games_in_window=1)],
+        captured_at=base + timedelta(days=1),
+    )
+
+    chain = (await _read(lake)).chains["g1"]
+    assert [s.games_in_window for s in chain] == [2, 1]
+    assert chain[1].captured_at == "2026-09-02T12:00:00Z"
+
+
+async def test_the_week_count_baseline_comes_from_the_newest_rows():
+    lake = SpyLake()
+    base = datetime(2026, 9, 1, 12, tzinfo=UTC)
+    snapshot(
+        lake,
+        [_row(f"g{i}", "sun_early", SUN_LATE_KICK, week=1) for i in range(3)],
+        captured_at=base,
+    )
+    snapshot(
+        lake,
+        [_row(f"g{i}", "sun_early", SUN_LATE_KICK, week=1) for i in range(5)],
+        captured_at=base + timedelta(days=1),
+    )
+    assert (await _read(lake)).week_counts == {1: 5}
+
+
+async def test_an_empty_failure_envelope_does_not_reset_the_week_baseline():
+    """`fail_capture` writes a `present: 0` envelope with no rows. Letting it
+    zero the baseline would make the shrink check inert on exactly the pass
+    after an outage — the pass most likely to be short."""
+    lake = SpyLake()
+    base = datetime(2026, 9, 1, 12, tzinfo=UTC)
+    snapshot(
+        lake,
+        [_row(f"g{i}", "sun_early", SUN_LATE_KICK, week=1) for i in range(5)],
+        captured_at=base,
+    )
+    snapshot(lake, [], captured_at=base + timedelta(days=1))
+
+    assert (await _read(lake)).week_counts == {1: 5}
 
 
 async def test_history_is_read_from_the_partition_the_capture_writes():
@@ -324,10 +453,8 @@ async def test_history_is_read_from_the_partition_the_capture_writes():
         captured_at=datetime(2026, 9, 1, 12, tzinfo=UTC),
         week=5,
     )
-    history, _ = await _read(lake, week=1)
-    assert history == {}
-    history, _ = await _read(lake, week=5)
-    assert list(history) == ["g1"]
+    assert (await _read(lake, week=1)).chains == {}
+    assert list((await _read(lake, week=5)).chains) == ["g1"]
 
 
 async def test_reading_past_the_cap_keeps_the_newest_and_says_how_many_it_dropped():
@@ -344,9 +471,9 @@ async def test_reading_past_the_cap_keeps_the_newest_and_says_how_many_it_droppe
             captured_at=base + timedelta(days=index),
         )
 
-    history, truncated = await _read(lake, limit=2)
-    assert truncated == 3
-    assert [s.window_id for s in history["g1"]] == ["w3", "w4"]
+    history = await _read(lake, limit=2)
+    assert history.truncated == 3
+    assert [s.window_id for s in history.chains["g1"]] == ["w3", "w4"]
 
 
 async def test_a_row_without_a_game_id_is_skipped_not_keyed_on_none():
@@ -356,8 +483,7 @@ async def test_a_row_without_a_game_id_is_skipped_not_keyed_on_none():
         [{"window_id": "snf", "kickoff_at": SNF_KICK}, _row("g1", "snf", SNF_KICK)],
         captured_at=datetime(2026, 9, 1, 12, tzinfo=UTC),
     )
-    history, _ = await _read(lake)
-    assert list(history) == ["g1"]
+    assert list((await _read(lake)).chains) == ["g1"]
 
 
 async def test_a_snapshot_with_no_capture_instant_is_skipped():
@@ -373,8 +499,7 @@ async def test_a_snapshot_with_no_capture_instant_is_skipped():
     key = next(iter(lake.objects))
     lake.objects[key] = {**lake.objects[key], "captured_at": None}
 
-    history, _ = await _read(lake)
-    assert history == {}
+    assert (await _read(lake)).chains == {}
 
 
 async def test_a_lake_failure_propagates_rather_than_degrading_to_no_history():
@@ -406,9 +531,12 @@ async def test_a_row_claiming_an_unevidenced_flex_is_refused(monkeypatch):
     """
     from broadcast_context import capture as capture_module
 
-    def unevidenced(prior, *, window_id, kickoff_at, now):
+    def unevidenced(prior, *, window_id, kickoff_at, games_in_window, now):
         return capture_module.FlexVerdict(
-            FLEX_IN, "sun_early", now, (ObservedState(window_id, kickoff_at, now),)
+            FLEX_IN,
+            "sun_early",
+            now,
+            (ObservedState(window_id, kickoff_at, games_in_window, now),),
         )
 
     monkeypatch.setattr(capture_module, "derive_flex", unevidenced)
@@ -428,7 +556,7 @@ async def test_a_truncated_history_is_stated_in_the_envelope(monkeypatch):
     from broadcast_context import capture as capture_module
 
     async def truncated(*args, **kwargs):
-        return {}, 3
+        return History(chains={}, truncated=3, week_counts={})
 
     monkeypatch.setattr(capture_module, "read_history", truncated)
     envelopes = await run_capture(feed_document(week_rows(1)), lake=SpyLake())

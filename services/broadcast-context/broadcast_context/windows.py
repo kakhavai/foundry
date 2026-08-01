@@ -51,6 +51,9 @@ __all__ = [
     "PRIMETIME_START",
     "PRIMETIME_WINDOWS",
     "REGULAR_SEASON",
+    "SLATE_BELOW_MINIMUM_GAMES",
+    "SLATE_UNSLOTTED_GAME",
+    "SLATE_WEEK_SHRANK",
     "WINDOW_IDS",
     "Slate",
     "build_slate",
@@ -108,6 +111,13 @@ REGULAR_SEASON = "REG"
 # this has been truncated somewhere between the publisher and here, and every
 # `games_in_window` derived from it would be an undercount.
 MIN_REG_SEASON_WEEK_GAMES = 13
+
+# Why a week's slot counts were withheld. Three findings, three different
+# operator responses: wait (the league has not slotted it yet), investigate the
+# feed, or investigate the transport.
+SLATE_UNSLOTTED_GAME = "unslotted_game"
+SLATE_BELOW_MINIMUM_GAMES = "below_minimum_games"
+SLATE_WEEK_SHRANK = "week_shrank"
 
 _MONDAY, _THURSDAY, _SATURDAY, _SUNDAY = 0, 3, 5, 6
 
@@ -206,6 +216,10 @@ class Slate:
 
     counts: dict[datetime, int]
     incomplete_weeks: frozenset[int]
+    # `week -> why`, so an operator can tell a late-season TBD game from a
+    # truncated document. Three different findings with three different
+    # responses; one shared `incomplete_slate` string would erase that.
+    incomplete_reasons: dict[int, str]
 
     def games_in_window(self, game) -> int | None:
         """The slot count for one game, or `None` when it cannot be trusted."""
@@ -214,39 +228,59 @@ class Slate:
         return self.counts.get(game.kickoff_at)
 
 
-def build_slate(games: Iterable) -> Slate:
+def build_slate(
+    games: Iterable, *, previous_week_counts: dict[int, int] | None = None
+) -> Slate:
     """Slot counts plus the weeks whose slate cannot be shown to be complete.
 
-    A week is unsafe on either of two independent findings, and they catch
+    A week is unsafe on any of **three** independent findings, and they catch
     different failures:
 
-    * **any game in it has no kickoff instant** — that game could belong to
-      any slot in the week, so every slot in the week is a potential
-      undercount. This is the ordinary late-season "flex TBD" case.
+    * **any game in it has no kickoff instant** (`unslotted_game`) — that game
+      could belong to any slot in the week, so every slot in the week is a
+      potential undercount. The ordinary late-season "flex TBD" case.
     * **a regular-season week lists fewer than `MIN_REG_SEASON_WEEK_GAMES`
-      games** — the league cannot schedule fewer, so the document was
-      truncated between the publisher and here. `stream_csv_dicts` cannot
-      detect truncation on an uncompressed body at all, and the coverage floor
-      only notices once the whole season is short; this notices a single lost
-      week.
+      games** (`below_minimum_games`) — the league cannot schedule fewer, so
+      the document was truncated between the publisher and here.
+    * **a week holds fewer games than the last snapshot recorded for it**
+      (`week_shrank`) — the arm above is a *floor*, not a completeness proof,
+      and a stream truncated mid-document leaves the tail week with 13-15
+      games that all have kickoffs. Reproduced: a 14-game week that lost one
+      of its two 16:25 games published `games_in_window: 1`,
+      `is_standalone: true`, `distribution: national` for the survivor, with
+      no `incomplete_slate` anywhere — "the dangerous direction" this module
+      exists to prevent, arriving through the gap between the first two arms.
 
-    Both are computed over the games the feed LISTED, never over the rows that
-    were successfully built — deriving completeness from success would make a
-    total mapping failure read as a complete slate of zero games.
+    `previous_week_counts` comes from the newest lake snapshot that carried
+    rows (`History.week_counts`). It is empty on a first capture, which makes
+    the third arm inert rather than a guess — a collector with no baseline
+    must not invent one.
+
+    All three are computed over the games the feed LISTED, never over the rows
+    that were successfully built — deriving completeness from success would
+    make a total mapping failure read as a complete slate of zero games.
     """
+    previous_week_counts = previous_week_counts or {}
     counts = Counter(game.kickoff_at for game in games if game.kickoff_at is not None)
 
     by_week: dict[int, list] = defaultdict(list)
     for game in games:
         by_week[game.week].append(game)
 
-    incomplete: set[int] = set()
+    reasons: dict[int, str] = {}
     for week, week_games in by_week.items():
         if any(game.kickoff_at is None for game in week_games):
-            incomplete.add(week)
+            reasons[week] = SLATE_UNSLOTTED_GAME
             continue
         regular = [g for g in week_games if g.game_type == REGULAR_SEASON]
         if regular and len(regular) < MIN_REG_SEASON_WEEK_GAMES:
-            incomplete.add(week)
+            reasons[week] = SLATE_BELOW_MINIMUM_GAMES
+            continue
+        if len(week_games) < previous_week_counts.get(week, 0):
+            reasons[week] = SLATE_WEEK_SHRANK
 
-    return Slate(counts=dict(counts), incomplete_weeks=frozenset(incomplete))
+    return Slate(
+        counts=dict(counts),
+        incomplete_weeks=frozenset(reasons),
+        incomplete_reasons=reasons,
+    )

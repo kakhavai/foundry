@@ -15,7 +15,15 @@ unslotted game could belong to any slot in its week.
 
 from broadcast_context.capture import SIGNAL
 
-from .conftest import SpyLake, by_game, feed_document, feed_row, run_capture, week_rows
+from .conftest import (
+    NOW,
+    SpyLake,
+    by_game,
+    feed_document,
+    feed_row,
+    run_capture,
+    week_rows,
+)
 
 
 async def test_a_complete_week_publishes_counts_and_standalone():
@@ -61,7 +69,10 @@ async def test_one_unslotted_game_withholds_the_counts_for_its_whole_week():
     assert all(row["games_in_window"] is not None for row in week_two)
 
 
-async def test_the_incomplete_week_is_named_in_the_envelope_errors():
+async def test_the_incomplete_week_is_named_with_its_reason():
+    """The week AND why. Three findings need three different operator
+    responses — wait for the league, investigate the feed, investigate the
+    transport — and one shared `incomplete_slate` string erases that."""
     rows = [*week_rows(1, drop_kickoff_for=1), *week_rows(2)]
     envelopes = await run_capture(feed_document(rows), lake=SpyLake())
     entries = [
@@ -70,7 +81,7 @@ async def test_the_incomplete_week_is_named_in_the_envelope_errors():
         if error["reason"] == "incomplete_slate"
     ]
     assert len(entries) == 1
-    assert "week(s) 1" in entries[0]["detail"]
+    assert "week 1: unslotted_game" in entries[0]["detail"]
 
 
 async def test_a_short_regular_season_week_withholds_its_counts_too():
@@ -89,6 +100,75 @@ async def test_a_short_regular_season_week_withholds_its_counts_too():
     # And it is still a fully COVERED week — every game has a window. The
     # withheld count is a null field with a reason, not a coverage miss.
     assert envelopes[SIGNAL].coverage.present == 28
+
+
+async def test_a_week_that_shrank_since_the_last_snapshot_withholds_its_counts():
+    """**The gap between the other two arms**, reproduced and closed.
+
+    A stream truncated mid-document leaves the tail week with 13-15 games that
+    **all have kickoffs**, so arm (a) sees nothing and arm (b) — a *floor*, not
+    a completeness proof — sees nothing either. Before this arm existed, a
+    14-game week that lost one of its two 16:25 games published
+    `games_in_window: 1`, `is_standalone: true`, `distribution: national` for
+    the survivor with no `incomplete_slate` anywhere: "the dangerous
+    direction", manufacturing a standalone national game that does not exist.
+
+    Two passes, because the guard is a comparison against the last snapshot.
+    """
+    lake = SpyLake()
+    full = week_rows(1, games=14)
+    await run_capture(feed_document(full), lake=lake)
+
+    # Drop one of the two 16:25 games. Index 10 and 11 are the late pair in a
+    # 14-game fixture week; every survivor still carries a kickoff.
+    truncated = [row for index, row in enumerate(full) if index != 11]
+    envelopes = await run_capture(
+        feed_document(truncated), lake=lake, now=NOW.replace(day=16)
+    )
+
+    survivor = by_game(envelopes)["2026_01_A10_B10"]
+    assert survivor["kickoff_eastern_time"] == "16:25"
+    assert survivor["games_in_window"] is None
+    assert survivor["is_standalone"] is None
+    assert survivor["distribution"] is None
+    assert survivor["null_field_reasons"]["games_in_window"] == "incomplete_slate"
+
+    entries = [
+        error
+        for error in envelopes[SIGNAL].errors
+        if error["reason"] == "incomplete_slate"
+    ]
+    assert len(entries) == 1
+    assert "week 1: week_shrank" in entries[0]["detail"]
+
+
+async def test_a_week_that_grew_since_the_last_snapshot_is_not_flagged():
+    """The other arm. A guard that fired on any change would blank the counts
+    for every week the moment a postponed game is rescheduled back in — and
+    would pass the test above just as happily."""
+    lake = SpyLake()
+    await run_capture(feed_document(week_rows(1, games=14)), lake=lake)
+
+    envelopes = await run_capture(
+        feed_document(week_rows(1, games=16)), lake=lake, now=NOW.replace(day=16)
+    )
+    reasons = {error["reason"] for error in envelopes[SIGNAL].errors}
+    assert "incomplete_slate" not in reasons, reasons
+    signals = envelopes[SIGNAL].signals
+    assert len(signals) == 14 or len(signals) == 16
+    assert all(row["games_in_window"] is not None for row in signals)
+
+
+async def test_a_first_capture_has_no_baseline_and_does_not_invent_one():
+    """`week_counts` is empty on a first capture, which must make the shrink
+    arm inert rather than a guess. A `.get(week, 0)` inverted to a truthy
+    default would flag every week of every first pass."""
+    envelopes = await run_capture(feed_document(week_rows(1, games=14)), lake=SpyLake())
+    reasons = {error["reason"] for error in envelopes[SIGNAL].errors}
+    assert "incomplete_slate" not in reasons, reasons
+    signals = envelopes[SIGNAL].signals
+    assert len(signals) == 14 or len(signals) == 16
+    assert all(row["games_in_window"] is not None for row in signals)
 
 
 async def test_the_count_is_by_kickoff_instant_not_by_window_id():

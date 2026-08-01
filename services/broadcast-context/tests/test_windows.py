@@ -298,3 +298,59 @@ def test_an_empty_slate_reports_no_counts_and_no_false_completeness():
     slate = build_slate([])
     assert slate.counts == {}
     assert slate.incomplete_weeks == frozenset()
+    assert slate.incomplete_reasons == {}
+
+
+def test_a_week_that_shrank_against_the_baseline_is_incomplete():
+    """The third arm, and the gap the other two leave.
+
+    Fourteen games, all with kickoffs, above the 13-game floor — so arms (a)
+    and (b) both see a healthy week. The baseline says there were 15 last
+    time, which is the only cheap evidence that the document was truncated.
+    """
+    games = _full_week(6, count=14)
+    slate = build_slate(games, previous_week_counts={6: 15})
+
+    assert slate.incomplete_weeks == frozenset({6})
+    assert slate.incomplete_reasons == {6: "week_shrank"}
+    assert [slate.games_in_window(g) for g in games] == [None] * 14
+
+
+def test_a_week_at_or_above_its_baseline_is_complete():
+    """The other arm. A guard firing on any change would blank every week the
+    moment a postponed game is rescheduled back in."""
+    games = _full_week(6, count=15)
+    assert build_slate(games, previous_week_counts={6: 15}).incomplete_weeks == (
+        frozenset()
+    )
+    assert build_slate(games, previous_week_counts={6: 14}).incomplete_weeks == (
+        frozenset()
+    )
+
+
+def test_no_baseline_makes_the_shrink_arm_inert():
+    """A first capture has no baseline and must not invent one."""
+    games = _full_week(6, count=14)
+    assert build_slate(games).incomplete_weeks == frozenset()
+    assert build_slate(games, previous_week_counts={}).incomplete_weeks == frozenset()
+    # A baseline for a DIFFERENT week must not reach this one either.
+    assert (
+        build_slate(games, previous_week_counts={7: 99}).incomplete_weeks == frozenset()
+    )
+
+
+def test_each_incompleteness_finding_reports_its_own_reason():
+    """Three findings, three operator responses. One shared string erases the
+    difference between "wait for the league" and "the transport is broken"."""
+    games = [
+        *_full_week(1, count=13),
+        game("tbd", week=1, kickoff=None),
+        *_full_week(2, count=12),
+        *_full_week(3, count=14),
+    ]
+    slate = build_slate(games, previous_week_counts={3: 16})
+    assert slate.incomplete_reasons == {
+        1: "unslotted_game",
+        2: "below_minimum_games",
+        3: "week_shrank",
+    }
