@@ -273,6 +273,15 @@ def two_revision_venue(monkeypatch):
     (`revisions_for`, `revisions_containing`, `revision_on`) reads that dict at
     call time, so the real code path is exercised end to end, including
     `resolve_venue_id` mapping GB onto this venue.
+
+    **The two revisions are stated here, not produced by `build_revisions`.**
+    That is deliberate and it was a real finding: building the fixture with the
+    function under test means a mutation to `build_revisions` breaks the
+    FIXTURE, so the capture-level tests below ERROR during setup instead of
+    failing on their own assertions. The mutation still gets killed — but by
+    the fixture's guard rather than by the guard those tests exist to be. The
+    windows are therefore written out, and `build_revisions` deriving them
+    correctly is `test_a_later_revision_closes_the_earlier_one`'s job.
     """
     original = reference.REVISIONS[SURFACE_CHANGE_VENUE][0].record
     assert original.surface_class == SURFACE_BEFORE, (
@@ -284,8 +293,18 @@ def two_revision_venue(monkeypatch):
         surface_class=SURFACE_AFTER,
         surface_installed_on=SURFACE_CHANGE_ON,
     )
-    history = reference.build_revisions((original, changed))
-    assert len(history) == 2, "the fixture itself must produce two revisions"
+    history = (
+        reference.VenueRevision(
+            record=original,
+            effective_to=SURFACE_CHANGE_ON,
+            home_team_ids=reference.HOME_TEAM_IDS[SURFACE_CHANGE_VENUE],
+        ),
+        reference.VenueRevision(
+            record=changed,
+            effective_to=None,
+            home_team_ids=reference.HOME_TEAM_IDS[SURFACE_CHANGE_VENUE],
+        ),
+    )
 
     patched = dict(reference.REVISIONS)
     patched[SURFACE_CHANGE_VENUE] = history
