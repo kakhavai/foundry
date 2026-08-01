@@ -32,7 +32,7 @@
           "minLength": 5
         },
         "team": {
-          "description": "Canonical team abbreviation the player is under contract to, or null. Null for the 61 active rows whose upstream `team` is a slash-joined multi-club string whose ordering is not consistent, and for an unrecognised club label.",
+          "description": "Canonical team abbreviation the player is under contract to, or null. Null for the 64 active rows whose upstream `team` is a slash-joined multi-club string whose ordering is not consistent, and for an unrecognised club label.",
           "type": ["string", "null"],
           "minLength": 2
         },

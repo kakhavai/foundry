@@ -143,8 +143,8 @@ class IdentityFailures:
     Accumulated across every batch of one pass, because `resolve_many` resets
     `failures` on each call.
 
-    **Summarised, never per row.** A total outage against a 2,908-row feed would
-    otherwise file 2,908 entries and push every other error past
+    **Summarised, never per row.** A total outage against a 2,931-row feed would
+    otherwise file 2,931 entries and push every other error past
     `CoverageAccumulator`'s 50-entry cap.
     """
 
@@ -264,7 +264,7 @@ async def resolve_in_scope(
     `IdentityClient.resolve_many`'s.** It already splits at `BATCH_LIMIT` (500)
     before it posts, so a caller-side buffer changes nothing about what goes on
     the wire — `player-profile` proved that by mutation, where disabling its
-    buffer left the HTTP traffic byte-identical. ~2,908 active rows is six
+    buffer left the HTTP traffic byte-identical. ~2,931 active rows is six
     chunks and a few hundred KB of query list.
     """
     queries = [(row, _query(row, season)) for row in rows]

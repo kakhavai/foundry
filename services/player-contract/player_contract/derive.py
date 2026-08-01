@@ -53,13 +53,17 @@ def seasons_remaining(season: int, end_season: int | None) -> int | None:
     """Contract seasons AFTER `season`, or `None` when the term is unknown.
 
     **Deliberately not clamped at zero.** A negative value means the source's
-    record of the deal ended before the season being captured, which — with the
-    frozen 2022 CSV this collector currently reads (see `adapters/upstream.py`)
-    — is the single most important thing a consumer can be told about a row.
-    Clamping it to `0` would render an expired 2021 contract identical to a deal
-    in its final season, differing only in `is_contract_year`, and that is
-    exactly the plausible-but-wrong record the phase doc's failure mode
-    describes.
+    record of the deal ended before the season being captured. Clamping it to
+    `0` would render an expired 2021 contract identical to a deal in its final
+    season, differing only in `is_contract_year` — exactly the plausible-but-
+    wrong record the phase doc's failure mode describes.
+
+    Against the live parquet this fires on 33 of 2,930 rows: deals the upstream
+    still flags active whose term has run out. It earns its keep as a **backstop**
+    rather than as a routine signal, and it earned it once already — while this
+    collector read the release's abandoned `.csv.gz`, it fired on 2,869 of
+    2,887, which is how that artifact's four-year staleness became visible. See
+    `adapters/upstream.py`.
     """
     if end_season is None:
         return None

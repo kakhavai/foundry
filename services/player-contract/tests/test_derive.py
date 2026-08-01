@@ -19,8 +19,8 @@ from player_contract import derive
         # A four-year deal signed in 2022 runs 2022, 2023, 2024, 2025.
         (2022, 4, 2025),
         # A one-year deal begins and ends in the same season. This is the case
-        # `year_signed + years` gets wrong most visibly, and 855 of the 2,908
-        # active rows are one-year deals.
+        # `year_signed + years` gets wrong most visibly, and one-year deals
+        # are a large minority of the active set.
         (2025, 1, 2025),
         (2020, 10, 2029),
     ],
@@ -91,8 +91,9 @@ def test_an_expired_deal_reports_a_NEGATIVE_number_rather_than_zero():
     well-formed record that quietly says the wrong thing. Unclamped, `-2` cannot
     be read as anything but "the source's record of this deal has expired".
 
-    This matters concretely today: the upstream `.csv.gz` has not been
-    regenerated since 2022-05-29.
+    This is what caught the release's abandoned `.csv.gz` artifact, where it
+    fired on 2,869 of 2,887 rows. Against the live parquet it fires on 33 of
+    2,930 — deals the upstream still flags active whose term has run out.
     """
     assert derive.seasons_remaining(2026, 2024) == -2
 

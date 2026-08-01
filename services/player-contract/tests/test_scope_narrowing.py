@@ -216,7 +216,7 @@ async def test_a_lake_that_fails_outright_still_writes_a_failure_envelope():
 async def test_a_resolved_row_outside_the_scope_is_dropped(lake):
     """The narrowing itself. Foxtrot resolves cleanly and is deliberately absent
     from the watchlist, so a collector that published him would be publishing
-    the whole league — 2,908 contracts instead of 384."""
+    the whole league — 2,930 contracts instead of 384."""
     mock_upstream(respx.mock)
     mock_identity(respx.mock)
 

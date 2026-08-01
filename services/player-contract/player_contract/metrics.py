@@ -12,7 +12,7 @@ see the failure they describe:
 * **`player_contract_expired_records`** — a record whose `contract_end_season`
   already passed is a *present* record with every field populated, so coverage
   reads 1.0 for it. This is the gauge that would have shown, on day one, that
-  the `.csv.gz` upstream has not been regenerated since 2022-05-29 while the
+  release's `.csv.gz` artifact had not been regenerated since 2022-05-29 while the
   release around it is refreshed daily. It is the collector's staleness alarm,
   and nothing shared can raise it: only this collector knows that a contract has
   an expiry and that the capture season is supposed to fall inside it.

@@ -5,7 +5,10 @@
 which means the ratio is 1.0 on a pass where every single published row
 describes a contract that ended two seasons ago. That is the exact shape of the
 phase doc's "well-formed record describing a deal that expired in 2019", and it
-is live today: the upstream `.csv.gz` has not been regenerated since 2022-05-29.
+is not hypothetical: it is how the release's abandoned `.csv.gz` artifact was
+caught, where it fired on 2,869 of 2,887 rows. Against the live parquet it reads
+1 of 6 in the fixture and 33 of 2,930 in production — a backstop, not a routine
+signal.
 
 Both gauges are asserted through `/metrics` rather than through the wrapper, so
 a value recorded into a `meter.create_gauge` — which OTel *consumes* on

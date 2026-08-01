@@ -374,6 +374,57 @@ async def test_two_players_sharing_a_name_are_not_collapsed():
 
 
 @respx.mock
+async def test_the_fallback_key_separates_two_players_with_no_otc_id():
+    """`_dedupe`'s second arm, which nothing else reaches.
+
+    `test_two_players_sharing_a_name_are_not_collapsed` looks like this test and
+    is not: both its rows carry distinct `otc_id`s, so it exercises the otc arm
+    twice and never touches the fallback. **`otc_id` is non-null on all 2,931
+    live rows, so this arm is unreachable today** — it is defensive code against
+    the column going nullable, and it is fixtured rather than deleted because
+    the failure it prevents (two players collapsing into one) is silent.
+
+    **100% branch coverage does not see this.** The key is a conditional
+    expression, and `coverage.py` emits no branch arc for one — so the `else`
+    arm can be entirely unexecuted while the module reports 100% and every
+    mutant in it survives. That is a general lesson about the metric, not a
+    quirk of this collector.
+    """
+    serve(
+        [
+            row("Josh Allen", otc_id=None, position="QB", team="Bills"),
+            row("Josh Allen", otc_id=None, position="ED", team="Jaguars"),
+        ]
+    )
+
+    read = await fetch()
+
+    assert len(read.rows) == 2, "two different players were collapsed into one"
+    assert {r.otc_position for r in read.rows} == {"QB", "ED"}
+    assert read.duplicate_active == 0
+
+
+@respx.mock
+async def test_the_fallback_key_still_collapses_ONE_player_seen_twice():
+    """The other arm of the fallback: same name AND same position with no
+    `otc_id` is one player filed twice, and must collapse. Without this,
+    "two players are not collapsed" is satisfied by a fallback that never
+    collapses anything at all."""
+    serve(
+        [
+            row("Josh Allen", otc_id=None, position="QB", year_signed=2021, value=30.0),
+            row("Josh Allen", otc_id=None, position="QB", year_signed=2024, value=60.0),
+        ]
+    )
+
+    read = await fetch()
+
+    assert len(read.rows) == 1
+    assert read.rows[0].year_signed == 2024
+    assert read.duplicate_active == 1
+
+
+@respx.mock
 async def test_the_otc_id_is_normalised_to_text():
     """int32 in the parquet, a string in the CSV this collector used to read.
     Normalised here so the published `otc_player_id` has one type regardless of

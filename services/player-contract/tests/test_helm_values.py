@@ -63,13 +63,42 @@ def test_the_identity_seam_is_pointed_at_the_real_crosswalk():
 
 
 def test_capture_is_disabled():
-    """Not merely the scaffolder's default — a decision. The upstream `.csv.gz`
-    has not been regenerated since 2022-05-29 while the release around it is
-    refreshed daily, so a loop buys no freshness and writes 2022 contracts into
-    an append-only lake. `broadcast-context`'s vacuous-guard exception does not
-    apply: nothing here reads a prior lake snapshot back, so one dispatched
-    `/refresh` produces exactly what a season-long loop would."""
+    """Not merely the scaffolder's default — a decision, and **not** an argument
+    from staleness: the upstream parquet is rebuilt daily and is current.
+
+    Two reasons, both still live. `broadcast-context`'s vacuous-guard exception
+    does not apply, because nothing here reads a prior lake snapshot back, so
+    one dispatched `/refresh` produces exactly what a season-long loop would.
+    And this would be the third collector reaching a third party from its loop
+    while failing closed on the scope — so on a cluster where `roster-scope` has
+    not published, every pass would write a `present: 0` envelope and count a
+    failure.
+    """
     assert _env("CAPTURE_ENABLED") == "false"
+
+
+def test_the_capture_rationale_does_not_argue_from_the_abandoned_CSV():
+    """The rationale in the values file is what an operator reads before
+    flipping the flag, and it drifted once already.
+
+    It used to lead with "the `.csv.gz` has not been regenerated since
+    2022-05-29" — true when this collector read that artifact, false the moment
+    it moved to the parquet. The failure mode is specific: an operator checks
+    the stated reason, finds a daily-rebuilt document, concludes the whole
+    rationale is obsolete, and flips the flag — discarding the two reasons that
+    ARE still valid. Prose cannot be unit-tested, but a rationale citing a
+    document the collector does not read can be.
+    """
+    values = (ROOT / "helm" / "values" / "player-contract" / "values.yaml").read_text(
+        encoding="utf-8"
+    )
+    rationale = values[
+        values.index("Deliberately false") : values.index("CAPTURE_ENABLED")
+    ]
+    assert "1.13 MiB" not in rationale, "the CSV's wire size is quoted as this feed's"
+    assert "the staleness does" not in rationale, (
+        "staleness is still named as the deciding factor; the parquet is current"
+    )
 
 
 def test_there_is_no_smoke_hook_to_dispatch_a_refresh():

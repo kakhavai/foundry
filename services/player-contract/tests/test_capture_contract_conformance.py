@@ -245,6 +245,94 @@ async def test_a_cap_field_absent_for_THIS_season_is_reasoned_as_a_ROW_gap(lake)
 
 
 @respx.mock
+async def test_a_ZERO_or_FALSE_field_is_present_data_and_gets_no_null_reason(lake):
+    """The reason predicate must test `is None`, never truthiness.
+
+    `if not signal[name]` reads identically and is wrong for the most common
+    rows in the league. Against the live document it would stamp
+    `absent_in_upstream_row` on:
+
+    * `seasons_remaining` for the **1,273 players in a contract year**, whose
+      value is exactly `0`;
+    * `is_contract_year` for everyone it is `False` for — most of the league;
+    * `guaranteed_total_usd` for the **778 rows with no guarantee**, where `0`
+      is the fact;
+    * every zero `signing_bonus_proration_usd`.
+
+    That is precisely the machine-readable falsehood the whole sourced-cap-field
+    expansion was justified by preventing: it tells a consumer "this row did not
+    say" about a number the row states outright. Every other test here inspects
+    a field that is either null or truthy, so none of them can see it — the
+    mutant survived all 166 before this existed.
+
+    Bravo is the fixture: his deal ends in the capture season, so
+    `seasons_remaining` is `0` and `is_contract_year` is `True`, and his 2026
+    cap entry carries a proration of exactly `0.0`.
+    """
+    mock_upstream(respx.mock)
+    mock_identity(respx.mock)
+
+    envelope = (await capture(lake))[CONTRACT_STATUS]
+    bravo = next(
+        s for s in envelope.signals if s["player_id"] == CANONICAL_IDS["Bravo Runner"]
+    )
+    alpha = next(
+        s for s in envelope.signals if s["player_id"] == CANONICAL_IDS["Alpha Passer"]
+    )
+
+    # Preconditions, so the assertions below cannot pass vacuously against a
+    # fixture that quietly stopped producing falsy values.
+    assert bravo["seasons_remaining"] == 0
+    assert bravo["signing_bonus_proration_usd"] == 0
+    assert bravo["is_contract_year"] is True
+    assert alpha["is_contract_year"] is False
+
+    reasons = bravo["null_field_reasons"]
+    assert "seasons_remaining" not in reasons, (
+        "a contract year (seasons_remaining == 0) was reported as data the "
+        "upstream did not supply"
+    )
+    assert "signing_bonus_proration_usd" not in reasons
+    assert "is_contract_year" not in alpha["null_field_reasons"]
+
+
+@respx.mock
+async def test_a_zero_guarantee_is_data_not_an_absent_field(lake):
+    """The same predicate, on the field where zero is most obviously a fact:
+    778 active rows carry `guaranteed = 0`, meaning a deal with no guarantee.
+    Its own test because it needs its own fixture — every scoped player in the
+    default population has a non-zero guarantee."""
+    mock_upstream(
+        respx.mock,
+        body=contracts_parquet(
+            [
+                row(
+                    "Alpha Passer",
+                    otc_id=1,
+                    team="Packers",
+                    year_signed=2025,
+                    years=5,
+                    guaranteed=0.0,
+                    gsis_id="00-0000001",
+                )
+            ]
+        ),
+    )
+    mock_identity(respx.mock)
+
+    envelope = (await capture(lake))[CONTRACT_STATUS]
+    alpha = next(
+        s for s in envelope.signals if s["player_id"] == CANONICAL_IDS["Alpha Passer"]
+    )
+
+    assert alpha["guaranteed_total_usd"] == 0
+    assert "guaranteed_total_usd" not in alpha["null_field_reasons"], (
+        "a deal with no guarantee was reported as one whose guarantee the "
+        "upstream did not state"
+    )
+
+
+@respx.mock
 async def test_all_three_reasons_can_appear_on_ONE_row(lake):
     """Echo carries every arm at once: a blank `guaranteed` and an ambiguous
     multi-club `team` (row gaps), no cap table at all (also a row gap),
