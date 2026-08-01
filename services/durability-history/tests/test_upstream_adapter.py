@@ -69,6 +69,31 @@ def test_the_recurrence_rule_is_part_of_the_adapter_label():
     assert f"{upstream.RECURRENCE_WINDOW_DAYS}d_of_return" in upstream.UPSTREAM_ADAPTER
 
 
+def test_the_label_DESCRIBES_the_rule_the_code_actually_runs():
+    """A label is not decoration and it is not free text.
+
+    The spec's whole reason for demanding the rule in `upstream.adapter` is that
+    a consumer can tell a rule change from a player change. `events.py` keys
+    recurrence on `injury_site`; a label saying `same_body_part` sends a consumer
+    reproducing `is_recurrence_of` to a different answer — a calf strain linked
+    to a quad strain — and they conclude the players changed.
+
+    The label said `same_body_part` while the code keyed on `injury_site` for one
+    review cycle. This is the assertion that would have caught it.
+    """
+    assert "same_injury_site" in upstream.UPSTREAM_ADAPTER, upstream.UPSTREAM_ADAPTER
+    assert "same_body_part" not in upstream.UPSTREAM_ADAPTER, (
+        "the emitted rule misdescribes the rule the code runs"
+    )
+
+    # And the code really does key on the site rather than the coarse body part:
+    # a calf and a quad are both `body_part: other`, so the distinction the label
+    # now claims is only observable through `injury_site`.
+    from durability_history.events import site_body_part
+
+    assert site_body_part("calf") == site_body_part("quadricep") == "other"
+
+
 # ── parsing ──────────────────────────────────────────────────────────────────
 
 
