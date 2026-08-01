@@ -62,11 +62,69 @@ row, rather than fabricated, defaulted to `false`, or dropped from the schema:
 | `assignment_announced_at` | a forward-looking assignment feed with a publication timestamp — Football Zebras publishes crews midweek, but scraped, not licensed |
 | `is_provisional` | the same feed; a post-game record cannot be provisional |
 
-The post-game nature also sets a trap for coverage, and the trap is the reason
-`EXPECTED_FLOOR` is what it is. In week 3 the officials feed describes 48 games
-of 272. Declaring the expectation from what it published would report
-`expected: 48, present: 48`, ratio 1.0, all season, with most of the season
-missing. The floor is 272 games and 17 crews, independent of any fetch.
+## Spec deviations
+
+Three, all deliberate. The first two were disclosed from the start; the third
+was not, and should have been.
+
+### 1. The crosswalk is published, so none is maintained here
+
+The spec's Adapter notes say *"the join is by hand-maintained crosswalk"*. That
+is a factual premise rather than a requirement, and it is wrong: `games.csv`
+ships `old_game_id`, and all 272 games of the 2025 regular season join. Building
+the implied table would have created an in-repo file with no owner that rots
+silently the first time nflverse adds a game.
+
+### 2. Each rate field is an object, not a float
+
+The spec's field table lists `is_shrunk` (bool) and `rate_stderr` (float) as
+**scalar** rows. The Adapter notes say, normatively, *"Every rate must ship with
+`games_sampled` and `rate_stderr`"*. Those two cannot both be honoured: with one
+scalar `rate_stderr`, exactly one of the eight rates ships with it. The
+implementation follows the clause phrased as a requirement.
+
+**This is a type change on eight declared fields**, and worth stating plainly
+rather than soft-pedalling: a consumer written literally from the field table
+doing `row["dpi_per_game"] * weight` gets a `TypeError`, not a number. The field
+*names* are preserved at the top level and the shape is pinned by the committed
+schema with `additionalProperties: false`, so it is a contract rather than a
+convention — but it is a breaking read for anyone who typed against the table.
+The rate object's own key for the spec's `rate_stderr` is **`stderr`**; see the
+field-mapping note below.
+
+### 3. `coverage.expected` overrides the spec's own definition
+
+The spec says:
+
+> one `game_crew_assignment` for every game in scope **whose crew has been
+> published**, and a `crew_tendency_rates` record for every distinct `crew_id`
+> **appearing in those assignments**.
+
+Read literally that is a **fetch-derived expectation** — precisely what
+`CoverageAccumulator`'s floor exists to refuse. Because `officials.csv` is
+post-game, following it would report `expected: 48, present: 48`, ratio 1.0 in
+week 3, with 82% of the season missing and nothing anywhere saying so.
+
+So `EXPECTED_FLOOR` declares 272 games and 17 crews independently of any fetch,
+and a game whose crew has not been published yet is expected-and-missing with
+reason `crew_not_published`.
+
+**A platform rule outranks a per-collector spec line.** "`expected` never
+derives from what succeeded" is stated in `collector_core.coverage`'s module
+docstring and in `CLAUDE.md`, it is enforced fleet-wide, and the pathology it
+prevents is exactly the one this collector's upstream would produce. The
+deviation is deliberate and this is where it is recorded — the previous revision
+of this file described the fetch-derived reading only as "a trap", without
+noting that the spec asks for it.
+
+### Field-name mapping
+
+One rename, for a consumer reading the spec's field table:
+
+| Spec field | Emitted as |
+|---|---|
+| `rate_stderr` | `stderr`, inside each rate object |
+| `is_shrunk` | `is_shrunk`, inside each rate object |
 
 ## The two guards
 
@@ -133,8 +191,8 @@ over the real 2025 file decided it, and both went into
 | | bandwidth | CPU | peak memory |
 |---|---|---|---|
 | `.csv`, full rows | 93.4 MiB | — | flat |
-| `.csv.gz`, full 372-column rows | 18.2 MiB | 9.8 s | flat |
-| `.csv.gz`, 6 of 372 columns | 18.2 MiB | **3.8 s** | flat |
+| `.csv.gz`, full 372-column rows | 18.2 MiB | 2.8 s | flat |
+| `.csv.gz`, 6 of 372 columns | 18.2 MiB | **1.5 s** | flat |
 
 ## Tests
 

@@ -180,6 +180,52 @@ async def test_a_repeated_degraded_pass_stops_re_appending_the_assignments():
 
 
 @respx.mock
+async def test_the_degraded_gate_is_scoped_per_week_like_the_healthy_one():
+    """The degraded gate keys on `scope["week"]`, not on a constant.
+
+    `test_the_gate_is_scoped_per_season_and_week` protects the healthy path.
+    The degraded path had no equivalent, and **every** degraded test ran at
+    `week=1` — the one week where a hardcoded literal and the real variable
+    coincide. So hardcoding either side of the degraded gate passed all 116
+    tests.
+
+    Both slips are live regressions and they fail in opposite directions:
+
+    - hardcode the **read** and the gate never fires for weeks 2..18, which
+      restores the byte-identical daily append this whole branch exists to
+      prevent, for every week but one;
+    - hardcode the **write** and week 2's content is suppressed by week 1's
+      digest — a cross-scope false suppression, which is worse, because the
+      lake silently loses a week rather than gaining duplicates.
+
+    Two scopes are two lake partitions, so this asserts both halves: week 2
+    publishes even though week 1 already did (no false suppression), and a
+    *repeated* week 2 is then suppressed (the gate really is armed at a week
+    that is not 1).
+    """
+    games = season_of()
+    lake = SpyLake()
+
+    mock_upstreams(games, pbp_response=httpx.Response(404))
+    async with httpx.AsyncClient() as client:
+        await capture_officiating(SEASON, 1, client=client, lake=lake, now=NOW)
+    assert len(lake.writes) == 2
+
+    # A different week is a different lake partition: identical content there
+    # is a legitimate object, not a duplicate.
+    async with httpx.AsyncClient() as client:
+        await capture_officiating(SEASON, 2, client=client, lake=lake, now=NOW)
+    assert len(lake.writes) == 4, "week 2 was suppressed by week 1's digest"
+
+    # And the gate is armed at week 2, not only at week 1.
+    with pytest.raises(UpstreamUnchanged):
+        async with httpx.AsyncClient() as client:
+            await capture_officiating(SEASON, 2, client=client, lake=lake, now=NOW)
+
+    assert len(lake.writes) == 4, "a byte-identical week-2 envelope was appended"
+
+
+@respx.mock
 async def test_a_degraded_pass_whose_write_failed_still_retries():
     """The durability gate applies on the degraded path too.
 
@@ -262,15 +308,24 @@ async def test_the_degraded_pass_never_records_the_rates_digest():
 
 
 @respx.mock
-async def test_a_degraded_assignment_envelope_can_never_match_a_healthy_one():
+async def test_a_degraded_envelope_cannot_suppress_a_pass_that_sampled_games():
     """The structural property that makes the degraded path safe, pinned.
 
-    `_capture_without_penalties` deliberately records no digest, and the test
-    above proves the next healthy pass still publishes. But there is a *second*
-    reason that holds, and it is load-bearing enough to be checked rather than
-    relied on: `games_sampled` on every `game_crew_assignment` row is 0 when
-    play-by-play was unavailable and non-zero when it was not, so the two
-    envelopes cannot be byte-identical even if a digest were recorded.
+    `games_sampled` on every `game_crew_assignment` row is 0 when play-by-play
+    was unavailable, and non-zero on a pass that actually sampled games. So a
+    degraded envelope and a *sampling* healthy envelope can never be
+    byte-identical, and the degraded digest recorded by
+    `_capture_without_penalties` can never suppress one.
+
+    **Scoped deliberately: "a pass that sampled games", not "any healthy
+    pass".** A healthy pass whose play-by-play carries no game this season's
+    crews worked reports `games_sampled: 0` too, and its assignment envelope
+    *is* identical and *is* suppressed — correctly, because byte-identical rows
+    carry no information. `test_the_degraded_pass_never_records_the_rates_digest`
+    is that case, and it is why the rates digest is never recorded here: the
+    rates envelope in that scenario genuinely differs and must still be written.
+    An earlier revision of this test claimed the invariant absolutely and was
+    contradicted by its own sibling.
 
     Found by mutation. Adding a digest record to the degraded path is a
     survivor — an equivalent mutant — *only* because of this field. Drop

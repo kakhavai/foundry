@@ -636,7 +636,8 @@ it `malformed` and it needs no new metric label.
 
 Rule 2 applied to **width** rather than length. Play-by-play carries 372
 columns and `officiating` reads six of them; building the other 366 into a dict
-for each of 48,771 rows measured **9.8s** of CPU per pass against **3.8s**.
+for each of 48,771 rows measured **2.8s** of CPU per pass against **1.5s**
+(median of three runs through the shipped path against the real artifact).
 
 ```python
 COLUMNS = frozenset({"game_id", "season_type", "play_type", "penalty", ...})

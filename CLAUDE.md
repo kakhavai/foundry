@@ -417,7 +417,7 @@ for a `.csv.gz` *artifact* (httpx cannot inflate one, the peak-memory bound
 lives in the library rather than in the transport, and a **truncated** body
 raises `UpstreamTruncated` instead of silently returning half a document), and
 **`columns=`** to narrow the row dicts on a wide upstream (372 columns cost
-9.8s of CPU a pass against 3.8s for the six `officiating` reads).
+2.8s of CPU a pass against 1.5s for the six `officiating` reads).
 
 **An object-store outage costs freshness, not availability — same as an
 upstream one.** `publish_capture` records a failed lake write on

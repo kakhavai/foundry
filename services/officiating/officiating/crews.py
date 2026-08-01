@@ -149,12 +149,35 @@ def undersized(assignment: CrewAssignment) -> bool:
 
     Not an error and not a dropped row — the assignment is still published,
     because who worked the game is a fact even when the feed is incomplete
-    about it. `capture.py` counts these onto
-    `officiating_undersized_crews` and records
-    `REASON_UNDERSIZED_CREW` on the envelope, so a feed that quietly starts
-    omitting positions is visible before it distorts continuity — which it
-    would, because a six-person crew's continuity is a mean over six terms
-    rather than seven.
+    about it.
+
+    **The reliable channel is the gauge, not the envelope.** `capture.py`
+    records every one of these onto `officiating_undersized_crews`, which is
+    written outside the errors array and is therefore exact on every pass. It
+    *also* adds a per-key `REASON_UNDERSIZED_CREW` entry to the envelope, and
+    that entry is **best-effort**: it goes through `add_error`, so it queues
+    behind the routine `crew_not_published` entries and the 50-entry cap drops
+    it in the state this collector spends most of a season in. Measured, on a
+    12-week schedule with 2 weeks played and one six-person crew: 51 entries,
+    49 of them `crew_not_published`, `undersized_crew` **absent**. A lake
+    consumer reading only the archived object will not see it; a consumer
+    reading the gauge always will.
+
+    That is deliberate rather than an oversight, and the asymmetry with the
+    continuity alarm — which is also per-assignment but uses
+    `add_priority_error` and is tested to survive the cap — is the point.
+    The two say different kinds of thing. The continuity alarm asserts that a
+    rate **being served right now is describing the wrong people**: a
+    correctness claim about published output, where losing the entry loses the
+    only record that the output is suspect. An undersized crew is a per-key
+    observation about one game's feed row, of exactly the kind the cap exists
+    to bound, and its aggregate — which is the part that matters, because
+    eleven of them in a season is a feed shape change — is carried losslessly
+    by the gauge.
+
+    What it makes visible either way: a feed that quietly starts omitting
+    positions, before it distorts continuity — which it would, because a
+    six-person crew's continuity is a mean over six terms rather than seven.
 
     **This is not hypothetical, and it is why the gauge exists rather than an
     assertion.** Measured across the live feed, every season 2015-2025: 2022

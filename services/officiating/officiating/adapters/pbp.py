@@ -14,13 +14,18 @@ Both measured live (2026-08-01), both serving an `ETag` and answering
 **This adapter reads the gzipped one, projected to the six columns below.**
 Measured over the real 2025 file through the shipped code path:
 
-- streaming `.csv.gz` and building a full 372-key dict per row: **9.8s** CPU
-- the same, projected to the six columns below: **3.8s** CPU
+- streaming `.csv.gz` and building a full 372-key dict per row: **2.8s** CPU
+- the same, projected to the six columns below: **1.5s** CPU
+
+Median of three runs each, timed through `stream_csv_dicts` itself against the
+real 2025 artifact, with no profiler attached. An earlier revision of this
+docstring said 9.8s/3.8s; those runs had `tracemalloc` active, which inflates
+allocation-heavy work and inflates the 372-column arm the most.
 
 Identical peak memory either way — the rows are yielded one at a time
 regardless, so the projection buys CPU and allocation churn, not headroom. So
 the compressed artifact is 5.1x less bandwidth and the projection is a further
-2.6x off the CPU. Taking the uncompressed file with the existing helper was the
+1.9x off the CPU. Taking the uncompressed file with the existing helper was the
 cheap-to-build option and would have cost 93.4 MiB on every changed poll,
 forever, on a collector whose entire product is eight numbers per crew. Both
 options went into the shared library rather than this adapter because

@@ -475,4 +475,15 @@ collectors:
     # games and 17 crews rather than derived: in week 3 the officials feed
     # describes 48 games, and deriving from it would report ratio 1.0 with
     # 82% of the season absent.
+    #
+    # That floor is a DELIBERATE DEVIATION from the phase doc, which defines
+    # coverage.expected as one record per game "whose crew has been
+    # published" — i.e. the fetch-derived expectation the platform rule
+    # refuses. "expected never derives from what succeeded" is fleet-wide
+    # (collector_core.coverage, CLAUDE.md) and outranks a per-collector spec
+    # line. Two other deviations are disclosed in services/officiating/
+    # README.md: the crosswalk is published rather than hand-maintained, and
+    # each rate field is an object rather than a float because the spec's own
+    # "every rate must ship with games_sampled and rate_stderr" is
+    # unsatisfiable with a single scalar rate_stderr.
     depends_on: [schedule-context]

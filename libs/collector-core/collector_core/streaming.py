@@ -30,9 +30,9 @@ makes a **short** read detectable for the first time — a gzip member has a
 trailer, and `UpstreamTruncated` is what asks for it.
 
 **`columns=`** keeps only the columns the caller reads. Rule 2 applied to
-width rather than length: measured over the real artifact through the shipped
-path, reading all 372 columns costs **9.8s** of CPU per pass against **3.8s**
-for the six columns `officiating` actually reads.
+width rather than length: measured through this function against the real
+artifact, reading all 372 columns costs **2.8s** of CPU per pass against
+**1.5s** for the six columns `officiating` actually reads.
 """
 
 import codecs
@@ -189,13 +189,20 @@ async def _text_chunks(
     if tail:
         yield tail
 
-    # BEFORE the caller sees a complete read. `eof` is True only once the gzip
-    # trailer has been consumed, so this is the one place the difference
-    # between "the document ended" and "the bytes ran out" is observable. It
-    # comes after the flush deliberately: a truncated body should still be
-    # refused even though everything decodable has already been yielded, and
-    # `stream_csv_dicts` turns that into a raise before its own `commit()`, so
-    # no ETag is stored for a partial document.
+    # `eof` is True only once the gzip trailer has been consumed, so this is
+    # the one place the difference between "the document ended" and "the bytes
+    # ran out" is observable.
+    #
+    # **Its position relative to the flush above does not matter**, and an
+    # earlier revision of this comment claimed it did. `flush()` consumes no
+    # further input, so `eof` reads identically on either side of it --
+    # verified by moving the check and watching all 333 tests still pass, which
+    # makes that a true equivalent mutant. What IS load-bearing is that the
+    # check runs **before `stream_csv_dicts` reaches its `commit()`**, which it
+    # does by being inside this generator: the raise propagates out of the
+    # caller's `async for`, so no ETag is stored for a partial document and the
+    # next pass re-downloads unconditionally. Pinned by
+    # `test_a_truncated_read_does_not_commit_an_etag`.
     if not inflater.eof:
         raise UpstreamTruncated(
             f"{url}: gzip stream ended before its trailer; the document is "
@@ -252,8 +259,9 @@ async def stream_csv_dicts(
     header is still validated in full, so `required_columns` is unaffected —
     this narrows the **row dicts**, not the schema check. That is a real cost,
     not a tidiness preference: play-by-play carries 372 columns, and building a
-    372-key dict for each of 48,771 rows measured **9.8s** of CPU against
-    **3.8s** for the six columns `officiating` actually reads. The rows are
+    372-key dict for each of 48,771 rows measured **2.8s** of CPU against
+    **1.5s** for the six columns `officiating` actually reads (median of three
+    runs through this function against the real artifact). The rows are
     yielded one at a time either way, so this is CPU and allocation churn
     rather than peak memory. A name in `columns` that the header does not carry
     is simply absent from the rows; pair it with `required_columns` when its

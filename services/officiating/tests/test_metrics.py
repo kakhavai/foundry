@@ -32,6 +32,7 @@ from .conftest import (
     SEASON,
     SpyLake,
     mock_upstreams,
+    officials_csv,
     season_of,
 )
 
@@ -245,6 +246,53 @@ async def test_a_short_crew_is_counted_and_published_rather_than_dropped(client)
     reasons = [e["reason"] for e in envelopes[ASSIGNMENT].errors]
     assert "undersized_crew" in reasons, reasons
     assert envelopes[ASSIGNMENT].coverage.present == 48, "counted as captured"
+
+
+@respx.mock
+async def test_the_undersized_gauge_survives_the_error_cap(client):
+    """The gauge is the reliable channel; the envelope entry is best-effort.
+
+    `undersized` goes onto the envelope through `add_error`, so it queues
+    behind the routine `crew_not_published` entries and the 50-entry cap drops
+    it in the state this collector spends most of a season in. The gauge is
+    written outside the array and is exact regardless.
+
+    Both halves are asserted, because the docstring in `crews.py` now claims
+    exactly this and a claim without a test is how the last overclaim got in:
+    the envelope entry is **gone**, and the count is still **right**.
+    """
+    schedule = season_of(crews=8, weeks=12)
+    played = [g for g in schedule if g.week <= 2]
+    short = [g for g in played if g.referee_id == "702" and g.week == 2][0]
+    short.positions = (
+        "Umpire",
+        "Down Judge",
+        "Line Judge",
+        "Field Judge",
+        "Side Judge",
+    )
+
+    mock_upstreams(
+        schedule, officials_response=httpx.Response(200, text=officials_csv(played))
+    )
+    async with httpx.AsyncClient() as http:
+        envelopes = await capture_officiating(
+            SEASON, 1, client=http, lake=SpyLake(), now=NOW
+        )
+    body = _scrape(client)
+
+    errors = envelopes[ASSIGNMENT].errors
+    assert any(e["reason"] == "errors_truncated" for e in errors), (
+        "the fixture must actually overflow the cap, or this proves nothing"
+    )
+    assert not any(e["reason"] == "undersized_crew" for e in errors), (
+        "if this starts passing, the entry now survives the cap and the "
+        "docstring in crews.py should be upgraded to claim it"
+    )
+    assert value(body, "officiating_undersized_crews") == 1.0
+    # And the assignment is published regardless of which channel reported it.
+    rows = {row["game_id"]: row for row in envelopes[ASSIGNMENT].signals}
+    assert len(rows[short.game_id]["crew_members"]) == 6
 
 
 @respx.mock

@@ -18,6 +18,19 @@ games and 17 crews, both independent of any fetch. A game the officials feed has
 not reached yet is `expect`ed and `fail`ed with `crew_not_published`, never
 quietly dropped from the universe.
 
+**This is a deliberate deviation from the spec, and the third one this collector
+takes.** The phase doc defines `coverage.expected` as "one
+`game_crew_assignment` for every game in scope *whose crew has been published*,
+and a `crew_tendency_rates` record for every distinct `crew_id` *appearing in
+those assignments*" — which, read literally, is the fetch-derived expectation
+described above. Against a post-game feed it produces ratio 1.0 all season.
+
+The platform rule wins: "`expected` never derives from what succeeded" is stated
+in `collector_core.coverage`'s module docstring and in CLAUDE.md, enforced
+fleet-wide, and aimed at exactly this pathology. A per-collector spec line does
+not override it. Recorded here and in the service README's "Spec deviations"
+section rather than left for a future reader to rediscover by diffing.
+
 --------------------------------------------------------------------------
 2. The two signal types fail independently
 --------------------------------------------------------------------------
@@ -689,11 +702,29 @@ async def _capture_without_penalties(
     the first healthy pass that actually computes rates.
 
     `game_crew_assignment` DOES record its digest, gated on the write landing
-    like every other. That is safe for a reason this collector can prove rather
-    than assert: `games_sampled` on every assignment row is 0 exactly when
-    play-by-play was unavailable and non-zero when it was not, so a degraded
-    envelope can never be byte-identical to a healthy one — pinned by
-    `test_a_degraded_assignment_envelope_can_never_match_a_healthy_one`.
+    like every other. It is safe to do so, but the reason is narrower than the
+    obvious one and the difference is worth stating precisely.
+
+    A degraded envelope carries `games_sampled: 0` on every row. A healthy pass
+    that **actually samples games** carries a non-zero count on at least one,
+    so the two cannot collide and a degraded digest can never suppress it —
+    pinned by `test_a_degraded_envelope_cannot_suppress_a_pass_that_sampled_games`.
+
+    That is *not* "never". A healthy pass whose play-by-play carries no game
+    this season's crews worked also produces `games_sampled: 0` everywhere, and
+    its assignment envelope **is** byte-identical to the degraded one and **is**
+    suppressed. Which is correct, and is the reason the two digests are treated
+    differently rather than a hole in the argument: byte-identical rows carry no
+    information, so not appending them is the right answer, while the *rates*
+    envelope in that scenario genuinely differs — `no_games_sampled` rather than
+    `penalties_unavailable`, and a different `upstream.source_ref` — is not
+    gated here, and does get written. `test_the_degraded_pass_never_records_the
+    _rates_digest` is that case, and it is why the rates digest is never
+    recorded on this path.
+
+    So the invariant is: a degraded envelope cannot suppress a healthy pass
+    **that sampled anything**, and where it can suppress one, the suppressed
+    content is identical and the informative half is published separately.
 
     Without it, the whole preseason is a byte-identical daily append.
     `play_by_play_<season>.csv.gz` does not exist until the season's first
