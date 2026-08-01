@@ -120,6 +120,46 @@ def test_a_malformed_as_of_is_422_not_an_empty_list(value):
     assert raised.value.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"game_id": "no-such-game"},
+        {"window_id": "no-such-window"},
+        {"flex_status": "no-such-status"},
+    ],
+)
+def test_a_malformed_as_of_is_422_even_when_a_row_filter_would_short_circuit(extra):
+    """**R3.** Validation must precede the equality filters.
+
+    With the `ROW_FILTERS` loop above the parse,
+    `?game_id=no-such-game&as_of=garbage` returned **200 and an empty list**:
+    the first row failed the `game_id` comparison and returned before the
+    malformed instant was ever looked at. A consumer who believes they are
+    getting point-in-time filtering silently is not — this collector's own
+    failure mode arriving through a typo instead of through a flex.
+    """
+    with pytest.raises(HTTPException) as raised:
+        signal_matches(row(), {**extra, "as_of": "definitely-not-a-date"})
+    assert raised.value.status_code == 422
+
+
+def test_a_matching_row_filter_does_not_hide_a_malformed_as_of_either():
+    """The other arm: the bug only showed when the filter MISMATCHED, so a
+    fixture that happens to match proves nothing about the ordering."""
+    with pytest.raises(HTTPException) as raised:
+        signal_matches(
+            row(), {"game_id": "2026_12_A_B", "as_of": "definitely-not-a-date"}
+        )
+    assert raised.value.status_code == 422
+
+
+def test_validation_does_not_override_a_mismatched_row_filter():
+    """Validating first must not mean *applying* first. A well-formed `as_of`
+    that would admit the row still loses to a `game_id` that does not match,
+    or the fix would have turned a filter conjunction into a disjunction."""
+    assert signal_matches(row(), {"game_id": "someone-else", "as_of": AFTER}) is False
+
+
 def test_a_non_utc_offset_is_accepted_and_compared_as_an_instant():
     """`2026-10-01T09:00:00-04:00` is 13:00Z, which is after the row's
     12:00Z observation. An implementation that string-compared, or that

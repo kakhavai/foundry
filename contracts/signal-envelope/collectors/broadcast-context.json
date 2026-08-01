@@ -134,7 +134,7 @@
           "format": "date-time"
         },
         "observed_window_count": {
-          "description": "Distinct published states this collector has evidence of for this game -- counting a change to its slot count, not only to its own window. 1 on a first capture. The spec's consistency check made readable from a single row: a flex_status other than original with this at 1 would be a record claiming a history it cannot evidence, and capture.py refuses to emit one. Note the converse does NOT hold: this can exceed 1 while flex_status stays original, because a slot-mate moving is a new published state and not a flex.",
+          "description": "Distinct WINDOWS this collector has observed this game in, counted over its own window transitions. 1 on a first capture, and 1 for a game that has never moved however many times its slot population changed around it. The spec's consistency check made readable from a single row, as a biconditional: observed_window_count == 1 if and only if flex_status == 'original'. A flex_status other than original with this at 1 would be a record claiming a history it cannot evidence, and capture.py refuses to emit one. It counts windows rather than published states deliberately -- once games_in_window became part of the point-in-time state, a state count would have reported 2 for a game that sat in one window the whole time, and no amount of contract text fixes a field name that contradicts what it counts.",
           "type": "integer",
           "minimum": 1
         },

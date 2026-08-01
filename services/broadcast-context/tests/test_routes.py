@@ -158,6 +158,53 @@ def test_a_malformed_as_of_is_422_through_the_route(client):
     assert client.get("/signals?as_of=yesterday").status_code == 422
 
 
+def test_a_row_filter_no_longer_swallows_a_malformed_as_of(client):
+    """**R3, through the HTTP surface.** This returned 200 with an empty list.
+
+    The row filter matched nothing, `signal_matches` returned before the
+    malformed instant was parsed, and the caller got a plausible-looking quiet
+    week instead of the error CLAUDE.md's `pos=FLEX` reasoning exists to
+    produce.
+    """
+    with respx.mock(assert_all_called=False) as router:
+        _mock_feed(router)
+        client.post("/refresh", json={"season": 2026, "week": 1})
+        wait_for_signals(client, count=len(SIGNAL_TYPES))
+
+    response = client.get("/signals?game_id=no-such-game&as_of=garbage")
+    assert response.status_code == 422
+    assert "as_of" in response.json()["detail"]
+
+
+def test_the_two_structural_as_of_validation_holes_are_pinned(client):
+    """Not a fix — a **disclosure with a test behind it**.
+
+    `signal_matches` is per-row, so a query reaching no row reaches no
+    validation. Two shapes therefore answer 200 with a malformed `as_of`, and
+    neither is closable from this collector: an empty cache has no rows at
+    all, and a `week` that does not match the envelope's scope is dropped by
+    the shared router before any row is considered. Closing them needs a
+    pre-filter seam in `collector-core`.
+
+    Pinned rather than left unsaid, so the module docstring's table cannot
+    quietly stop being true — and so this test fails loudly, asking to be
+    updated, if that seam ever arrives.
+    """
+    # No capture has run: the cache is empty.
+    assert client.get("/signals?as_of=garbage").status_code == 200
+
+    with respx.mock(assert_all_called=False) as router:
+        _mock_feed(router)
+        client.post("/refresh", json={"season": 2026, "week": 1})
+        wait_for_signals(client, count=len(SIGNAL_TYPES))
+
+    # Rows exist, but the envelope's scope is week 1, so `?week=12` drops it.
+    assert client.get("/signals?week=12&as_of=garbage").status_code == 200
+    # ...while the same malformed value against the scope that DOES match is
+    # the 422 above. Both halves, so this cannot pass by validating nothing.
+    assert client.get("/signals?week=1&as_of=garbage").status_code == 422
+
+
 def test_the_declared_filters_are_exactly_what_catalog_publishes(client):
     body = client.get("/catalog").json()
     assert tuple(body["filters"]) == SUPPORTED_FILTERS

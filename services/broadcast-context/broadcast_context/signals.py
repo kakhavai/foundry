@@ -28,6 +28,26 @@ a disclosed deviation, argued in the README, and it has three parts:
    means the 422 fires only when rows happen to exist, so the same query
    answers 200 against an empty cache and 422 against a populated one. A guard
    whose firing depends on cache state is not a guard.
+
+   **That objection applies to the malformed-`as_of` 422 this module DOES
+   implement, and two of its three holes are unfixable from here.** Stated
+   rather than left for a reviewer to find:
+
+   * `?as_of=garbage` with rows present — **422**. The predicate runs.
+   * `?game_id=nope&as_of=garbage` with rows present — **422**. This used to
+     be a 200: the equality filter returned before the instant was parsed.
+     Fixed by validating ahead of the `ROW_FILTERS` loop.
+   * `?as_of=garbage` against an **empty cache** — **200**. `signal_matches`
+     is never invoked, because there are no rows to invoke it on.
+   * `?week=12&as_of=garbage` when the cache holds another week — **200**.
+     The shared router drops the envelope on scope before any row is reached.
+
+   The last two are structural: `CollectorSpec` exposes one hook and it is
+   per-row, so a query that reaches no row reaches no validation. Closing them
+   needs a pre-filter seam in `collector-core` — out of scope here, and the
+   concrete thing that seam would buy if "require `as_of`" is ever revisited.
+   `tests/test_as_of.py` pins all four, the two residuals included, so this
+   table cannot quietly stop being true.
 3. **Every row is self-describing, so a consumer can filter point-in-time
    without `as_of` at all.** `first_observed_at`, `flex_status`,
    `previous_window_id`, `observed_window_count` and `point_in_time_basis`
@@ -146,11 +166,23 @@ def signal_matches(row: dict, params: Mapping[str, str]) -> bool:
     `params` values arrive from the query string and are therefore **always
     strings**, while a row's value may well be an int. `str()` on the row side
     is the fix, and forgetting it is the single most common bug here.
-    """
-    for key in ROW_FILTERS:
-        if key in params and str(row.get(key)) != params[key]:
-            return False
 
+    **`as_of` is validated FIRST, before any equality filter can return.**
+    That ordering is the whole of it, and getting it wrong was a real bug:
+    with the `ROW_FILTERS` loop above the parse,
+    `?game_id=no-such-game&as_of=garbage` returned **200 and an empty list**,
+    because the first row failed the `game_id` comparison and the malformed
+    instant was never looked at. A consumer who believes they are getting
+    point-in-time filtering silently is not — which is this collector's own
+    failure mode arriving through a typo instead of through a flex, and it is
+    the `pos=FLEX` "looks like a quiet week" failure CLAUDE.md names.
+
+    Validation is deliberately separated from application: the parse happens
+    unconditionally, the comparison only after the equality filters have had
+    their say, so a mismatched `game_id` still wins over an `as_of` that would
+    have admitted the row.
+    """
+    as_of: datetime | None = None
     if AS_OF in params:
         as_of = _parse_instant(params[AS_OF])
         if as_of is None:
@@ -161,6 +193,12 @@ def signal_matches(row: dict, params: Mapping[str, str]) -> bool:
                     f"offset, e.g. 2026-09-15T12:00:00Z; got {params[AS_OF]!r}"
                 ),
             )
+
+    for key in ROW_FILTERS:
+        if key in params and str(row.get(key)) != params[key]:
+            return False
+
+    if as_of is not None:
         return _known_by(row, as_of)
 
     return True

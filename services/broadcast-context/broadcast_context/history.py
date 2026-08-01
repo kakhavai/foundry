@@ -149,7 +149,24 @@ class FlexVerdict:
 
     @property
     def observed_window_count(self) -> int:
-        return len(self.evidence)
+        """How many distinct WINDOWS this game has been observed in.
+
+        Counted over `_window_transitions`, not over `evidence`. Once
+        `games_in_window` joined the observed state, `len(evidence)` counted
+        published *states* — so a game whose slot-mate moved reported
+        `observed_window_count: 2` while sitting in one window the whole time,
+        and the field's name contradicted what it counted. A contract text
+        saying otherwise does not help: the name is what gets read on a
+        dashboard.
+
+        Defined this way it restores a biconditional a consumer can check on a
+        single row: **`observed_window_count == 1` if and only if
+        `flex_status == "original"`**, because `derive_flex` returns
+        `original` exactly when there are fewer than two transitions. The
+        state count is still available internally as `len(evidence)`; nothing
+        needed it on the wire.
+        """
+        return len(_window_transitions(self.evidence))
 
 
 def classify_transition(previous: str | None, current: str | None) -> str:
@@ -181,8 +198,29 @@ def _window_transitions(
     different game moved, and this one did not. Reading `chain[-2]` directly
     would then report `time_changed` for a game whose kickoff never shifted,
     because `classify_transition` returns `time_changed` whenever the two
-    windows are equal. That is a fabricated flex, and it would then need
-    evidence it does not have.
+    windows are equal.
+
+    ------------------------------------------------------------------
+    COUPLED WITH `flex_is_evidenced`'s last line. Change one and not the
+    other and you get one of two different bugs — both built and run.
+    ------------------------------------------------------------------
+
+    Take a game whose slot-mate flexed away while it did not move:
+
+    * **Both halves one-dimensional** — no collapse here, evidence on
+      `broadcast_state`. The pass **fabricates**: `flex_status: time_changed`,
+      `previous_window_id: sun_late`, row published, coverage unaffected. A
+      flex invented for a game that never moved.
+    * **Only this half one-dimensional** — no collapse here, evidence already
+      tightened to `window_state`. The pass **refuses**: the row is dropped,
+      `coverage.present` falls, `flex_history_unevidenced` lands in `errors`,
+      and `broadcast_context_unevidenced_flex_claims` moves off the zero
+      `metrics.py` says it should sit at forever.
+
+    Those are two *different* incomplete designs, not one cascade, and the
+    second is the likelier accident: it is what a maintainer produces by
+    reading `flex_is_evidenced`'s "`window_state`, not `broadcast_state`" note
+    without ever finding this function. Hence the cross-reference at both ends.
     """
     collapsed: list[ObservedState] = []
     for state in chain:
@@ -272,6 +310,13 @@ def flex_is_evidenced(status: str, evidence: Sequence[ObservedState]) -> bool:
     `games_in_window` are evidence that a *different* game moved, and they
     must not be accepted as evidence that this one did.
 
+    **This line is coupled to `_window_transitions`, and tightening it alone
+    is worse than leaving both loose.** With classification still reading the
+    raw chain, a slot-mate's move is classified `time_changed` and then fails
+    this check, so the row is **refused** — coverage drops and
+    `broadcast_context_unevidenced_flex_claims` moves off zero. See that
+    function's docstring for the full table of what each half-fix produces.
+
     `original` claims nothing, so it needs no evidence and returns `True` on
     any chain including an empty one — the caller's own `all(...)` over rows
     is paired with a length assertion in the tests for exactly that reason.
@@ -296,13 +341,34 @@ class History:
 
     chains: dict[str, list[ObservedState]]
     truncated: int
-    # Games per week in the newest snapshot that actually carried rows. The
-    # baseline for "did this week SHRINK", which is the only cheap way to
+    # The most games this partition has ever been seen to hold for each week —
+    # a HIGH-WATER MARK across every snapshot read, not the newest one's count.
+    #
+    # It baselines the slate guard's shrink arm, which is the only cheap way to
     # notice a document truncated mid-stream: the tail week keeps 13-15 games
-    # that all have kickoffs, so neither of the slate guard's other two arms
-    # fires. Empty on a first capture, which correctly makes the check inert
-    # rather than a guess.
-    week_counts: dict[int, int]
+    # that all have kickoffs, so neither of the other two arms fires.
+    #
+    # **High-water rather than newest, because the arm has to describe a STATE
+    # and not an edge.** Against the newest count, a truncation that persists
+    # is flagged on the pass it appears and silent forever after: 16 -> 14
+    # flags, then 14 -> 14 compares equal, republishes `games_in_window: 1 /
+    # is_standalone: true` unflagged, and on a 24-hour cadence that is one day
+    # of warning for a permanent wrongness. `below_expected_floor` keeps
+    # firing, but that is envelope-level and a consumer reading rows sees
+    # nothing.
+    #
+    # The cost, and it is real: a week that legitimately shrinks — a game
+    # rescheduled into a different week — latches as incomplete. That is the
+    # withhold direction rather than the publish-something-wrong direction,
+    # which is the trade this collector makes everywhere else, and it
+    # self-heals once the high snapshot ages past MAX_HISTORY_SNAPSHOTS.
+    # nflverse represents the ordinary postponement as a blank `gametime`,
+    # which the unslotted-game arm already catches without this one.
+    #
+    # An empty `present: 0` failure envelope contributes nothing by
+    # construction: a max-merge over no rows cannot lower anything. That used
+    # to need an explicit `if rows:` guard.
+    week_high_water: dict[int, int]
 
 
 def _fold(
@@ -351,7 +417,7 @@ async def read_history(
     week: int,
     limit: int = MAX_HISTORY_SNAPSHOTS,
 ) -> History:
-    """Every game's chain of distinct observed states, plus two baselines.
+    """Every game's chain of distinct observed states, plus the slate baseline.
 
     Reads this collector's own partition of the append-only lake, oldest
     snapshot first — `lake_key` puts `captured_at` at the front of the object
@@ -376,7 +442,7 @@ async def read_history(
     truncated = max(0, len(keys) - limit)
 
     chains: dict[str, list[ObservedState]] = {}
-    week_counts: dict[int, int] = {}
+    high_water: dict[int, int] = {}
     for key in keys[len(keys) - min(len(keys), limit) :]:
         body = await aread(lake, key)
         captured_at = body.get("captured_at")
@@ -384,10 +450,8 @@ async def read_history(
             continue
         rows = body.get("signals") or ()
         _fold(chains, rows, captured_at)
-        if rows:
-            # `if rows` matters: `fail_capture` writes a `present: 0` envelope
-            # with an empty `signals` array, and letting that reset the
-            # baseline to {} would make the shrink check inert on exactly the
-            # pass after an outage — the pass most likely to be short.
-            week_counts = _week_counts(rows)
-    return History(chains=chains, truncated=truncated, week_counts=week_counts)
+        # Per snapshot, then max-merged — never summed across snapshots, which
+        # would grow without bound and flag every week forever.
+        for row_week, count in _week_counts(rows).items():
+            high_water[row_week] = max(high_water.get(row_week, 0), count)
+    return History(chains=chains, truncated=truncated, week_high_water=high_water)

@@ -229,7 +229,7 @@ class Slate:
 
 
 def build_slate(
-    games: Iterable, *, previous_week_counts: dict[int, int] | None = None
+    games: Iterable, *, week_high_water: dict[int, int] | None = None
 ) -> Slate:
     """Slot counts plus the weeks whose slate cannot be shown to be complete.
 
@@ -242,7 +242,7 @@ def build_slate(
     * **a regular-season week lists fewer than `MIN_REG_SEASON_WEEK_GAMES`
       games** (`below_minimum_games`) — the league cannot schedule fewer, so
       the document was truncated between the publisher and here.
-    * **a week holds fewer games than the last snapshot recorded for it**
+    * **a week holds fewer games than this partition has ever seen it hold**
       (`week_shrank`) — the arm above is a *floor*, not a completeness proof,
       and a stream truncated mid-document leaves the tail week with 13-15
       games that all have kickoffs. Reproduced: a 14-game week that lost one
@@ -251,16 +251,23 @@ def build_slate(
       no `incomplete_slate` anywhere — "the dangerous direction" this module
       exists to prevent, arriving through the gap between the first two arms.
 
-    `previous_week_counts` comes from the newest lake snapshot that carried
-    rows (`History.week_counts`). It is empty on a first capture, which makes
-    the third arm inert rather than a guess — a collector with no baseline
-    must not invent one.
+    `week_high_water` is a **high-water mark** over every snapshot read, not
+    the previous pass's count (`History.week_high_water`). Comparing against
+    the previous count detects the *edge* and not the *state*: 16 -> 14 flags
+    and 14 -> 14 goes quiet, so a truncation that persists is announced for
+    one pass and then republishes wrong counts indefinitely. Its cost is that
+    a week which legitimately shrinks latches as incomplete — the withhold
+    direction, and self-healing once the high snapshot ages out of
+    `MAX_HISTORY_SNAPSHOTS`.
+
+    It is empty on a first capture, which makes the third arm inert rather
+    than a guess — a collector with no baseline must not invent one.
 
     All three are computed over the games the feed LISTED, never over the rows
     that were successfully built — deriving completeness from success would
     make a total mapping failure read as a complete slate of zero games.
     """
-    previous_week_counts = previous_week_counts or {}
+    week_high_water = week_high_water or {}
     counts = Counter(game.kickoff_at for game in games if game.kickoff_at is not None)
 
     by_week: dict[int, list] = defaultdict(list)
@@ -276,7 +283,7 @@ def build_slate(
         if regular and len(regular) < MIN_REG_SEASON_WEEK_GAMES:
             reasons[week] = SLATE_BELOW_MINIMUM_GAMES
             continue
-        if len(week_games) < previous_week_counts.get(week, 0):
+        if len(week_games) < week_high_water.get(week, 0):
             reasons[week] = SLATE_WEEK_SHRANK
 
     return Slate(

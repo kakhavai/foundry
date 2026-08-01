@@ -51,10 +51,13 @@ where that claim becomes the evidence the next pass reads back.
 The spec: *"a partial fetch produces a wrong value for every game in the
 window, not just the missing one"*. `windows.build_slate` decides which weeks
 can be shown to be complete, on three findings — an unslotted game, a
-regular-season week under the 13-game floor, and a week that **shrank** since
-the last snapshot. The third exists because 13 is a floor rather than a
-completeness proof: a stream truncated mid-document leaves the tail week with
-13-15 games that all have kickoffs, and neither other arm fires. For every
+regular-season week under the 13-game floor, and a week holding fewer games
+than this partition has ever seen it hold. The third exists because 13 is a
+floor rather than a completeness proof: a stream truncated mid-document leaves
+the tail week with 13-15 games that all have kickoffs, and neither other arm
+fires. It compares against a high-water mark rather than the previous pass so
+that it describes a *state* — a truncation that persists stays flagged instead
+of going quiet after one pass. For every
 game in a week that cannot be shown complete, `games_in_window`,
 `is_standalone` and `distribution` are **null with a reason** rather than a
 plausible count. An undercount is the dangerous direction: it manufactures
@@ -336,7 +339,7 @@ def _build_envelope(
     deadline: datetime | None,
 ) -> tuple[Envelope, list[dict]]:
     """Every listed game as a row, with coverage accounted alongside."""
-    slate = build_slate(games, previous_week_counts=history.week_counts)
+    slate = build_slate(games, week_high_water=history.week_high_water)
     acc = CoverageAccumulator(floor=EXPECTED_FLOOR[SIGNAL])
     now_iso = _rfc3339(now)
 

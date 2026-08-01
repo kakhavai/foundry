@@ -79,6 +79,17 @@ async def test_the_digest_table_is_keyed_by_the_capture_week():
     would never receive its first object at all. Both passes use the same
     `now` deliberately, so the rows really are byte-identical and only the key
     can tell them apart.
+
+    **This is the sole killer of the symmetric hardcoding mutant, and that is
+    the general lesson worth carrying to the next collector.** Parameterising
+    a test over a scoping key catches only the *asymmetric* half of a
+    key-scoping bug — where the read and the write disagree, so it misbehaves
+    at any single key. The *symmetric* half (both sides hardcoded, which is
+    the likelier real mistake, since a hardcoding touches the key expression
+    once) behaves consistently at every single key and passes every
+    parameterised run above. Catching it needs two distinct keys **live in one
+    process** with content the digest cannot distinguish. Parameterisation
+    gives you two runs of one key; you need one run of two keys.
     """
     lake = SpyLake()
     document = feed_document(week_rows(1))

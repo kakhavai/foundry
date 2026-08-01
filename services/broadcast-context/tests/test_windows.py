@@ -301,42 +301,52 @@ def test_an_empty_slate_reports_no_counts_and_no_false_completeness():
     assert slate.incomplete_reasons == {}
 
 
-def test_a_week_that_shrank_against_the_baseline_is_incomplete():
+def test_a_week_below_its_high_water_mark_is_incomplete():
     """The third arm, and the gap the other two leave.
 
     Fourteen games, all with kickoffs, above the 13-game floor — so arms (a)
-    and (b) both see a healthy week. The baseline says there were 15 last
-    time, which is the only cheap evidence that the document was truncated.
+    and (b) both see a healthy week. The baseline says this week has been seen
+    holding 15, which is the only cheap evidence that the document was
+    truncated.
     """
     games = _full_week(6, count=14)
-    slate = build_slate(games, previous_week_counts={6: 15})
+    slate = build_slate(games, week_high_water={6: 15})
 
     assert slate.incomplete_weeks == frozenset({6})
     assert slate.incomplete_reasons == {6: "week_shrank"}
     assert [slate.games_in_window(g) for g in games] == [None] * 14
 
 
-def test_a_week_at_or_above_its_baseline_is_complete():
+def test_a_week_at_or_above_its_high_water_mark_is_complete():
     """The other arm. A guard firing on any change would blank every week the
     moment a postponed game is rescheduled back in."""
     games = _full_week(6, count=15)
-    assert build_slate(games, previous_week_counts={6: 15}).incomplete_weeks == (
-        frozenset()
-    )
-    assert build_slate(games, previous_week_counts={6: 14}).incomplete_weeks == (
-        frozenset()
-    )
+    assert build_slate(games, week_high_water={6: 15}).incomplete_weeks == frozenset()
+    assert build_slate(games, week_high_water={6: 14}).incomplete_weeks == frozenset()
+
+
+def test_the_shrink_arm_describes_a_state_rather_than_an_edge():
+    """**R2.** The same short week stays flagged however many passes it lasts.
+
+    Compared against the *previous pass's* count this goes quiet the moment
+    the truncation persists — 16 then 14 flags, 14 then 14 does not — and the
+    wrong `games_in_window` republishes unflagged on a 24-hour cadence
+    indefinitely. The high-water mark is what makes the arm a description of
+    the slate rather than of one transition.
+    """
+    short = _full_week(6, count=14)
+    for pass_number in (1, 2, 3):
+        slate = build_slate(short, week_high_water={6: 16})
+        assert slate.incomplete_reasons == {6: "week_shrank"}, pass_number
 
 
 def test_no_baseline_makes_the_shrink_arm_inert():
     """A first capture has no baseline and must not invent one."""
     games = _full_week(6, count=14)
     assert build_slate(games).incomplete_weeks == frozenset()
-    assert build_slate(games, previous_week_counts={}).incomplete_weeks == frozenset()
+    assert build_slate(games, week_high_water={}).incomplete_weeks == frozenset()
     # A baseline for a DIFFERENT week must not reach this one either.
-    assert (
-        build_slate(games, previous_week_counts={7: 99}).incomplete_weeks == frozenset()
-    )
+    assert build_slate(games, week_high_water={7: 99}).incomplete_weeks == frozenset()
 
 
 def test_each_incompleteness_finding_reports_its_own_reason():
@@ -348,7 +358,7 @@ def test_each_incompleteness_finding_reports_its_own_reason():
         *_full_week(2, count=12),
         *_full_week(3, count=14),
     ]
-    slate = build_slate(games, previous_week_counts={3: 16})
+    slate = build_slate(games, week_high_water={3: 16})
     assert slate.incomplete_reasons == {
         1: "unslotted_game",
         2: "below_minimum_games",

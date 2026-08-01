@@ -13,6 +13,9 @@ The spec's second named trap:
 unslotted game could belong to any slot in its week.
 """
 
+import pytest
+from collector_core.conditional import UpstreamUnchanged
+
 from broadcast_context.capture import SIGNAL
 
 from .conftest import (
@@ -140,6 +143,45 @@ async def test_a_week_that_shrank_since_the_last_snapshot_withholds_its_counts()
     ]
     assert len(entries) == 1
     assert "week 1: week_shrank" in entries[0]["detail"]
+
+
+async def test_a_persistent_truncation_stays_flagged_on_every_later_pass():
+    """**R2.** Three passes: 16, then 14, then 14 again.
+
+    Against the previous pass's count, pass 3 compares 14 to 14, goes quiet,
+    and republishes `games_in_window: 1 / is_standalone: true /
+    distribution: national` for the survivor with no `incomplete_slate`
+    anywhere — the same "manufactures standalone primetime games that do not
+    exist" outcome the arm was added to close, arriving one pass later and
+    then persisting. On a 24-hour cadence that is one day of warning for a
+    permanent wrongness, and `below_expected_floor` is envelope-level so a row
+    consumer sees nothing.
+
+    Against the high-water mark the third pass is byte-identical to the
+    second, so the digest gate reports it unchanged and nothing new is
+    appended — which is the strongest possible form of "still flagged".
+    """
+    lake = SpyLake()
+    full = week_rows(1, games=16)
+    await run_capture(feed_document(full), lake=lake)
+
+    truncated = [row for index, row in enumerate(full) if index != 13]
+    second = await run_capture(
+        feed_document(truncated), lake=lake, now=NOW.replace(day=16)
+    )
+    survivor = by_game(second)["2026_01_A12_B12"]
+    assert survivor["games_in_window"] is None
+    assert len(lake.writes) == 2
+
+    with pytest.raises(UpstreamUnchanged):
+        await run_capture(feed_document(truncated), lake=lake, now=NOW.replace(day=17))
+    assert len(lake.writes) == 2, "pass 3 must not republish a corrected count"
+
+    # And the served rows are still the withheld ones, not a recomputed 1.
+    still_withheld = by_game(second)["2026_01_A12_B12"]
+    assert still_withheld["is_standalone"] is None
+    assert still_withheld["distribution"] is None
+    assert still_withheld["null_field_reasons"]["games_in_window"] == "incomplete_slate"
 
 
 async def test_a_week_that_grew_since_the_last_snapshot_is_not_flagged():

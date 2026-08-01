@@ -191,7 +191,11 @@ def test_a_slot_population_change_advances_first_observed_at():
         prior, window_id="sun_late", kickoff_at=SUN_LATE_KICK, games_in_window=1
     )
     assert verdict.first_observed_at == NOW_ISO
-    assert verdict.observed_window_count == 2
+    # The state chain grew, but the game has still only ever been in ONE
+    # window — which is what `observed_window_count` counts, and why it counts
+    # transitions rather than `len(evidence)`.
+    assert len(verdict.evidence) == 2
+    assert verdict.observed_window_count == 1
 
 
 def test_a_slot_population_change_is_not_reported_as_a_flex():
@@ -208,6 +212,52 @@ def test_a_slot_population_change_is_not_reported_as_a_flex():
     )
     assert verdict.flex_status == FLEX_ORIGINAL
     assert verdict.previous_window_id is None
+
+
+@pytest.mark.parametrize(
+    ("prior", "window_id", "kickoff", "count"),
+    [
+        # Never moved, one state.
+        ([], "sun_late", SUN_LATE_KICK, 1),
+        # Never moved, two states — a slot-mate did. Counting states here
+        # would report 2 for a game that has held one window throughout, and
+        # the field name would contradict the field.
+        (
+            [state("sun_late", SUN_LATE_KICK, T1, games_in_window=2)],
+            "sun_late",
+            SUN_LATE_KICK,
+            1,
+        ),
+        # Moved once.
+        ([state("sun_early", SUN_LATE_KICK, T1)], "snf", SNF_KICK, 1),
+        # Moved twice.
+        (
+            [state("sun_early", SUN_LATE_KICK, T1), state("snf", SNF_KICK, T2)],
+            "sun_late",
+            SUN_LATE_KICK,
+            1,
+        ),
+    ],
+)
+def test_observed_window_count_is_one_exactly_when_the_status_is_original(
+    prior, window_id, kickoff, count
+):
+    """The biconditional the rename bought, checkable on a single row.
+
+    `observed_window_count == 1` **if and only if** `flex_status ==
+    "original"`. Both directions are asserted here, over a case list that
+    includes the slot-mate case in which the old state-count definition
+    reported 2 for a game that never moved.
+    """
+    verdict = flex(
+        prior,
+        window_id=window_id,
+        kickoff_at=kickoff,
+        games_in_window=count,
+    )
+    assert (verdict.observed_window_count == 1) == (
+        verdict.flex_status == FLEX_ORIGINAL
+    ), verdict
 
 
 def test_a_real_flex_still_reports_itself_across_a_slot_change():
@@ -359,7 +409,7 @@ async def test_an_empty_partition_yields_no_history():
     history = await _read(SpyLake())
     assert history.chains == {}
     assert history.truncated == 0
-    assert history.week_counts == {}
+    assert history.week_high_water == {}
 
 
 async def test_snapshots_fold_oldest_first_and_dedupe_repeats():
@@ -412,26 +462,42 @@ async def test_a_slot_count_change_alone_appends_to_the_chain():
     assert chain[1].captured_at == "2026-09-02T12:00:00Z"
 
 
-async def test_the_week_count_baseline_comes_from_the_newest_rows():
+async def test_the_week_baseline_is_a_high_water_mark_not_the_newest_count():
+    """**The R2 fix at its source.** Against the newest count, a truncation
+    that persists is flagged once and then goes quiet forever. The baseline
+    must describe the most this week has ever been seen to hold."""
     lake = SpyLake()
     base = datetime(2026, 9, 1, 12, tzinfo=UTC)
-    snapshot(
-        lake,
-        [_row(f"g{i}", "sun_early", SUN_LATE_KICK, week=1) for i in range(3)],
-        captured_at=base,
-    )
-    snapshot(
-        lake,
-        [_row(f"g{i}", "sun_early", SUN_LATE_KICK, week=1) for i in range(5)],
-        captured_at=base + timedelta(days=1),
-    )
-    assert (await _read(lake)).week_counts == {1: 5}
+    for index, count in enumerate((3, 5, 4)):
+        snapshot(
+            lake,
+            [_row(f"g{i}", "sun_early", SUN_LATE_KICK, week=1) for i in range(count)],
+            captured_at=base + timedelta(days=index),
+        )
+    assert (await _read(lake)).week_high_water == {1: 5}
 
 
-async def test_an_empty_failure_envelope_does_not_reset_the_week_baseline():
-    """`fail_capture` writes a `present: 0` envelope with no rows. Letting it
-    zero the baseline would make the shrink check inert on exactly the pass
-    after an outage — the pass most likely to be short."""
+async def test_the_high_water_mark_is_per_week_and_never_summed():
+    """Max-merged per snapshot, never accumulated across them — a sum would
+    grow without bound and flag every week forever."""
+    lake = SpyLake()
+    base = datetime(2026, 9, 1, 12, tzinfo=UTC)
+    for index in range(3):
+        snapshot(
+            lake,
+            [
+                *[_row(f"a{i}", "sun_early", SUN_LATE_KICK, week=1) for i in range(4)],
+                *[_row(f"b{i}", "sun_early", SUN_LATE_KICK, week=2) for i in range(6)],
+            ],
+            captured_at=base + timedelta(days=index),
+        )
+    assert (await _read(lake)).week_high_water == {1: 4, 2: 6}
+
+
+async def test_an_empty_failure_envelope_cannot_lower_the_baseline():
+    """`fail_capture` writes a `present: 0` envelope with no rows. Under a
+    max-merge that is structurally unable to lower anything, which is why the
+    explicit `if rows:` guard this used to need is gone."""
     lake = SpyLake()
     base = datetime(2026, 9, 1, 12, tzinfo=UTC)
     snapshot(
@@ -441,7 +507,7 @@ async def test_an_empty_failure_envelope_does_not_reset_the_week_baseline():
     )
     snapshot(lake, [], captured_at=base + timedelta(days=1))
 
-    assert (await _read(lake)).week_counts == {1: 5}
+    assert (await _read(lake)).week_high_water == {1: 5}
 
 
 async def test_history_is_read_from_the_partition_the_capture_writes():
@@ -556,7 +622,7 @@ async def test_a_truncated_history_is_stated_in_the_envelope(monkeypatch):
     from broadcast_context import capture as capture_module
 
     async def truncated(*args, **kwargs):
-        return History(chains={}, truncated=3, week_counts={})
+        return History(chains={}, truncated=3, week_high_water={})
 
     monkeypatch.setattr(capture_module, "read_history", truncated)
     envelopes = await run_capture(feed_document(week_rows(1)), lake=SpyLake())

@@ -147,8 +147,13 @@ states behind it, differing in the dimension the status is about. A row that
 fails it is refused — it never reaches the lake, it is recorded in
 `coverage.missing` with `flex_history_unevidenced`, and
 `broadcast_context_unevidenced_flex_claims` moves off zero. Each row also
-publishes `observed_window_count`, so a consumer can apply the same check from
-a single row.
+publishes `observed_window_count` — the number of distinct **windows** this game has
+been observed in, so `observed_window_count == 1` if and only if
+`flex_status == "original"`, checkable on a single row. (It counts window
+transitions rather than published states deliberately: once `games_in_window`
+joined the point-in-time state, a state count reported 2 for a game that had
+sat in one window the whole time, and no contract text repairs a field name
+that contradicts what it counts.)
 
 ### `games_in_window` and the partial-slate refusal
 
@@ -166,12 +171,27 @@ independent findings — each reported with its own reason in the envelope's
 |---|---|---|
 | any game in the week has no kickoff instant | `unslotted_game` | the ordinary late-season "flex TBD" case — that game could belong to any slot in the week |
 | a regular-season week lists fewer than 13 games | `below_minimum_games` | six byes is the league maximum, so a shorter week means the document was truncated |
-| the week holds fewer games than the last snapshot recorded | `week_shrank` | **the gap the first two leave.** 13 is a *floor*, not a completeness proof: a stream truncated mid-document leaves the tail week with 13–15 games that all have kickoffs, so neither other arm fires. Reproduced: a 14-game week that lost one of its two 16:25 games published `games_in_window: 1`, `is_standalone: true`, `distribution: national` for the survivor with no `incomplete_slate` anywhere |
+| the week holds fewer games than this partition has ever seen it hold | `week_shrank` | **the gap the first two leave.** 13 is a *floor*, not a completeness proof: a stream truncated mid-document leaves the tail week with 13–15 games that all have kickoffs, so neither other arm fires. Reproduced: a 14-game week that lost one of its two 16:25 games published `games_in_window: 1`, `is_standalone: true`, `distribution: national` for the survivor with no `incomplete_slate` anywhere |
 
-The baseline for the third comes from the newest lake snapshot that carried
-rows — an empty `present: 0` failure envelope deliberately does not reset it,
-or the check would go inert on exactly the pass after an outage. It is empty
-on a first capture, which makes the arm inert rather than a guess.
+The baseline for the third is a **high-water mark** across every snapshot read
+from the partition, not the previous pass's count. Against the previous count
+the arm describes an *edge* rather than a *state*: 16 → 14 flags, and 14 → 14
+compares equal and goes quiet, so a truncation that persists is announced for
+one pass and then republishes wrong counts indefinitely — on a 24-hour cadence,
+one day of warning for a permanent wrongness, with only the envelope-level
+`below_expected_floor` still firing where a row consumer cannot see it.
+
+Its cost, and it is real: a week that *legitimately* shrinks — a game
+rescheduled into a different week — latches as incomplete. That is the
+withhold direction rather than the publish-something-wrong direction, which is
+the trade this collector makes everywhere else, and it self-heals once the
+high snapshot ages past `MAX_HISTORY_SNAPSHOTS`. The ordinary postponement is
+represented by nflverse as a blank `gametime`, which the first arm already
+catches without this one.
+
+An empty `present: 0` failure envelope cannot lower the mark by construction —
+a max-merge over no rows changes nothing. The mark is empty on a first
+capture, which makes the arm inert rather than a guess.
 
 For every game in an incomplete week, `games_in_window`, `is_standalone` and
 `distribution` are null with `incomplete_slate`, and
@@ -312,6 +332,17 @@ affordable to read back: a snapshot is appended only when the published rows
 actually change, so a season's partition holds the number of times the
 broadcast schedule moved, not the number of times we looked. `read_history`
 still caps at the newest 64 snapshots and says so in `errors` if it hits it.
+
+**`MAX_HISTORY_SNAPSHOTS = 64` was chosen against a rate that has since
+changed, and nothing sizes it.** Once `games_in_window` became part of the
+observed state, a slot-mate moving appends a state where it previously did
+not — so chains, and the append rate behind them, grow faster than when 64 was
+picked. It is not a defect (truncation keeps the newest snapshots and reports
+itself in `errors`, and dropping the oldest only moves `first_observed_at`
+later, the safe direction), and it interacts benignly with the `week_shrank`
+high-water mark, which self-heals as a stale high ages out. But the basis for
+the number moved, no test defends it, and the next person sizing it should
+know that.
 
 **Known gap, inherited:** the ETag store is keyed by URL and this URL does not
 vary by season or week, so `POST /refresh {"season": 2025}` after a 2026
