@@ -661,3 +661,21 @@ collectors:
     # test_scope_narrowing.py is the behavioural half.
     scope_aware: true
     depends_on: [player-identity, roster-scope]
+
+  - name: defense-vs-position
+    path: /collectors/defense-vs-position
+    stage: 8D
+    cadence_class: weekly
+    envelope_version: "1"
+    signal_types: [defense_positional_allowance]
+    # Set true if this collector narrows to roster-scope's membership list
+    # before it fetches. Checked structurally by
+    # tests/test_scope_aware_gate.py: declaring true requires importing
+    # collector_core.scope.ScopeClient (`from collector_core.scope import
+    # ScopeClient`) somewhere in this collector's source — that test is by
+    # AST, so an `import collector_core.scope` plus attribute access will
+    # not satisfy it. That check proves the narrowing seam is wired in, not
+    # that it behaves correctly; write this collector's own fail-closed test
+    # for that.
+    scope_aware: false
+    depends_on: [player-identity]

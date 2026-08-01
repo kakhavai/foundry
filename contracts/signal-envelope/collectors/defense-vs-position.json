@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/defense-vs-position.json",
+  "title": "defense-vs-position collector signal fields",
+  "signal_types": {
+    "defense_positional_allowance": {
+      "$comment": "TODO(new-collector): placeholder fields. Replace these with this collector's real signal shape, then delete this $comment. Kept deliberately meaningless -- the generated build_signal agrees with them by construction, so leaving both in place would prove only that two placeholders match.",
+      "type": "object",
+      "required": ["key", "observed_at", "value"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "value": { "type": "number" }
+      }
+    }
+  }
+}
