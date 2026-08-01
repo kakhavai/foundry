@@ -89,9 +89,13 @@ collectors:
     signal_types: [venue_forecast_kickoff, venue_conditions_current]
     scope_aware: false
     # Empty deliberately. The phase doc's "Depends on" line for weather names
-    # a bundled in-process schedule adapter (not a collector) and `venue`
-    # (arrives in 8E). `depends_on` names registered collectors, and neither
-    # of those is one.
+    # a bundled in-process schedule adapter (not a collector) and `venue`.
+    # `venue` IS registered now (8E), but weather does not read it: the field
+    # it wants is `field_orientation_deg`, which `venue` ships null because no
+    # source for it has been found, so `crosswind_component_mph` stays null and
+    # there is no runtime edge to declare. Add the edge in the PR that wires
+    # the read, not before — a dependency nothing exercises is a wrong edge in
+    # a graph two machines read.
     depends_on: []
 
   - name: player-identity
@@ -244,12 +248,17 @@ collectors:
     # and team; there is no player in them for roster-scope's membership list
     # to narrow.
     scope_aware: false
-    # Empty deliberately. The phase doc's "Depends on" line for this collector
-    # says "nothing directly; joins to `venue` for coordinates and timezones",
-    # and `venue` arrives in 8E. Until it does, that join is served by an
+    # Empty deliberately, and now for a different reason than it used to be.
+    # The phase doc's "Depends on" line says "nothing directly; joins to
+    # `venue` for coordinates and timezones". `venue` IS registered now (8E),
+    # but this collector still does not call it: the join is served by an
     # in-process table (schedule_context/venues.py) behind a `Venue` seam, the
-    # same shape as weather's bundled schedule adapter. `depends_on` names
-    # registered collectors, and `venue` is not one yet.
+    # same shape as weather's bundled schedule adapter. Rewiring that seam onto
+    # `venue` adds a service to the path, a fail-closed decision for a `venue`
+    # outage, and this edge — it is a follow-up with its own review, and the
+    # edge lands in the PR that wires the call. Declaring it now would be a
+    # wrong edge in a graph the merge-order gate and the out-of-repo generator
+    # both read.
     depends_on: []
   - name: depth-chart
     path: /collectors/depth-chart
@@ -282,3 +291,31 @@ collectors:
     # REGISTERED collectors, and the gate rejects an unregistered one. Add it
     # here when that collector merges.
     depends_on: [player-identity]
+
+  - name: venue
+    path: /collectors/venue
+    stage: 8E
+    cadence_class: static reference
+    envelope_version: "1"
+    signal_types: [venue_static, venue_game_assignment]
+    # Checked structurally by tests/test_scope_aware_gate.py; nothing verifies
+    # the reasoning below. False, and for this collector it is not a judgement
+    # call: the spec's own line is "no — venues are not players". Neither
+    # signal type carries a player_id at all. `venue_static` is keyed by
+    # building and `venue_game_assignment` by game, so roster-scope's
+    # membership list has nothing here to narrow — and narrowing the SEASON's
+    # venues to anything smaller would break the coverage rule, which is
+    # defined as every venue hosting at least one game.
+    scope_aware: false
+    # Empty, and the spec says so outright ("Depends on: nothing"). Worth one
+    # line because two edges look like they belong here and do not:
+    #
+    #   schedule-context — reads venue coordinates, so the arrow points the
+    #     other way; it would be its entry declaring this one, once its
+    #     in-process venues.py is rewired (a follow-up).
+    #   player-identity — every OTHER collector declares it because it decides
+    #     what a player_id is. This one emits none.
+    #
+    # The nflverse game table this collector reads for assignments is a third
+    # party, not a collector, so it is not a depends_on either.
+    depends_on: []

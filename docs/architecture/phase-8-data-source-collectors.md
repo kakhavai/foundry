@@ -340,8 +340,10 @@ The stadium as it will be at kickoff — split into what changes by the hour and
 **Stage:** 8A
 **Depends on:** a bundled schedule adapter at 8A, supplying `game_id`,
 kickoff timestamps, and per-game roof state. Replaced by `schedule-context`
-at 8B behind the same interface. Reads `venue` for field orientation once it
-lands at 8E.
+at 8B behind the same interface. Reads `venue` for field orientation once that
+collector can supply it — `venue` shipped at 8E, but with
+`field_orientation_deg` null, because no source for it was found; the read is
+still outstanding and so is the dependency edge.
 **Scope-aware:** no — signals are keyed by game and venue, not by player
 
 Answers what the ball and the players will actually be dealing with at kickoff, for a projection generated three or four days earlier. The service as it exists today answers "what is the weather right now at Lambeau", which is a different and largely useless question on a Wednesday. The second-order signal is the *convergence*: successive snapshots of the same kickoff are appended to the lake, so the generator can see how much a Sunday forecast moved between Wednesday and Saturday and widen or narrow its own uncertainty accordingly.
@@ -360,7 +362,7 @@ Answers what the ball and the players will actually be dealing with at kickoff, 
 | `wind_speed_mph` | float | Sustained wind at 10 m |
 | `wind_gust_mph` | float | Peak gust in the kickoff hour |
 | `wind_direction_deg` | int | Meteorological degrees (direction wind comes *from*) |
-| `crosswind_component_mph` | float | Wind resolved perpendicular to `venue.field_orientation_deg`; null until `venue` exists |
+| `crosswind_component_mph` | float | Wind resolved perpendicular to `venue.field_orientation_deg`; still null — `venue` shipped at 8E but ships that field null, so there is nothing yet to resolve against |
 | `precipitation_type` | enum | `none`, `rain`, `snow`, `sleet`, `freezing_rain` |
 | `precipitation_probability` | float | 0–1 for the kickoff hour |
 | `precipitation_rate_in_hr` | float | Intensity, not accumulation |

@@ -3,14 +3,25 @@ bundled schedule adapter is transitional.
 
 The phase-8 spec for this collector says travel and body-clock fields
 "require venue coordinates and IANA zones rather than city strings", sourced
-"from the `venue` collector rather than a third party". `venue` is an 8E
-collector and does not exist yet, so this module stands in for it. `Venue` is
-the seam: when `venue` lands, `resolve_venue` becomes a call to it and nothing
-above this module changes.
+"from the `venue` collector rather than a third party". `Venue` is the seam:
+`resolve_venue` becomes a call to `venue` and nothing above this module changes.
+
+**`venue` now exists** (8E, `services/venue/`), so this module is transitional
+in fact rather than in anticipation — and it is a **duplicate**, which is worse
+than a placeholder. `venue/reference.py` carries every coordinate, IANA zone,
+stadium-name spelling and neutral-site alias below, plus the append-only
+revision machinery and the wider field set; the two tables describe the same
+thirty buildings and nothing prevents them drifting apart.
+
+Rewiring `resolve_venue` onto `venue` was deliberately left out of the PR that
+added the collector: it changes this collector's failure modes (a second
+service in the path, a new `depends_on` edge, a fail-closed decision for a
+`venue` outage) and deserves its own review. Until then, **a correction to a
+venue must be made in `services/venue/venue/reference.py` and mirrored here** —
+in that order, because that file is the authority.
 
 It is deliberately **not** in `collector-core`. A venue table is `venue`'s job,
-not the shared library's, and moving it into the library now would only mean
-deleting it from there when the real collector arrives.
+not the shared library's.
 
 Two normalisations here are load-bearing:
 

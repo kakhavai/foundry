@@ -44,14 +44,24 @@ The service must satisfy the [service contract](service-contract.md):
 - OTel initialization guarded on `OTEL_EXPORTER_OTLP_ENDPOINT`
 
 **Collectors build from the repo root**, not the service directory, because
-they depend on the `libs/collector-core/` workspace member by path:
+they depend on the `libs/collector-core/` workspace member by path — and from
+the **one** Dockerfile that builds the whole fleet, which is why a collector
+has no `Dockerfile` of its own in the tree above:
 
-    docker build -f services/<name>/Dockerfile -t <name>:local .
+    docker build -f Dockerfile.collector \
+        --build-arg SERVICE=<name> --build-arg PACKAGE=<pkg> --build-arg PORT=<port> \
+        -t <name>:local .
 
-The build stage copies `libs/collector-core/` before `uv sync`, since the lock
-cannot resolve without the member present. Services that do not consume the
-shared library keep the original service-directory context. See
-`services/weather/` for the reference collector.
+Those three build args are the only thing that differs between two collector
+images, and nobody types them: `scripts/deploy-local.py` and CI's
+`changed-services` both derive all three. The build stage copies
+`libs/collector-core/` before `uv sync`, since the lock cannot resolve without
+the member present. Services that do not consume the shared library —
+`player-projections` is the only one — keep their own `Dockerfile` and the
+service-directory context.
+
+**Do not scaffold a collector by hand from this section.** Run
+`scripts/new-collector.py`; see [collectors.md](collectors.md).
 
 ---
 
