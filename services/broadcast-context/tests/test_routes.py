@@ -4,15 +4,23 @@ The routes themselves are `collector_core.routes`' and are proved there against
 a fake collector. What this file proves is that THIS service is wired to them —
 that its descriptor reaches `/catalog`, that its own `signal_matches` is
 consulted, and that auth is mounted.
+
+There are deliberately **no** routes beyond the standard five: the spec says
+so, and `as_of` is implemented as a filter rather than as a `/history` route
+for exactly that reason.
 """
 
 import time
 
+import httpx
+import respx
 from collector_core.envelope import ENVELOPE_VERSION
 
+from broadcast_context.adapters.upstream import UPSTREAM_URL
 from broadcast_context.capture import SIGNAL_TYPES
+from broadcast_context.signals import SUPPORTED_FILTERS
 
-from .conftest import TEST_TOKEN
+from .conftest import TEST_TOKEN, feed_document, week_rows
 
 
 def wait_for_signals(client, *, count: int, timeout: float = 10.0) -> dict:
@@ -41,6 +49,12 @@ def wait_for_signals(client, *, count: int, timeout: float = 10.0) -> dict:
     )
 
 
+def _mock_feed(router, rows=None):
+    router.get(UPSTREAM_URL).mock(
+        return_value=httpx.Response(200, text=feed_document(rows or week_rows(1)))
+    )
+
+
 def test_health_is_open_and_ok(client):
     assert client.get("/health").json() == {"status": "ok"}
 
@@ -57,6 +71,7 @@ def test_catalog_declares_this_collector(client):
     assert body["envelope_version"] == ENVELOPE_VERSION
     assert body["cadence_class"] == "weekly"
     assert set(body["signal_types"]) == set(SIGNAL_TYPES)
+    assert "as_of" in body["filters"]
 
 
 def test_signals_is_empty_before_any_capture(client):
@@ -74,10 +89,13 @@ def test_an_unknown_signal_type_is_422(client):
 
 def test_refresh_is_accepted_and_the_capture_eventually_lands(client):
     """202 means accepted. Observe it by polling — see `wait_for_signals`."""
-    accepted = client.post("/refresh", json={})
-    assert accepted.status_code == 202
+    with respx.mock(assert_all_called=False) as router:
+        _mock_feed(router)
+        accepted = client.post("/refresh", json={"season": 2026, "week": 1})
+        assert accepted.status_code == 202
 
-    body = wait_for_signals(client, count=len(SIGNAL_TYPES))
+        body = wait_for_signals(client, count=len(SIGNAL_TYPES))
+
     assert body["count"] == len(SIGNAL_TYPES)
     for envelope in body["envelopes"]:
         assert envelope["collector"] == "broadcast-context"
@@ -85,21 +103,64 @@ def test_refresh_is_accepted_and_the_capture_eventually_lands(client):
 
 
 def test_a_second_refresh_inside_the_floor_is_429(client):
-    client.post("/refresh", json={})
-    response = client.post("/refresh", json={})
+    with respx.mock(assert_all_called=False) as router:
+        _mock_feed(router)
+        client.post("/refresh", json={"season": 2026, "week": 1})
+        response = client.post("/refresh", json={"season": 2026, "week": 1})
     assert response.status_code == 429
     assert int(response.headers["Retry-After"]) > 0
 
 
 def test_a_row_filter_narrows_the_signals(client):
     """`signal_matches` is this collector's own, so prove it is consulted."""
-    client.post("/refresh", json={})
-    wait_for_signals(client, count=len(SIGNAL_TYPES))
+    with respx.mock(assert_all_called=False) as router:
+        _mock_feed(router)
+        client.post("/refresh", json={"season": 2026, "week": 1})
+        wait_for_signals(client, count=len(SIGNAL_TYPES))
 
-    body = client.get("/signals?key=placeholder-a").json()
+    body = client.get("/signals?window_id=snf").json()
     rows = [row for envelope in body["envelopes"] for row in envelope["signals"]]
     assert rows, "the filter matched nothing — is ROW_FILTERS wired up?"
-    assert {row["key"] for row in rows} == {"placeholder-a"}
+    assert {row["window_id"] for row in rows} == {"snf"}
+
+
+def test_as_of_reaches_the_route_and_withholds_the_future(client):
+    """The guard, through the HTTP surface rather than the predicate alone.
+
+    Everything in the capture was first observed at capture time, so an
+    `as_of` before it must return an EMPTY signals array — not a 500, and not
+    the full slate.
+    """
+    with respx.mock(assert_all_called=False) as router:
+        _mock_feed(router)
+        client.post("/refresh", json={"season": 2026, "week": 1})
+        wait_for_signals(client, count=len(SIGNAL_TYPES))
+
+    everything = client.get("/signals").json()
+    assert everything["envelopes"][0]["signals"]
+
+    withheld = client.get("/signals?as_of=2020-01-01T00:00:00Z").json()
+    assert withheld["count"] == 1, "the envelope is still returned"
+    assert withheld["envelopes"][0]["signals"] == []
+
+    allowed = client.get("/signals?as_of=2099-01-01T00:00:00Z").json()
+    assert len(allowed["envelopes"][0]["signals"]) == len(
+        everything["envelopes"][0]["signals"]
+    )
+
+
+def test_a_malformed_as_of_is_422_through_the_route(client):
+    with respx.mock(assert_all_called=False) as router:
+        _mock_feed(router)
+        client.post("/refresh", json={"season": 2026, "week": 1})
+        wait_for_signals(client, count=len(SIGNAL_TYPES))
+
+    assert client.get("/signals?as_of=yesterday").status_code == 422
+
+
+def test_the_declared_filters_are_exactly_what_catalog_publishes(client):
+    body = client.get("/catalog").json()
+    assert tuple(body["filters"]) == SUPPORTED_FILTERS
 
 
 def test_a_data_route_without_a_token_is_401(client):

@@ -54,13 +54,38 @@ extraEnv:
     value: "http://minio.monitoring.svc.cluster.local:9000"
   - name: REFRESH_MIN_INTERVAL_SECONDS
     value: "300"
-  # Scaffolded false. Flip to "true" once the real upstream is wired AND you
-  # have decided the third-party load is acceptable: the cluster is recreated
-  # on every CI run and every pod restart re-captures, so a large or
-  # rate-limited upstream should stay false here. A dispatched POST /refresh
-  # reaches the upstream regardless of this flag.
+  # "true", and it is the only collector in the fleet other than weather and
+  # stub-mode injury-report that ships enabled. Three reasons, in order:
+  #
+  #   1. ONE feed, 509 KB on the wire. Every collector shipping false does so
+  #      because its upstream is 5-44 MiB; officiating reads 19.9 MiB a pass.
+  #      This is three orders of magnitude cheaper, and conditional GET makes
+  #      the steady state a single round trip carrying zero bytes.
+  #   2. The flex history only exists if the loop runs. flex_status,
+  #      previous_window_id and first_observed_at are derived by comparing
+  #      each pass against this collector's own prior snapshots, so a
+  #      collector that never captures reports every game as `original`
+  #      forever and the spec's two-snapshot consistency check can never
+  #      accumulate the evidence it asks for. That is not a degraded
+  #      collector; it is the collector's product switched off.
+  #   3. The spec asks for daily polling precisely because flex decisions land
+  #      as late as six days out. A `weekly` cadence class is a 24h interval,
+  #      so this is one 509 KB request a day per long-lived cluster.
+  #
+  # The honest cost of "true": every pod restart pays one full download,
+  # because the ETag store is in memory, and a CI cluster is rebuilt on every
+  # run. That is ~0.5 MB per CI run against raw.githubusercontent.com.
+  #
+  # What "true" does NOT buy on an ephemeral cluster: history still does not
+  # accumulate there, because the lake is torn down with the cluster. The
+  # value of this flag is entirely in a long-lived environment.
   - name: CAPTURE_ENABLED
-    value: "false"
+    value: "true"
+  # The loop's scope, and the lake partition every snapshot lands in. LEAVE
+  # THE WEEK ALONE mid-season: the flex history is read from the partition the
+  # capture writes to, so advancing it starts a fresh history in which every
+  # game reads `original` again. The capture is season-wide regardless of the
+  # week — `games_in_window` is a count over a whole slate.
   - name: CAPTURE_SEASON
     value: "2026"
   - name: CAPTURE_WEEK

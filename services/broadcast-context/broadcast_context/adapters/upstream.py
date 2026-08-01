@@ -1,78 +1,183 @@
 """The upstream adapter — the only module that knows the wire format.
 
-Kept separate from `capture.py` so the orchestration (coverage accounting,
-envelopes, the lake) can be tested against a fake upstream without mocking
-HTTP, and so swapping the upstream touches one file.
+One feed, and it is the same one `schedule-context` reads: the nflverse game
+table, every game since 1999 in a single CSV. **509 KB on the wire** (httpx
+requests gzip; 2.07 MiB parsed), 272 regular-season rows for a scheduled
+season. There is no second source and no play-by-play here — this is by a wide
+margin the cheapest collector in the fleet.
 
-**Two memory rules, both learned the hard way.** roster-scope's first deploy was
-OOMKilled at a 256Mi limit because a ~37 MB upstream document was buffered
-three times over:
+**It is streamed and filtered as it is parsed, never materialised.**
+`response.text` handed to `io.StringIO` holds the document three times over —
+the shape that OOM-killed `roster-scope` at a 256Mi limit. `columns=` narrows
+each row dict to the six columns this collector reads out of the feed's 46,
+while `required_columns=` still validates the whole header, so a column
+disappearing upstream is still schema drift rather than a silent null.
 
-1. **Never hold an upstream response more than once.** `response.text` after
-   `response.content`, or `json.loads(response.text)`, is two copies.
-2. **Filter as you parse.** Build the rows you are keeping; never materialise
-   the whole document and then narrow it. For a large CSV upstream use
-   `collector_core.streaming.stream_csv_dicts`, which does both.
+**Conditional GET is on.** `raw.githubusercontent.com` serves an ETag and
+answers `If-None-Match` with a `304` carrying zero bytes, so a poll that lands
+between two republications costs one round trip instead of 509 KB. A `304`
+raises `UpstreamUnchanged`, which is a *successful* capture — `capture.py`
+re-raises it above its generic handler, and the caveat in `docs/collectors.md`
+applies unchanged: the store is keyed by URL and this URL does not vary by
+season or week, so `POST /refresh {"season": 2025}` after a 2026 capture can
+`304` into a no-op that still answers 202.
+
+**Two columns that are NOT here.** The feed carries no `network` and no `tv`
+column — checked, not assumed — so the spec's `network` field has no free
+source. See the README's "Fields that are null by necessity".
+
+**`gametime` is Eastern, not venue-local**, for every game including the
+London 09:30 and the Los Angeles 20:20. That is the whole reason
+`kickoff_local_time` is null on every row and `is_primetime` is computed from
+the Eastern clock; the argument is in the README.
 """
 
-from datetime import datetime
+import os
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import httpx
+from collector_core.streaming import stream_csv_dicts
 
 # Names the upstream in every envelope's `upstream.adapter`. Change it when the
 # upstream changes: it is how a consumer tells two sources of the same signal
-# apart in the lake.
-UPSTREAM_ADAPTER = "broadcast-context-upstream"
+# apart in the lake. Deliberately the same string `schedule-context` uses —
+# it is the same artifact, and two names for one feed is drift a season later.
+UPSTREAM_ADAPTER = "nflverse-games"
 
-# TODO: the real upstream. While this is empty the placeholder branch in
-# `fetch_rows` runs, so a freshly scaffolded collector deploys, captures and
-# serves before its upstream exists — the same stub-mode reasoning
-# player-projections uses for `PROJECTIONS_SNAPSHOT_URL`.
-UPSTREAM_URL = ""
-
-# DELETE ME along with the branch below. Deterministic, offline, and shaped
-# exactly like `build_signal` expects, so the generated tests are real tests of
-# the orchestration rather than of a mock.
-PLACEHOLDER_KEYS: tuple[str, ...] = (
-    "placeholder-a",
-    "placeholder-b",
-    "placeholder-c",
+# Environment-overridable so a load test or a fixture server can stand in for
+# the real feed without hammering a third party — the same reasoning that put
+# `FORECAST_URL` and `SCHEDULE_URL` behind env vars during 8A, and the same
+# variable name `schedule-context` reads.
+UPSTREAM_URL = os.getenv(
+    "SCHEDULE_URL",
+    "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv",
 )
+
+# Schema-drift detection: an upstream that renames a field must fail the
+# capture loudly with `reason=malformed` rather than map nulls into an
+# append-only lake. Exactly the columns the mapping below reads — no more, so
+# an unrelated column disappearing upstream does not fail a capture that never
+# used it.
+REQUIRED_COLUMNS = frozenset(
+    {
+        "game_id",
+        "season",
+        "game_type",
+        "week",
+        "gameday",
+        "gametime",
+    }
+)
+
+# The feed publishes kickoff in this zone regardless of where the game is
+# played — a London game at 14:30 local appears as 09:30. The season crosses
+# the November DST transition, so a fixed -05:00 is wrong for exactly the
+# late-season games; conversion goes through a real IANA zone.
+FEED_TIMEZONE = ZoneInfo("America/New_York")
+
+# Preseason games are excluded: they are not part of the competitive schedule
+# and are not sold as broadcast windows.
+EXCLUDED_GAME_TYPES = frozenset({"PRE"})
+
+
+@dataclass(frozen=True)
+class ScheduledGame:
+    """One row of the feed, normalised.
+
+    `kickoff_eastern` is the feed's own wall clock made explicit — aware, in
+    `FEED_TIMEZONE`. `kickoff_at` is the same instant in UTC. Both are `None`
+    for a game the feed lists without a usable kickoff time (a scheduled-but-
+    unslotted late-season game, or a postponement whose replacement time has
+    not been published). That is a real upstream ambiguity and it is
+    represented rather than guessed: a guessed kickoff would assign a
+    plausible-looking broadcast window to a game that does not have one yet,
+    which is precisely the "defaults to `sun_early`" failure the spec names.
+    """
+
+    game_id: str
+    season: int
+    week: int
+    game_type: str
+    kickoff_at: datetime | None
+    kickoff_eastern: datetime | None
 
 
 def source_ref(season: int, week: int) -> str | None:
     """The exact upstream artifact this pass read, recorded in the envelope.
 
-    Not decorative: it is what makes a lake object reproducible, and what tells
-    a reader which of two feeds a row came from a season later.
+    Also the conditional-GET cache key, deliberately: the ETag store is keyed
+    by the same string the envelope records, so the two cannot drift.
     """
-    if not UPSTREAM_URL:
+    return UPSTREAM_URL or None
+
+
+def parse_kickoff(gameday: str, gametime: str) -> datetime | None:
+    """`2026-09-13` + `13:00` in the feed's zone -> an aware Eastern datetime.
+
+    Returns `None` for an absent or unparseable time rather than raising: one
+    unslotted game must not fail a whole season's capture, and the caller
+    already has two places to record it (a coverage miss for the game itself,
+    and an incomplete-slate marker for every other game in its week).
+    """
+    gameday, gametime = gameday.strip(), gametime.strip()
+    if not gameday or not gametime:
         return None
-    return UPSTREAM_URL.format(season=season, week=week)
+    try:
+        naive = datetime.strptime(f"{gameday} {gametime}", "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
+    # `replace(tzinfo=FEED_TIMEZONE)`, because the feed's wall clock IS
+    # Eastern and zoneinfo resolves the right DST offset for that date.
+    # `replace(tzinfo=UTC)` would silently move every kickoff by four hours,
+    # and nothing downstream could tell.
+    return naive.replace(tzinfo=FEED_TIMEZONE)
 
 
-async def fetch_rows(
+def _to_game(row: dict) -> ScheduledGame:
+    kickoff_eastern = parse_kickoff(row["gameday"], row["gametime"])
+    return ScheduledGame(
+        game_id=row["game_id"],
+        season=int(row["season"]),
+        week=int(row["week"]),
+        game_type=row["game_type"].strip().upper(),
+        kickoff_at=None if kickoff_eastern is None else kickoff_eastern.astimezone(UTC),
+        kickoff_eastern=kickoff_eastern,
+    )
+
+
+def _in_scope(row: dict, season: int) -> bool:
+    """Kept or discarded as the row goes past — never materialised first."""
+    if row["season"] != str(season):
+        return False
+    return row["game_type"].strip().upper() not in EXCLUDED_GAME_TYPES
+
+
+async def fetch_season_games(
     season: int,
-    week: int,
     *,
     client: httpx.AsyncClient,
-    now: datetime,
-) -> list[dict]:
-    """One upstream fetch, parsed into this collector's own row shape.
+) -> list[ScheduledGame]:
+    """Every competitive game of one season, in feed order.
 
-    Raises on an upstream failure rather than returning an empty list. That is
-    deliberate: `capture` turns the exception into a `present: 0` envelope with
-    a populated `errors` array, and an empty list would instead be recorded as
-    a successful capture of nothing.
+    **A whole season, not a week**, for the same reason `venue` and
+    `schedule-context` take one: `games_in_window` is a count over a slot's
+    whole slate, and a week-scoped fetch cannot see whether the slate it holds
+    is the whole one.
+
+    Raises on an upstream failure rather than returning an empty list, so the
+    caller can turn the exception into a `present: 0` envelope. An empty list
+    would instead be recorded as a successful capture of nothing.
     """
-    if not UPSTREAM_URL:
-        return [
-            {"key": key, "value": float(index)}
-            for index, key in enumerate(PLACEHOLDER_KEYS)
-        ]
-
-    response = await client.get(source_ref(season, week))
-    response.raise_for_status()
-    # Parse straight off the response — see the module docstring. Do not assign
-    # `response.text` and then parse that.
-    return [{"key": row["key"], "value": row["value"]} for row in response.json()]
+    return [
+        _to_game(row)
+        async for row in stream_csv_dicts(
+            client,
+            UPSTREAM_URL,
+            required_columns=REQUIRED_COLUMNS,
+            columns=REQUIRED_COLUMNS,
+            etag_key=UPSTREAM_URL,
+        )
+        if _in_scope(row, season)
+    ]

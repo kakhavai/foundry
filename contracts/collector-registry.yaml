@@ -494,14 +494,39 @@ collectors:
     cadence_class: weekly
     envelope_version: "1"
     signal_types: [game_broadcast_window]
-    # Set true if this collector narrows to roster-scope's membership list
-    # before it fetches. Checked structurally by
-    # tests/test_scope_aware_gate.py: declaring true requires importing
-    # collector_core.scope.ScopeClient (`from collector_core.scope import
-    # ScopeClient`) somewhere in this collector's source — that test is by
-    # AST, so an `import collector_core.scope` plus attribute access will
-    # not satisfy it. That check proves the narrowing seam is wired in, not
-    # that it behaves correctly; write this collector's own fail-closed test
-    # for that.
+    # Signals are keyed by game, not by player, so there is nothing to narrow
+    # to roster-scope's membership list.
     scope_aware: false
+    #
+    # The one collector in the fleet whose product is DERIVED FROM ITS OWN
+    # LAKE. games.csv publishes the current schedule and nothing else — no
+    # flex_status, no previous window, no announcement instant — so
+    # flex_status, previous_window_id and first_observed_at come from
+    # comparing each pass against this collector's own append-only snapshots.
+    # Two consequences a reader should not have to discover:
+    #
+    #   * helm/values/broadcast-context/values.yaml ships
+    #     CAPTURE_ENABLED=true, against the fleet default. At 509 KB a pass
+    #     this is three orders of magnitude cheaper than the 5-44 MiB
+    #     upstreams the false collectors carry, and with the loop off the
+    #     flex fields read `original` forever — the spec's two-snapshot
+    #     consistency check can never accumulate the evidence it asks for.
+    #   * History is read from the partition the capture writes to, so
+    #     CAPTURE_WEEK must be left alone mid-season. Advancing it starts a
+    #     fresh history in which every game reads `original` again — honest,
+    #     but a loss of the accumulated record.
+    #
+    # Four deviations from the phase doc are disclosed in
+    # services/broadcast-context/README.md: `as_of` is an optional filter
+    # rather than a required parameter (the fleet-wide five-route contract
+    # outranks it, and the shared router offers no hook to require a
+    # parameter from); the two-snapshot check is generalised so a legitimate
+    # `time_changed` — one window_id, two kickoffs — can satisfy it;
+    # `weeknight_special` is added to the window_id enum for the Wednesday
+    # and non-holiday-Friday games the spec's enum has no bucket for; and
+    # `distribution` is derived from slot structure, with
+    # `streaming_exclusive` never emitted because nothing free distinguishes
+    # carriage. Four spec fields are null by necessity with a machine-readable
+    # reason on every row: network, kickoff_local_time, announced_at /
+    # flex_decided_at, and regional_coverage_pct.
     depends_on: [schedule-context]
