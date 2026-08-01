@@ -60,25 +60,28 @@ extraEnv:
   - name: REFRESH_MIN_INTERVAL_SECONDS
     value: "300"
   # False, deliberately, with the numbers rather than as a scaffold default
-  # nobody revisited. One pass reads three upstreams, measured live on
-  # 2026-08-01:
+  # nobody revisited. One pass reads three upstreams. Sizes are what goes over
+  # the WIRE for the request httpx actually sends (it offers
+  # `Accept-Encoding: gzip`), measured live on 2026-08-01:
   #
-  #     games.csv                       2.07 MiB
-  #     officials.csv                   1.23 MiB
+  #     games.csv                       0.49 MiB   (2.07 MiB once parsed --
+  #                                                 raw.githubusercontent.com
+  #                                                 transfer-encodes it)
+  #     officials.csv                   1.23 MiB   (release asset, not encoded)
   #     play_by_play_<season>.csv.gz   18.2  MiB   (93.4 MiB uncompressed)
   #     ----------------------------------------
-  #                                    21.5  MiB per changed pass
+  #                                    19.9  MiB per changed pass
   #
   # That is four times what `player-identity` ships false for (~5 MB) and about
   # half of `player-profile`'s cold read. The Kind cluster is rebuilt on every
-  # CI run and every pod restart re-captures, so a true here would pull ~21 MiB
+  # CI run and every pod restart re-captures, so a true here would pull ~20 MiB
   # from GitHub on every PR — for a collector whose entire product is eight
   # numbers per crew, recomputed weekly.
   #
   # Conditional GET makes the STEADY state cheap (all three feeds serve ETags
   # and answer If-None-Match with a 304 carrying zero bytes, verified live),
   # but it cannot help a fresh pod: the ETag store is in memory, so every
-  # restart pays the full 21.5 MiB again. That is the cost this flag controls.
+  # restart pays the full 19.9 MiB again. That is the cost this flag controls.
   #
   # Consequence for the smoke hook: a dispatched POST /refresh reaches the
   # upstreams REGARDLESS of this flag, so services/officiating/smoke.sh must

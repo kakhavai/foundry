@@ -11,19 +11,26 @@ two options. nflverse publishes the season's play-by-play twice:
 Both measured live (2026-08-01), both serving an `ETag` and answering
 `If-None-Match` with a `304`.
 
-**This adapter reads the gzipped one, projected to eight columns.** The two
-measurements that decided it, taken over the real 2025 file:
+**This adapter reads the gzipped one, projected to the six columns below.**
+Measured over the real 2025 file through the shipped code path:
 
-- streaming `.csv.gz` and building a full 372-key dict per row: **23.0s** CPU,
-  1.83 MiB peak
-- the same, projected to the eight columns below: **5.8s** CPU, 1.82 MiB peak
+- streaming `.csv.gz` and building a full 372-key dict per row: **9.8s** CPU
+- the same, projected to the six columns below: **3.8s** CPU
 
-So the compressed artifact is 5.1x less bandwidth at identical memory, and the
-projection is a further 4x off the CPU. Taking the uncompressed file with the
-existing helper was the cheap-to-build option and would have cost 93.4 MiB on
-every changed poll, forever, on a collector whose entire product is eight
-numbers per crew. Both options went into the shared library rather than this
-adapter because `defense-vs-position` reads the same document.
+Identical peak memory either way — the rows are yielded one at a time
+regardless, so the projection buys CPU and allocation churn, not headroom. So
+the compressed artifact is 5.1x less bandwidth and the projection is a further
+2.6x off the CPU. Taking the uncompressed file with the existing helper was the
+cheap-to-build option and would have cost 93.4 MiB on every changed poll,
+forever, on a collector whose entire product is eight numbers per crew. Both
+options went into the shared library rather than this adapter because
+`defense-vs-position` reads the same document.
+
+`gzipped=True` also buys a correctness property the uncompressed path cannot
+have: a gzip member carries a trailer, so a **short** body raises
+`UpstreamTruncated` instead of silently yielding half a season. That matters
+more here than the bandwidth — see that exception's docstring for what half a
+play-by-play file does to this collector's coverage.
 
 **A penalty here is an ACCEPTED penalty.** nflfastR sets `penalty = 1` on the
 play a flag was thrown and enforced; the aggregate lands at 12.72 per game over
@@ -55,7 +62,7 @@ UPSTREAM_URL_TEMPLATE = os.getenv(
     "play_by_play_{season}.csv.gz",
 )
 
-# Eight of 372. See the module docstring for what the other 364 cost.
+# Six of 372. See the module docstring for what the other 366 cost.
 REQUIRED_COLUMNS = frozenset(
     {
         "game_id",

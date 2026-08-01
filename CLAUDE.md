@@ -410,7 +410,14 @@ a collector gating state on durability — see below);
 `aread`, and the lake you are handed **refuses a synchronous call from the event
 loop thread** — boto3 on the loop gates readiness on object-store latency.
 `collector_core.streaming.stream_csv_dicts` is how a large CSV upstream is read:
-stream and filter as you parse, never hold the response twice.
+stream and filter as you parse, never hold the response twice. Two opt-in
+arguments carry the play-by-play-sized cases, and neither is discoverable from
+the call site — see [`docs/collectors.md`](docs/collectors.md): **`gzipped=True`**
+for a `.csv.gz` *artifact* (httpx cannot inflate one, the peak-memory bound
+lives in the library rather than in the transport, and a **truncated** body
+raises `UpstreamTruncated` instead of silently returning half a document), and
+**`columns=`** to narrow the row dicts on a wide upstream (372 columns cost
+9.8s of CPU a pass against 3.8s for the six `officiating` reads).
 
 **An object-store outage costs freshness, not availability — same as an
 upstream one.** `publish_capture` records a failed lake write on

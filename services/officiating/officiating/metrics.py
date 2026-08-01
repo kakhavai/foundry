@@ -23,10 +23,13 @@ row that looks perfectly well-formed:
 
 `officiating_referee_disagreements`
     Games where the schedule feed and the officials feed name different
-    referees, compared on surname. Against 2025 this is 0 with the surname
-    comparison and 17 without it (one man, "Ron" vs "Ronald"), so the series
-    exists to catch the case the loose comparison cannot explain away: a
-    crosswalk that has started joining the wrong games together.
+    referees, compared on surname. **The normal value is small and non-zero,
+    not zero.** Measured against the live 2025 season: 17 strict disagreements,
+    of which 16 are one man under two display forms ("Ron" vs "Ronald"
+    Torbert) and are absorbed by the surname comparison, leaving **1** —
+    `2025_13_NYG_NE`, where the two feeds genuinely name different referees.
+    Alert on a *rise*, never on `> 0`, or the first scrape pages for a
+    pre-existing upstream disagreement.
 
 **Every gauge is a `LastValueGauge`, never `meter.create_gauge`.** OTel's
 synchronous gauge is *consumed* by a collection, so a value written on a
@@ -66,13 +69,27 @@ class OfficiatingMetrics(CollectorMetrics):
             "officiating_referee_disagreements",
             description=(
                 "Games in the last pass where the schedule feed and the "
-                "officials feed named different referees."
+                "officials feed named different referees, compared on surname. "
+                "A small non-zero baseline is EXPECTED: the 2025 regular "
+                "season reads 1 (2025_13_NYG_NE). Alert on a rise, not on > 0."
             ),
         )
         self._crews_sampled = LastValueGauge(
             meter,
             "officiating_crews_sampled",
             description="Distinct crews with a rate window in the last pass.",
+        )
+        self._undersized_crews = LastValueGauge(
+            meter,
+            "officiating_undersized_crews",
+            description=(
+                "Assignments in the last pass whose crew had fewer than seven "
+                "on-field officials. Expected baseline is 0 for most seasons, "
+                "but the upstream really does ship these: 1 game in 2022 and "
+                "11 in 2024. A sustained rise means the feed changed shape, "
+                "which silently changes the denominator of "
+                "crew_continuity_pct."
+            ),
         )
 
     def rates_refused(self, count: int) -> None:
@@ -93,6 +110,9 @@ class OfficiatingMetrics(CollectorMetrics):
 
     def crews_sampled(self, count: int) -> None:
         self._crews_sampled.set(count, {"collector": self.collector})
+
+    def undersized_crews(self, count: int) -> None:
+        self._undersized_crews.set(count, {"collector": self.collector})
 
 
 metrics = OfficiatingMetrics()

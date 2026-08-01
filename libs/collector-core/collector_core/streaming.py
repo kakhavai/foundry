@@ -25,11 +25,14 @@ wall that every play-by-play consumer hits:
 
 **`gzipped=True`** inflates as it streams. The compression is part of the
 *file*, not the transfer, so httpx does not and cannot do it; see
-`_text_chunks`. 5.1x less bandwidth on every poll, same flat memory.
+`_text_chunks`. 5.1x less bandwidth on every poll, same flat memory. It also
+makes a **short** read detectable for the first time — a gzip member has a
+trailer, and `UpstreamTruncated` is what asks for it.
 
 **`columns=`** keeps only the columns the caller reads. Rule 2 applied to
-width rather than length: at 372 columns the dict build alone measured 23.0s
-of CPU per pass against 5.8s for the eight columns `officiating` reads.
+width rather than length: measured over the real artifact through the shipped
+path, reading all 372 columns costs **9.8s** of CPU per pass against **3.8s**
+for the six columns `officiating` actually reads.
 """
 
 import codecs
@@ -78,8 +81,34 @@ class UpstreamSchemaError(ValueError):
     """
 
 
+class UpstreamTruncated(ValueError):
+    """A gzip body ended before its trailer: the document is incomplete.
+
+    A separate type from `UpstreamSchemaError` because it is a separate fact —
+    the columns were fine, the bytes ran out — and an operator's response
+    differs (retry the fetch, versus go and look at the upstream's schema).
+    Both subclass `ValueError`, so `CollectorMetrics.reason_for` classifies
+    either as `malformed` and neither needs a new `reason` label.
+
+    **This is the failure that has to be loud, because it is the one that is
+    otherwise plausible.** Mid-stream corruption raises `zlib.error` on its
+    own — the CRC catches it. Truncation does not: `decompressobj` simply
+    stops having input, `flush()` returns what it has, and the reader gets a
+    short document whose last row is a fragment. Measured against a body cut
+    exactly in half: **9,895 of 20,000 rows and no exception**, final row
+    `{'col': 'r9', 'val': ''}`.
+
+    A collector cannot tell that from a genuinely small week. `officiating`
+    would have published `crew_tendency_rates` with `expected: 17, present: 17,
+    ratio 1.0` — every crew present, every window silently half-size, every
+    `stderr` inflated and every shrinkage weight overstated — into an
+    append-only lake that is never rewritten. A loud failure costs one pass of
+    freshness; a quiet one costs a season of correctness.
+    """
+
+
 async def _text_chunks(
-    response: httpx.Response, *, gzipped: bool
+    response: httpx.Response, url: str, *, gzipped: bool
 ) -> AsyncIterator[str]:
     """The response body as text chunks, gunzipping on the way past if asked.
 
@@ -114,6 +143,12 @@ async def _text_chunks(
     inflater here then raises `zlib.error` on the plain CSV. That is loud and
     correct: it fails the capture rather than mapping garbage into an
     append-only lake. None of the fleet's upstreams does it.
+
+    **A body that ends early raises**, via `inflater.eof` — see
+    `UpstreamTruncated`. That check is the reason the gzip path is *safer* than
+    the uncompressed one rather than merely cheaper: a plain CSV has no framing,
+    so a short read is undetectable and always has been, while a gzip member
+    carries a trailer and simply has to be asked.
     """
     if not gzipped:
         async for chunk in response.aiter_text():
@@ -135,12 +170,37 @@ async def _text_chunks(
             pending = inflater.unconsumed_tail
             if not pending:
                 break
-    # Whatever the inflater and decoder are still holding at end of stream.
-    # Skipping this drops the document's last partial chunk, which for a CSV
-    # is its final row — a silent one-row truncation on every fetch.
+
+    # `inflater.flush()` is belt-and-braces and returns nothing in practice:
+    # the drain loop above runs until `unconsumed_tail` is empty, which means
+    # every input byte has been consumed and every output byte emitted. It is
+    # kept because it costs nothing and because a future change to the drain
+    # loop would otherwise lose data silently.
+    #
+    # **`final=True` is the load-bearing part of this line**, and it is not
+    # about truncation — `inflater.eof` below owns that. It is about a
+    # COMPLETE gzip member whose decompressed bytes end mid-codepoint. The
+    # incremental decoder holds those bytes back waiting for the rest of the
+    # character; `final=True` says there is no rest, so decode or raise.
+    # Without it the trailing bytes are silently discarded: measured, a body
+    # ending in the first two bytes of `é` yields `'caf'` and loses one byte
+    # with no error at all.
     tail = decoder.decode(inflater.flush(), True)
     if tail:
         yield tail
+
+    # BEFORE the caller sees a complete read. `eof` is True only once the gzip
+    # trailer has been consumed, so this is the one place the difference
+    # between "the document ended" and "the bytes ran out" is observable. It
+    # comes after the flush deliberately: a truncated body should still be
+    # refused even though everything decodable has already been yielded, and
+    # `stream_csv_dicts` turns that into a raise before its own `commit()`, so
+    # no ETag is stored for a partial document.
+    if not inflater.eof:
+        raise UpstreamTruncated(
+            f"{url}: gzip stream ended before its trailer; the document is "
+            "incomplete and its final row is probably a fragment"
+        )
 
 
 def _split_line(line: str) -> list[str] | None:
@@ -184,14 +244,16 @@ async def stream_csv_dicts(
     as a `.csv.gz` **artifact** — not as a `Content-Encoding`, which httpx
     already handles. nflverse's play-by-play release is 93.4 MiB as `.csv` and
     18.2 MiB as `.csv.gz`; taking the compressed one is a 5.1x bandwidth saving
-    for a weekly poll, at no cost in peak memory. See `_text_chunks`.
+    for a weekly poll, at no cost in peak memory. It also raises
+    `UpstreamTruncated` on a short body, which the uncompressed path cannot
+    detect at all. See `_text_chunks`.
 
     `columns`, when given, keeps only those columns in each yielded row. The
     header is still validated in full, so `required_columns` is unaffected —
     this narrows the **row dicts**, not the schema check. That is a real cost,
-    not a tidiness preference: play-by-play carries 372 columns, and building
-    a 372-key dict for each of 48,771 rows measured **23.0s** of CPU against
-    **5.8s** for the eight columns a caller actually reads. The rows are
+    not a tidiness preference: play-by-play carries 372 columns, and building a
+    372-key dict for each of 48,771 rows measured **9.8s** of CPU against
+    **3.8s** for the six columns `officiating` actually reads. The rows are
     yielded one at a time either way, so this is CPU and allocation churn
     rather than peak memory. A name in `columns` that the header does not carry
     is simply absent from the rows; pair it with `required_columns` when its
@@ -228,7 +290,7 @@ async def stream_csv_dicts(
         etag_store=etag_store,
         follow_redirects=follow_redirects,
     ) as stream:
-        async for chunk in _text_chunks(stream.response, gzipped=gzipped):
+        async for chunk in _text_chunks(stream.response, url, gzipped=gzipped):
             consumed += len(chunk)
             if consumed > max_chars:
                 raise UpstreamTooLarge(

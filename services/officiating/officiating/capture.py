@@ -281,6 +281,7 @@ def _assignment_envelope(
         # a success.
         acc.fail(game_id, reason)
 
+    undersized = 0
     for assignment in assignments:
         acc.expect(assignment.game_id)
         if deadline is not None and datetime.now(tz=UTC) >= deadline:
@@ -289,6 +290,19 @@ def _assignment_envelope(
             # truncated is useful; one that reports itself complete is not.
             acc.fail(assignment.game_id, "deadline_exceeded")
             continue
+        if crews_module.undersized(assignment):
+            # Counted and recorded, never dropped: who worked the game is a
+            # fact even when the feed is incomplete about it. The reason
+            # matters because an undersized crew silently changes the
+            # DENOMINATOR of its own `crew_continuity_pct` — a mean over six
+            # terms instead of seven — so a rise here explains a continuity
+            # drift that nothing else can. Real: 1 game in 2022, 11 in 2024.
+            undersized += 1
+            acc.add_error(
+                crews_module.REASON_UNDERSIZED_CREW,
+                f"{assignment.game_id} crew={assignment.crew_id} "
+                f"members={len(assignment.members)}",
+            )
         rows.append(
             build_assignment_row(
                 assignment,
@@ -297,6 +311,8 @@ def _assignment_envelope(
             )
         )
         acc.record(assignment.game_id)
+
+    metrics.undersized_crews(undersized)
 
     for reason, detail in extra_errors:
         acc.add_priority_error(reason, detail)
@@ -666,8 +682,25 @@ async def _capture_without_penalties(
     are being served, so no rate is describing the wrong people. That is the
     join the alarm is defined on, not an omission.
 
-    The publish digest is deliberately NOT recorded here either. A degraded
-    pass must not be able to suppress the next healthy one as "unchanged".
+    **The two digests are treated differently, and the asymmetry is the point.**
+
+    `crew_tendency_rates` records none. Its envelope here is a `present: 0`
+    failure envelope, and letting that claim "already published" would suppress
+    the first healthy pass that actually computes rates.
+
+    `game_crew_assignment` DOES record its digest, gated on the write landing
+    like every other. That is safe for a reason this collector can prove rather
+    than assert: `games_sampled` on every assignment row is 0 exactly when
+    play-by-play was unavailable and non-zero when it was not, so a degraded
+    envelope can never be byte-identical to a healthy one — pinned by
+    `test_a_degraded_assignment_envelope_can_never_match_a_healthy_one`.
+
+    Without it, the whole preseason is a byte-identical daily append.
+    `play_by_play_<season>.csv.gz` does not exist until the season's first
+    games are played, so this branch is the *normal* one for months, and the
+    assignment envelope over that stretch is usually empty and always
+    unchanged. That is precisely the waste the gate was built to prevent,
+    across the longest window of the year.
     """
     logger.warning(
         "officiating: play-by-play is unavailable (%s: %s); publishing "
@@ -682,7 +715,7 @@ async def _capture_without_penalties(
     metrics.crews_sampled(0)
     metrics.low_continuity_assignments(0)
 
-    assignment_envelope, _ = _assignment_envelope(
+    assignment_envelope, assignment_rows = _assignment_envelope(
         assignments,
         misses,
         continuity=continuity,
@@ -694,6 +727,13 @@ async def _capture_without_penalties(
             (REASON_PENALTIES_UNAVAILABLE, f"{type(exc).__name__}: {exc}"[:200]),
         ),
     )
+    assignment_digest = _digest(assignment_rows)
+    if _PUBLISHED_DIGESTS.get((season, scope["week"], ASSIGNMENT)) == assignment_digest:
+        # Byte-identical to what this process already put in the lake. On a
+        # preseason cadence that is every day for months.
+        raise UpstreamUnchanged(
+            officials_adapter.source_ref(), source_ref=assignment_digest
+        )
     rates_envelope = failure_envelopes(
         exc,
         collector=COLLECTOR_NAME,
@@ -706,8 +746,16 @@ async def _capture_without_penalties(
         source_ref=pbp_adapter.source_ref(season),
     )[RATES]
 
-    return await publish_capture(
+    published = await publish_capture(
         {ASSIGNMENT: assignment_envelope, RATES: rates_envelope},
         lake=lake,
         metrics=metrics,
     )
+
+    # Only the assignment digest, and only if its write landed — the same
+    # durability gate the healthy path applies, for the same reason. The rates
+    # digest is deliberately never recorded here; see the docstring.
+    if published.landed(ASSIGNMENT):
+        _PUBLISHED_DIGESTS[(season, scope["week"], ASSIGNMENT)] = assignment_digest
+
+    return published

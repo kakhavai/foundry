@@ -597,6 +597,62 @@ is rule 1 made reusable and hands rows out one at a time so an ordinary
 deliberately reverted: it hides the bug and re-sizes the pod against an upstream
 nobody controls.
 
+### A gzipped upstream: `gzipped=True`
+
+For an upstream published as a `.csv.gz` **artifact** — the compression is part
+of the file, not of the transfer, so httpx neither does nor can inflate it and
+`aiter_text()` on one yields mojibake. nflverse's play-by-play release is the
+case that forced it: **93.4 MiB** as `.csv`, **18.2 MiB** as `.csv.gz`, and
+`officiating` polls it daily.
+
+```python
+async for row in stream_csv_dicts(client, url, gzipped=True, etag_key=url):
+    ...
+```
+
+Three things it gives you that hand-rolling does not, all of them silent
+failures otherwise:
+
+- **Peak memory is bounded here, not by the transport.** A gzip stream expands
+  ~5x, so handing each network chunk straight to `decompress()` makes peak
+  memory a property of whatever chunk size the transport chose. Measured: a
+  buffered 18.2 MiB body became one 93.4 MiB string and peaked at **281 MiB
+  against a 256Mi limit** — `roster-scope`'s OOMKill, rediscovered. The shipped
+  path caps each inflation step at `MAX_INFLATED_CHUNK`.
+- **A truncated body raises `UpstreamTruncated`.** This is the one that matters
+  most. Mid-stream corruption raises on its own (zlib checks the CRC);
+  truncation does not — before the check, a body cut in half returned **9,895
+  of 20,000 rows with no exception** and a fragment for a final row. A short
+  document is a *plausible* answer, so coverage reports it as a genuinely quiet
+  week rather than a transport failure, and it lands in an append-only lake.
+- **An incremental UTF-8 decoder**, because a chunk boundary lands mid-codepoint
+  eventually and a per-chunk `bytes.decode()` raises only on the documents
+  unlucky enough to contain one.
+
+`UpstreamTruncated` subclasses `ValueError`, so `reason_for` already classifies
+it `malformed` and it needs no new metric label.
+
+### A wide upstream: `columns=`
+
+Rule 2 applied to **width** rather than length. Play-by-play carries 372
+columns and `officiating` reads six of them; building the other 366 into a dict
+for each of 48,771 rows measured **9.8s** of CPU per pass against **3.8s**.
+
+```python
+COLUMNS = frozenset({"game_id", "season_type", "play_type", "penalty", ...})
+
+async for row in stream_csv_dicts(
+    client, url, required_columns=COLUMNS, columns=COLUMNS, gzipped=True
+):
+```
+
+`columns=` narrows the **row dicts**; `required_columns=` still validates the
+full header, so projecting a column away does not stop schema-drift detection
+from noticing it disappeared. A name in `columns` that the header does not
+carry is simply absent from the rows — say `required_columns` when you need it
+to exist. This buys CPU and allocation churn, not headroom: rows are yielded
+one at a time either way.
+
 ## Conditional GET: skip a re-fetch the upstream itself says is unnecessary
 
 **Opt-in, one argument wide, for an upstream that changes slower than your

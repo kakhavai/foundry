@@ -31,6 +31,7 @@ from officiating.rates import (
     REASON_NO_SAMPLE,
     REASON_UNSTABLE_AND_UNSHRUNK,
     SHRINKAGE_MATERIAL_BELOW,
+    Z_95,
     CrewSample,
     build_rate,
     estimate_priors,
@@ -164,11 +165,81 @@ def test_the_stability_interval_widens_as_the_sample_shrinks():
     assert fisher_ci_low(0.5, 5) < 0 < fisher_ci_low(0.5, 17)
 
 
+def test_the_interval_matches_the_standard_fisher_z_formula_exactly():
+    """The confidence level and the degrees of freedom, pinned to literals.
+
+    Every other test in this file asserts a *relation* — wider here, narrower
+    there, positive, negative. Relations survive a changed constant. Both of
+    these did: setting `Z_95` to the 90% quantile, and replacing `n - 3` with
+    `n`, each passed the entire 106-test suite.
+
+    That is not cosmetic. `stable = ci_low > 0` is the whole substance of the
+    spec's "distinguishable from zero", and `served = stable or is_shrunk` is
+    the refusal. At the 90% quantile, real-2025 `penalty_yards_per_game`
+    (r = 0.365, n = 17) flips from ci_low −0.1402 to **+0.0401** — from
+    unstable to stable — so `value` stops being the shrunk estimate and becomes
+    the **raw window mean, published unshrunk**. That is the spec's named
+    failure mode re-entering through the guard built to stop it, with a green
+    suite.
+
+    The numbers below are computed off-code from `tanh(atanh(r) - z/sqrt(n-3))`
+    with z = 1.959963985, not read back out of `fisher_ci_low`. Two different
+    `n` are needed: one value alone can be matched by the wrong denominator
+    plus a compensating constant.
+
+        r=0.365 n=17 -> -0.140249   (n instead of n-3: -0.092454; Z90: +0.040112)
+        r=0.500 n=8  -> -0.316017   (n instead of n-3: -0.142666; Z90: -0.023817)
+        r=0.900 n=5  -> +0.086102   (n instead of n-3: +0.533981; Z90: +0.512435)
+    """
+    assert fisher_ci_low(0.365, 17) == pytest.approx(-0.140249, abs=1e-6)
+    assert fisher_ci_low(0.500, 8) == pytest.approx(-0.316017, abs=1e-6)
+    assert fisher_ci_low(0.900, 5) == pytest.approx(+0.086102, abs=1e-6)
+
+
+def test_the_confidence_level_is_two_sided_95_percent():
+    """`Z_95` is the 97.5th percentile of the standard normal, which is what a
+    two-sided 95% interval takes. Pinned as a number because the name is the
+    only other thing saying so, and a name is not a test."""
+    assert Z_95 == pytest.approx(1.959963985, abs=1e-9)
+
+
 def test_a_perfect_correlation_does_not_blow_up():
     """`atanh` is undefined at 1.0, and a rate that correlates perfectly is
     exactly the case a naive implementation crashes on."""
     assert fisher_ci_low(1.0, 10) > 0.9
     assert fisher_ci_low(-1.0, 10) < -0.9
+
+
+def test_the_split_is_on_week_parity_not_position_in_the_window():
+    """A bye makes the two readings diverge, and every real season has byes.
+
+    `CrewSample.weeks` is carried alongside `games` rather than derived
+    *because* "odd week" is a fact about the schedule. But every other fixture
+    in this suite uses consecutive weeks 1..N, where week parity and
+    position-in-window parity coincide exactly — so a refactor to
+    `weeks.index(week) % 2` would merge green.
+
+    Here the crew misses week 3. Its remaining weeks are 1, 2, 4, 5:
+    by WEEK parity the odd half is {1, 5} and the even half is {2, 4}; by
+    POSITION the halves are {1, 4} and {2, 5}. The values are chosen so the two
+    readings give different half-means, and the assertion names the week-parity
+    answer.
+    """
+    sample = CrewSample(
+        crew_id="2026-ref701",
+        weeks=(1, 2, 4, 5),
+        games=(_game(10), _game(20), _game(30), _game(40)),
+    )
+
+    odd = sample.half_values(RATE, odd=True)
+    even = sample.half_values(RATE, odd=False)
+
+    # Weeks 1 and 5 are odd; weeks 2 and 4 are even.
+    assert odd == [10.0, 40.0]
+    assert even == [20.0, 30.0]
+    # Position parity would have given [10, 30] / [20, 40] — the same four
+    # numbers split the other way, which is why only a bye can tell them apart.
+    assert odd != [10.0, 30.0]
 
 
 def test_split_half_ignores_a_crew_with_an_empty_half():
@@ -325,21 +396,71 @@ _WEAKLY_CORRELATED = [
 
 
 def test_rate_stderr_is_the_standard_error_at_games_sampled():
-    """The spec's definition, exactly: sqrt(within-crew variance / n).
+    """The spec's definition, exactly: sqrt(pooled within-crew variance / n).
 
-    Computed independently here rather than read back out of the same helper —
-    two independent declarations of one expectation mean neither is
-    load-bearing.
+    **Genuinely independent this time.** The previous version of this test read
+    `priors.sigma2` back out of `estimate_priors` — the function under test —
+    and multiplied by `1/n`. Its docstring claimed independence; its body
+    pinned the `/ n` division and nothing whatever about the variance
+    estimator. Replacing the pooling denominator `total_games - crew_count`
+    with `total_games` survived the entire 106-test suite.
+
+    That mutant is not harmless. The biased estimator makes `sigma2` 12.5%
+    small here, so every `stderr` is understated and every
+    `k = tau2/(tau2 + sigma2/n)` is inflated — **every rate under-shrunk and
+    published closer to its raw mean than the evidence supports**, which is the
+    exact direction this module exists to prevent.
+
+    So the expectation is computed here from the sample data with `statistics`
+    alone, and cross-checked against a hand-worked literal. `_noisy_season` is
+    10 crews x 8 games; each crew has six values at `12+c` and two at `4+c`
+    about a mean of `10+c`, giving `6*4 + 2*36 = 96` per crew and 960 in total.
+    Pooled over `N - C = 70` that is 13.714286, and `sqrt(13.714286/8)` is
+    1.309307. The biased estimator would give 12.0 and 1.224745.
     """
     samples = _noisy_season()
-    priors = estimate_priors(samples, RATE)
 
+    # Independent: crew means and squared deviations from `statistics`, pooled
+    # over the residual degrees of freedom, without touching `rates.py`.
+    total_ss = 0.0
+    total_games = 0
+    for sample in samples:
+        values = sample.values(RATE)
+        mean = statistics.fmean(values)
+        total_ss += sum((value - mean) ** 2 for value in values)
+        total_games += len(values)
+    expected_sigma2 = total_ss / (total_games - len(samples))
+    expected_stderr = math.sqrt(expected_sigma2 / len(samples[0].games))
+
+    assert expected_sigma2 == pytest.approx(13.714286, abs=1e-6)
+    assert expected_stderr == pytest.approx(1.309307, abs=1e-6)
+
+    priors = estimate_priors(samples, RATE)
     built = build_rate(samples[0], RATE, priors)
 
-    expected = math.sqrt(priors.sigma2 / len(samples[0].games))
-    assert built["stderr"] == pytest.approx(expected, rel=1e-4)
-    assert built["stderr"] > 0, "a zero stderr would match a broken formula too"
+    assert priors.sigma2 == pytest.approx(expected_sigma2, rel=1e-9)
+    assert built["stderr"] == pytest.approx(expected_stderr, abs=1e-4)
     assert built["games_sampled"] == 8
+
+
+def test_sigma2_pools_over_residual_degrees_of_freedom_not_total_games():
+    """The unbiased pooled estimator, stated as a number.
+
+    `N - C` rather than `N`: each crew's mean is estimated from that crew's own
+    games, so one degree of freedom per crew is already spent. Dividing by `N`
+    is the maximum-likelihood estimator and is biased low — here by 12.5%, and
+    by more as crews get smaller, which is exactly the regime this collector
+    lives in at 16 games a crew.
+
+    Asserted against both literals so a mutant landing on either denominator is
+    caught by name rather than by a relation that both satisfy.
+    """
+    samples = _noisy_season()
+
+    priors = estimate_priors(samples, RATE)
+
+    assert priors.sigma2 == pytest.approx(960.0 / 70, abs=1e-9), "pooled over N - C"
+    assert priors.sigma2 != pytest.approx(960.0 / 80, abs=1e-9), "not over N"
 
 
 def test_stderr_shrinks_as_the_window_grows():

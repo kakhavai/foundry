@@ -218,6 +218,9 @@ async def test_the_degraded_pass_says_so_on_the_assignment_envelope_too():
     # that it survived the 50-entry cap, not its exact index.
     reasons = [e["reason"] for e in envelopes[ASSIGNMENT].errors[:3]]
     assert "penalties_unavailable" in reasons, envelopes[ASSIGNMENT].errors[:3]
+    # Paired with a length assertion, because `all([])` is `True` and an empty
+    # capture would otherwise satisfy the line below without publishing a row.
+    assert len(envelopes[ASSIGNMENT].signals) == 48
     assert all(row["games_sampled"] == 0 for row in envelopes[ASSIGNMENT].signals)
 
 

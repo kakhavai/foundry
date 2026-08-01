@@ -16,11 +16,22 @@ key that outlived one would silently pool two different groups.
 
 **Derived from `official_id`, never from `referee_name`**, and that is not
 theoretical tidiness. `games.csv` also carries a `referee` column, and against
-2025 it disagrees with `officials.csv` on 17 of 272 games — every one of them
-the same man, spelled "Ron Torbert" in one feed and "Ronald Torbert" in the
-other. Keyed by name that is a phantom eighteenth crew with 17 games and a
-real crew missing them. Keyed by `official_id` it is a footnote, which is what
-`referee_disagreement` records it as.
+the live 2025 season it disagrees with `officials.csv` on **17 of 272 games**:
+
+| games | `games.csv` | `officials.csv` |
+|---|---|---|
+| 16 | `Ron Torbert` | `Ronald Torbert` |
+| 1 | `Alex Kemp` | `Shawn Smith` |
+
+The first is one man under two display forms — keyed by name he is a phantom
+eighteenth crew with sixteen games and a real crew missing them. The surname
+comparison in `referee_disagreement` absorbs it.
+
+The second does not absorb, and should not: `2025_13_NYG_NE` really is
+described by two different referees in two feeds, and `officials.csv` gives a
+coherent seven-person crew under Shawn Smith. **So the surviving baseline is 1,
+not 0** — see `officiating_referee_disagreements`, which is why that gauge is
+documented with a non-zero normal value rather than as an alarm.
 
 --------------------------------------------------------------------------
 `crew_continuity_pct`, and why it is per assignment
@@ -138,9 +149,19 @@ def undersized(assignment: CrewAssignment) -> bool:
 
     Not an error and not a dropped row — the assignment is still published,
     because who worked the game is a fact even when the feed is incomplete
-    about it. It is surfaced as a metric so a feed that quietly starts omitting
-    positions is visible before it distorts continuity, which it would: a
-    six-person crew's continuity is a mean over six terms.
+    about it. `capture.py` counts these onto
+    `officiating_undersized_crews` and records
+    `REASON_UNDERSIZED_CREW` on the envelope, so a feed that quietly starts
+    omitting positions is visible before it distorts continuity — which it
+    would, because a six-person crew's continuity is a mean over six terms
+    rather than seven.
+
+    **This is not hypothetical, and it is why the gauge exists rather than an
+    assertion.** Measured across the live feed, every season 2015-2025: 2022
+    carries one six-person crew and **2024 carries eleven**. Every other season
+    is 7-for-7. A capture that refused an undersized crew would have dropped
+    twelve real games; one that ignored it would have mixed two different
+    continuity denominators with nothing to say so.
     """
     return len(assignment.members) < CREW_SIZE
 
@@ -179,12 +200,20 @@ def referee_disagreement(assignment: CrewAssignment, schedule_referee: str) -> b
     """Whether the schedule feed names a different referee than officials.csv.
 
     A **cross-check**, never a source, and deliberately not a capture failure.
-    Both feeds carry display names, and against 2025 the only disagreements
-    were "Ron Torbert" vs "Ronald Torbert" — one man, 17 games, zero join
-    errors. So this is compared loosely (case, punctuation and the given-name
-    form ignored) and what survives is recorded on a counter for a human to
-    look at, because a *real* divergence here would mean the crosswalk had
-    started joining the wrong games together.
+    Both feeds carry display names, so this compares loosely — case,
+    punctuation and the given-name form ignored — and what survives is counted
+    for a human rather than raised.
+
+    Against the live 2025 season that is **17 strict disagreements reducing to
+    1**: sixteen are "Ron Torbert" vs "Ronald Torbert", which the surname
+    comparison absorbs, and one (`2025_13_NYG_NE`, "Alex Kemp" vs "Shawn
+    Smith") is a genuine feed-level disagreement that survives and should.
+
+    **The baseline is therefore 1, not 0**, and that is deliberate rather than
+    a defect to tune away. Loosening the comparison until it reaches zero would
+    delete the only real signal it has; the point of the check is to notice a
+    crosswalk that has started joining the wrong games together, and a
+    comparison that can never fire cannot notice anything.
     """
     if not schedule_referee or not assignment.referee_name:
         return False

@@ -194,6 +194,46 @@ async def test_a_crew_with_no_play_by_play_stays_expected_in_the_rates_universe(
     assert "no_games_sampled" in reasons, reasons
 
 
+@respx.mock
+async def test_a_game_with_no_offensive_snaps_is_excluded_from_the_rate_window():
+    """The zero-snap guard, and removing it does not merely skew a rate.
+
+    `seconds_per_play` is `3600 / offensive_plays`, and that division happens
+    inside `_rates_envelope` — which runs **after** both `try/except` blocks in
+    `capture_officiating`. So a zero-snap game does not produce a degraded pass
+    or a `fail_capture`: it raises `ZeroDivisionError` into
+    `run_capture_loop`'s blanket handler and **the entire pass is discarded,
+    including the `game_crew_assignment` capture that already succeeded in
+    memory**. That is the availability inversion `publish_capture` exists to
+    prevent, reintroduced by a division.
+
+    Real inputs that produce it: play-by-play published for a game still in
+    progress, or a game whose only recorded rows are special teams
+    (`play_type` outside `{pass, run}`).
+
+    The correct behaviour is to drop that one game from the window — a game
+    play-by-play has an empty record for is not a game — so the crew reports
+    `games_sampled: 5` where its peers report 6, and everything else survives.
+    """
+    schedule = season_of(crews=8, weeks=6)
+    for game in schedule:
+        if game.referee_id == "704" and game.week == 2:
+            game.offensive_plays = 0
+    mock_upstreams(schedule)
+
+    envelopes = await _capture()
+
+    rates = {row["crew_id"]: row for row in envelopes[RATES].signals}
+    assert rates[f"{SEASON}-ref704"]["games_sampled"] == 5
+    assert rates[f"{SEASON}-ref705"]["games_sampled"] == 6, "peers are unaffected"
+    # The pass survived in full — both signal types, not a degraded one.
+    assert envelopes[ASSIGNMENT].coverage.present == 48
+    assert envelopes[RATES].coverage.present == 8
+    # And the rate that would have divided by zero is finite.
+    served = rates[f"{SEASON}-ref704"]["seconds_per_play"]
+    assert served["raw"] is not None and served["raw"] > 0
+
+
 def test_every_signal_type_declares_a_floor():
     assert set(EXPECTED_FLOOR) == set(SIGNAL_TYPES)
     assert all(floor >= 1 for floor in EXPECTED_FLOOR.values())

@@ -180,6 +180,9 @@ class _OneChunkResponse:
     async def aiter_bytes(self):
         yield self._body
 
+    async def aiter_text(self):
+        yield self._body.decode("utf-8")
+
 
 async def test_inflated_output_is_bounded_regardless_of_the_transport():
     """The `roster-scope` failure mode, in the gzip path.
@@ -199,7 +202,9 @@ async def test_inflated_output_is_bounded_regardless_of_the_transport():
 
     chunks = [
         chunk
-        async for chunk in _text_chunks(_OneChunkResponse(_gzipped(body)), gzipped=True)
+        async for chunk in _text_chunks(
+            _OneChunkResponse(_gzipped(body)), GZ_URL, gzipped=True
+        )
     ]
 
     assert len(chunks) > 1, "a single chunk means the bound was not applied"
@@ -226,7 +231,9 @@ async def test_a_multibyte_character_split_by_the_inflation_bound_survives():
 
     chunks = [
         chunk
-        async for chunk in _text_chunks(_OneChunkResponse(_gzipped(body)), gzipped=True)
+        async for chunk in _text_chunks(
+            _OneChunkResponse(_gzipped(body)), GZ_URL, gzipped=True
+        )
     ]
 
     assert len(chunks) > 3, "the bound must actually have cut the stream"
@@ -243,7 +250,9 @@ async def test_the_bound_does_not_drop_the_tail_of_the_last_chunk():
 
     chunks = [
         chunk
-        async for chunk in _text_chunks(_OneChunkResponse(_gzipped(body)), gzipped=True)
+        async for chunk in _text_chunks(
+            _OneChunkResponse(_gzipped(body)), GZ_URL, gzipped=True
+        )
     ]
 
     assert "".join(chunks) == body

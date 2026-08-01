@@ -8,7 +8,7 @@
 #
 # There is deliberately NO POST /refresh here. This collector ships
 # CAPTURE_ENABLED=false, and a dispatched refresh reaches the upstreams
-# regardless of that flag — it would pull ~21.5 MiB from GitHub on every PR.
+# regardless of that flag — it would pull ~20 MiB from GitHub on every PR.
 # See helm/values/officiating/values.yaml for the arithmetic.
 #
 # Everything below therefore runs against an EMPTY capture state, which is the

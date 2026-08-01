@@ -30,7 +30,16 @@ from officiating.capture import (
     reset_published_digests,
 )
 
-from .conftest import NOW, SEASON, SpyLake, mock_upstreams, season_of
+from .conftest import (
+    NOW,
+    SEASON,
+    FakeGame,
+    SpyLake,
+    gzipped,
+    mock_upstreams,
+    pbp_csv,
+    season_of,
+)
 
 
 async def _capture(lake, *, games=None, week: int = 1):
@@ -138,6 +147,118 @@ async def test_the_degraded_pass_does_not_suppress_the_next_healthy_one():
     await _capture(healthy, games=games)
 
     assert {w.signal_type for w in healthy.writes} == {ASSIGNMENT, RATES}
+
+
+@respx.mock
+async def test_a_repeated_degraded_pass_stops_re_appending_the_assignments():
+    """The preseason case, and the reason the degraded path gates at all.
+
+    `play_by_play_<season>.csv.gz` does not exist until a season's first games
+    are played, so the degraded branch is the NORMAL one for months. Ungated,
+    a `weekly` cadence appends a byte-identical — and usually empty —
+    assignment envelope to an append-only lake every day for that whole
+    stretch: precisely the waste the gate was built to prevent, across the
+    longest window of the year.
+
+    The rates digest is deliberately still not recorded, which the next test
+    covers.
+    """
+    games = season_of()
+    lake = SpyLake()
+
+    mock_upstreams(games, pbp_response=httpx.Response(404))
+    async with httpx.AsyncClient() as client:
+        await capture_officiating(SEASON, 1, client=client, lake=lake, now=NOW)
+    assert {w.signal_type for w in lake.writes} == {ASSIGNMENT, RATES}
+
+    # Second identical degraded pass: nothing changed, so nothing is appended.
+    with pytest.raises(UpstreamUnchanged):
+        async with httpx.AsyncClient() as client:
+            await capture_officiating(SEASON, 1, client=client, lake=lake, now=NOW)
+
+    assert len(lake.writes) == 2, "a byte-identical envelope was appended anyway"
+
+
+@respx.mock
+async def test_a_degraded_pass_whose_write_failed_still_retries():
+    """The durability gate applies on the degraded path too.
+
+    Recording the assignment digest for content the lake never received would
+    suppress the retry for the whole preseason — the same permanent-suppression
+    failure `PublishResult.landed` exists for, on the branch that runs most
+    often.
+    """
+    games = season_of()
+
+    mock_upstreams(games, pbp_response=httpx.Response(404))
+    async with httpx.AsyncClient() as client:
+        await capture_officiating(
+            SEASON, 1, client=client, lake=SpyLake(fail_write=True), now=NOW
+        )
+
+    respx.reset()
+    healthy = SpyLake()
+    mock_upstreams(games, pbp_response=httpx.Response(404))
+    async with httpx.AsyncClient() as client:
+        await capture_officiating(SEASON, 1, client=client, lake=healthy, now=NOW)
+
+    assert {w.signal_type for w in healthy.writes} == {ASSIGNMENT, RATES}
+
+
+@respx.mock
+async def test_the_degraded_pass_never_records_the_rates_digest():
+    """The asymmetry between the two digests, at the one input that shows it.
+
+    The degraded rates envelope is a `present: 0` failure envelope, and its
+    `signals` list is empty. So is the rates envelope of a *healthy* pass whose
+    play-by-play carries no game this season's crews worked — a real state, and
+    a different one: `errors` says `no_games_sampled` rather than
+    `penalties_unavailable`, and `upstream.source_ref` differs.
+
+    Digests are taken over the ROWS, so both hash to `_digest([])`. If the
+    degraded path recorded that digest, the healthy-but-empty pass would be
+    suppressed and the lake would never learn that play-by-play came back —
+    it would still say the feed was unreachable.
+
+    Found by mutation: adding the rates digest to the degraded path survives
+    every other test in this file, because every other fixture's healthy pass
+    produces eight crews.
+    """
+    games = season_of()
+    lake = SpyLake()
+
+    mock_upstreams(games, pbp_response=httpx.Response(404))
+    async with httpx.AsyncClient() as client:
+        await capture_officiating(SEASON, 1, client=client, lake=lake, now=NOW)
+    assert {w.signal_type for w in lake.writes} == {ASSIGNMENT, RATES}
+
+    # Play-by-play is readable now, but describes a game no crew here worked,
+    # so every crew's window is empty and `rates_rows` is `[]` again.
+    respx.reset()
+    stranger = FakeGame(
+        game_id="9999_01_XX_YY",
+        legacy_game_id="9999010100",
+        week=1,
+        referee_id="999",
+        referee_name="Nobody",
+    )
+    healthy = SpyLake()
+    mock_upstreams(
+        games,
+        pbp_response=httpx.Response(200, content=gzipped(pbp_csv([stranger]))),
+    )
+    async with httpx.AsyncClient() as client:
+        envelopes = await capture_officiating(
+            SEASON, 1, client=client, lake=healthy, now=NOW
+        )
+
+    assert envelopes[RATES].signals == []
+    assert RATES in {w.signal_type for w in healthy.writes}, (
+        "the degraded pass suppressed a genuinely different rates envelope"
+    )
+    reasons = {e["reason"] for e in envelopes[RATES].errors}
+    assert "no_games_sampled" in reasons, reasons
+    assert "penalties_unavailable" not in reasons
 
 
 @respx.mock

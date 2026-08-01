@@ -24,7 +24,7 @@ Three free upstreams, all nflverse, all measured live on 2026-08-01:
 
 | Feed | Size | Carries |
 |---|---|---|
-| `games.csv` | 2.07 MiB | the schedule, and the `old_game_id` crosswalk |
+| `games.csv` | 0.49 MiB on the wire (2.07 MiB parsed) | the schedule, and the `old_game_id` crosswalk |
 | `officials.csv` | 1.23 MiB | who worked each game, with `official_id` |
 | `play_by_play_<season>.csv.gz` | 18.2 MiB | penalties and snaps (93.4 MiB raw) |
 
@@ -41,9 +41,14 @@ season join, none unmatched in either direction. No table is maintained here.
 Every 2025 row carries one. The spec's requirement to "resolve individual
 officials, not just the referee's name" is therefore satisfiable rather than
 aspirational — and it matters: `games.csv`'s own `referee` column disagrees
-with `officials.csv` on 17 of 272 games, every one of them "Ron Torbert" versus
-"Ronald Torbert". Keyed by name that is a phantom eighteenth crew; keyed by
-`official_id` it is a footnote on a metric.
+with `officials.csv` on **17 of 272** 2025 games. Sixteen are "Ron Torbert"
+versus "Ronald Torbert" — one man, two display forms, which keyed by name is a
+phantom eighteenth crew and keyed by `official_id` is nothing at all. The
+seventeenth (`2025_13_NYG_NE`, "Alex Kemp" versus "Shawn Smith") is a real
+disagreement between the feeds and survives the surname comparison.
+
+**So `officiating_referee_disagreements` has a baseline of 1 on the 2025
+season, not 0.** Alert on a rise; `> 0` pages on the first scrape.
 
 ## Fields that are null by necessity
 
@@ -111,13 +116,13 @@ background task; poll `/signals` rather than reading it on the next line.
 
 ## Cost
 
-`CAPTURE_ENABLED=false`, deliberately. One pass reads 21.5 MiB across the three
+`CAPTURE_ENABLED=false`, deliberately. One pass reads 19.9 MiB across the three
 feeds. That is four times what `player-identity` ships false for, and the Kind
 cluster is rebuilt on every CI run.
 
 All three feeds serve ETags and answer `If-None-Match` with a 304 carrying zero
 bytes (verified live), so the steady state is nearly free — but the ETag store
-is in memory, so every pod restart pays the full 21.5 MiB again. That is the
+is in memory, so every pod restart pays the full 19.9 MiB again. That is the
 cost this flag controls.
 
 Taking play-by-play gzipped rather than raw is the other half. Two measurements
@@ -128,8 +133,8 @@ over the real 2025 file decided it, and both went into
 | | bandwidth | CPU | peak memory |
 |---|---|---|---|
 | `.csv`, full rows | 93.4 MiB | — | flat |
-| `.csv.gz`, full rows | 18.2 MiB | 23.0 s | 1.83 MiB |
-| `.csv.gz`, 8 of 372 columns | 18.2 MiB | **5.8 s** | 1.82 MiB |
+| `.csv.gz`, full 372-column rows | 18.2 MiB | 9.8 s | flat |
+| `.csv.gz`, 6 of 372 columns | 18.2 MiB | **3.8 s** | flat |
 
 ## Tests
 

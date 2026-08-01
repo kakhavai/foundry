@@ -24,7 +24,7 @@ import re
 import httpx
 import respx
 
-from officiating.capture import capture_officiating
+from officiating.capture import ASSIGNMENT, capture_officiating
 
 from .conftest import (
     DEFAULT_PENALTIES,
@@ -40,6 +40,7 @@ SERIES = (
     "officiating_low_continuity_assignments",
     "officiating_referee_disagreements",
     "officiating_crews_sampled",
+    "officiating_undersized_crews",
 )
 
 SUBSTITUTE_POSITIONS = (
@@ -100,7 +101,7 @@ async def test_every_series_survives_a_second_consecutive_scrape(client):
 
     first, second = _scrape(client), _scrape(client)
 
-    assert len(SERIES) == 4
+    assert len(SERIES) == 5
     for series in SERIES:
         assert series in first, f"{series} missing from the FIRST scrape"
         assert series in second, (
@@ -196,6 +197,54 @@ async def test_a_genuine_referee_conflict_does_move_the_gauge(client):
     body = _scrape(client)
 
     assert value(body, "officiating_referee_disagreements") == 8.0
+
+
+@respx.mock
+async def test_a_full_crew_leaves_the_undersized_gauge_at_zero(client):
+    """Zero is a value. The fixture's crews are all seven-strong, which is what
+    every season except 2022 and 2024 looks like."""
+    await run_capture(season_of(crews=8, weeks=6))
+    body = _scrape(client)
+
+    assert value(body, "officiating_undersized_crews") == 0.0
+
+
+@respx.mock
+async def test_a_short_crew_is_counted_and_published_rather_than_dropped(client):
+    """The guard `undersized` exists for, wired end to end.
+
+    Not hypothetical: measured across the live feed for every season 2015-2025,
+    2022 ships one six-person crew and **2024 ships eleven**. The position
+    vocabulary has already churned once in this file's history ("Head
+    Linesman" became "Down Judge" in 2017), so a feed that starts omitting a
+    position is a thing that happens.
+
+    Both halves are asserted. The count moves, AND the assignment is still
+    published — dropping it would lose a real game, and silently accepting it
+    would mix a six-term continuity mean with seven-term ones and leave nothing
+    to explain the drift.
+    """
+    games = season_of(crews=8, weeks=6)
+    short = [g for g in games if g.referee_id == "702" and g.week == 3][0]
+    short.positions = (
+        "Umpire",
+        "Down Judge",
+        "Line Judge",
+        "Field Judge",
+        "Side Judge",
+    )
+
+    envelopes = await run_capture(games)
+    body = _scrape(client)
+
+    assert value(body, "officiating_undersized_crews") == 1.0
+
+    rows = {row["game_id"]: row for row in envelopes[ASSIGNMENT].signals}
+    assert short.game_id in rows, "the assignment must still be published"
+    assert len(rows[short.game_id]["crew_members"]) == 6
+    reasons = [e["reason"] for e in envelopes[ASSIGNMENT].errors]
+    assert "undersized_crew" in reasons, reasons
+    assert envelopes[ASSIGNMENT].coverage.present == 48, "counted as captured"
 
 
 @respx.mock
