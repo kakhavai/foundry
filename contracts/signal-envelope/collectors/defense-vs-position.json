@@ -4,13 +4,122 @@
   "title": "defense-vs-position collector signal fields",
   "signal_types": {
     "defense_positional_allowance": {
-      "$comment": "TODO(new-collector): placeholder fields. Replace these with this collector's real signal shape, then delete this $comment. Kept deliberately meaningless -- the generated build_signal agrees with them by construction, so leaving both in place would prove only that two placeholders match.",
+      "description": "What one defense concedes to one fantasy position slot, in one scoring format. Keyed by (team_id, position, alignment, scoring_format); 6 x 1 x 3 = 18 rows per defense, 576 per pass.",
       "type": "object",
-      "required": ["key", "observed_at", "value"],
+      "additionalProperties": false,
+      "required": [
+        "team_id",
+        "position",
+        "alignment",
+        "scoring_format",
+        "observed_at",
+        "games_sampled",
+        "opportunities_defended",
+        "fantasy_points_allowed_per_game",
+        "fantasy_points_allowed_per_game_adj",
+        "fantasy_points_allowed_per_opportunity",
+        "targets_allowed_per_game",
+        "receptions_allowed_per_game",
+        "receiving_yards_allowed_per_game",
+        "yac_allowed_per_reception",
+        "rush_yards_allowed_per_carry",
+        "touchdowns_allowed_per_game",
+        "opponent_strength_index",
+        "adjustment_method",
+        "adjustment_window_weeks",
+        "rank_divergence_flagged"
+      ],
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "observed_at": { "type": "string", "format": "date-time" },
-        "value": { "type": "number" }
+        "team_id": {
+          "description": "The team that CONCEDES what this row describes. For QB, RB, WR, TE and K the conceding unit is its defense, as the spec's field table says. For position DST the conceding unit is its OFFENSE -- a defense never faces a DST, so 'the defense the row describes' has no referent for that one enum member. The invariant that holds for all six is 'team_id is the team that concedes', and a generator looks the row up by the opponent's abbreviation either way. See services/defense-vs-position/README.md.",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 4
+        },
+        "position": {
+          "description": "The fantasy position the allowance is measured against.",
+          "type": "string",
+          "enum": ["QB", "RB", "WR", "TE", "K", "DST"]
+        },
+        "alignment": {
+          "description": "Sub-split within the position. ALWAYS \"all\". The spec's enum also carries slot, perimeter, receiving_back, early_down_back, inline_te and detached_te, and none of them is sourceable: alignment means where a player lined up on the snap in question, and no nflverse feed carries a per-snap alignment column. pbp_participation's offense_positions is the roster-listed position, not the on-field one. Synthesising the sub-splits from a season-long player label is what the spec itself names as the wrong answer. Unlocking them needs a charting or tracking upstream with a pre-snap position column.",
+          "type": "string",
+          "enum": ["all"]
+        },
+        "scoring_format": {
+          "description": "The fantasy scoring ruleset the point fields are expressed in. Only the per-reception weight differs, so the K and DST rows are identical across all three -- that is honest rather than redundant.",
+          "type": "string",
+          "enum": ["standard", "half-ppr", "ppr"]
+        },
+        "observed_at": {
+          "description": "When this pass computed the row.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "games_sampled": {
+          "description": "Games in which this defense faced at least one opportunity from this position. The generator's discount lever for early-season noise.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "opportunities_defended": {
+          "description": "Denominator for the per-opportunity rate: dropbacks for QB, targets plus carries for RB/WR/TE, kick attempts for K, offensive plays run for DST. Derived from the same play set as games_sampled, in the same pass over the same accumulator.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "fantasy_points_allowed_per_game": {
+          "description": "Raw per-game allowance in scoring_format units. Null when games_sampled is 0.",
+          "type": ["number", "null"]
+        },
+        "fantasy_points_allowed_per_game_adj": {
+          "description": "The same allowance restated against a league-average schedule. Fit on OFFENSIVE units only -- never on prior defensive ratings, which would be circular -- with the game being adjusted left out of its opponent's own strength estimate. Null when the raw figure is.",
+          "type": ["number", "null"]
+        },
+        "fantasy_points_allowed_per_opportunity": {
+          "description": "Rate-basis allowance, immune to the volume that game script drives. Same numerator as the per-game figure. Null when opportunities_defended is 0.",
+          "type": ["number", "null"]
+        },
+        "targets_allowed_per_game": {
+          "description": "Raw targets conceded. Null for K and DST, where the concept does not apply -- not 0.0, which a generator would average in as a real observation.",
+          "type": ["number", "null"]
+        },
+        "receptions_allowed_per_game": {
+          "description": "Raw receptions conceded. Null for K and DST.",
+          "type": ["number", "null"]
+        },
+        "receiving_yards_allowed_per_game": {
+          "description": "Raw receiving yards conceded. Null for K and DST.",
+          "type": ["number", "null"]
+        },
+        "yac_allowed_per_reception": {
+          "description": "Yards after catch conceded per reception -- separates tackling from coverage. Null for K and DST, and null when no receptions were conceded.",
+          "type": ["number", "null"]
+        },
+        "rush_yards_allowed_per_carry": {
+          "description": "Populated for RB rows only, per the spec; null otherwise, including for QB rushing.",
+          "type": ["number", "null"]
+        },
+        "touchdowns_allowed_per_game": {
+          "description": "Total touchdowns conceded to the split, per game. Null when games_sampled is 0.",
+          "type": ["number", "null"]
+        },
+        "opponent_strength_index": {
+          "description": "Mean offensive strength faced across games_sampled, where 1.0 is league-average production at this position. Computed from offensive units only; see fantasy_points_allowed_per_game_adj.",
+          "type": ["number", "null"]
+        },
+        "adjustment_method": {
+          "description": "Identifier for the adjustment actually applied, so a stored row names its own vintage. Not the name of a model this collector does not implement.",
+          "type": "string",
+          "minLength": 1
+        },
+        "adjustment_window_weeks": {
+          "description": "Trailing window the adjustment was fit over, in weeks. Equal to the number of distinct weeks in the sampled play set, because the ratings and the adjustment are fit over one play set rather than two.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "rank_divergence_flagged": {
+          "description": "True when this defense's per-game and per-opportunity ranks across the 32 defenses differ by more than eight places in this split -- the spec's guard against a strong defense reading as a soft matchup because game script inflated its per-game allowance. Flagged for manual review, never dropped: the row is published either way, and the same fact appears in coverage.errors as a rank_divergence entry.",
+          "type": "boolean"
+        }
       }
     }
   }

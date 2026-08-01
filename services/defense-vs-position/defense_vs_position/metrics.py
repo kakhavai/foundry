@@ -1,23 +1,25 @@
 """defense-vs-position's binding to the shared collector metrics.
 
-A subclass rather than a bare `CollectorMetrics(COLLECTOR)` instance, and
-deliberately **not** consolidated into `collector-core`: the fleet-wide series
-(`collector_capture_*`, `collector_coverage_ratio`, `collector_staleness_
-seconds`) belong to the library, and the series that answer "is THIS collector
-wrong in the way only it can be wrong" belong here. A metric only one service
-records must not grow into the shared library — see player-identity's
-`identity_merge_conflicts` and roster-scope's `scope_missed_producers` for what
-that looks like when it is real.
+The fleet-wide series (`collector_capture_*`, `collector_coverage_ratio`,
+`collector_staleness_seconds`) belong to `collector-core`. The three below
+answer "is THIS collector wrong in the way only it can be wrong", which
+`collector_coverage_ratio` structurally cannot see:
 
-`DefenseVsPositionMetrics` is still a `CollectorMetrics`, so it satisfies
-`CollectorDescriptor.metrics` unchanged. Exactly one instance exists per
-process — the library never constructs one, it takes the one below.
+* **`rank_divergences`** is the named failure mode made alertable. Coverage
+  counts defenses that have a full set of rows; a divergent defense HAS a full
+  set of rows, every field populated and plausible, and the two rate bases
+  simply disagree about it. Coverage reads 1.0 the whole time.
+* **`players_resolved_ratio`** is the hole coverage cannot see either. An
+  opportunity dropped for an unresolved player deflates a defense's rates
+  without removing its row, so a `player-identity` outage would publish
+  32 complete-looking defenses whose every number is too small.
+* **`rows_captured`** is the ordinary volume series.
 
 **Every gauge is a `LastValueGauge`, never `meter.create_gauge`.** OTel's
 synchronous gauge is *consumed* by a collection, so a value written on a
-capture cadence is absent from every scrape that does not immediately follow
-one — and PromQL cannot tell an absent series from a healthy idle one. Counters
-are fine as they are; only gauges need the wrapper.
+weekly cadence is absent from every scrape that does not immediately follow
+one -- and PromQL cannot tell an absent series from a healthy idle one.
+Counters are already cumulative and need none of this.
 """
 
 from collector_core.metrics import CollectorMetrics, LastValueGauge
@@ -30,26 +32,51 @@ class DefenseVsPositionMetrics(CollectorMetrics):
     def __init__(self, collector: str = COLLECTOR) -> None:
         super().__init__(collector)
         meter = otel_metrics.get_meter(collector)
-        # PLACEHOLDER. Replace with the series that make THIS collector's own
-        # failure mode visible — the one `collector_coverage_ratio` cannot see
-        # because coverage is computed against the same input that drove the
-        # fetch. If there genuinely is no such series, delete the subclass and
-        # use `metrics = CollectorMetrics(COLLECTOR)` (weather does).
         self._rows_captured = LastValueGauge(
             meter,
             "defense_vs_position_rows_captured",
-            description="Rows captured in the last pass, by collector.",
+            description="Rated rows published in the last pass, by collector.",
+        )
+        self._rank_divergences = LastValueGauge(
+            meter,
+            "defense_vs_position_rank_divergences",
+            description=(
+                "Splits whose per-game and per-opportunity ranks differ by "
+                "more than the review threshold, in the last pass."
+            ),
+        )
+        self._players_resolved_ratio = LastValueGauge(
+            meter,
+            "defense_vs_position_players_resolved_ratio",
+            description=(
+                "Share of players with opportunities that player-identity "
+                "resolved in the last pass. Below 1.0, every rate is "
+                "deflated by the opportunities that were dropped."
+            ),
         )
 
     def rows_captured(self, count: int) -> None:
+        """Record every pass, including zero."""
+        self._rows_captured.set(count, {"collector": self.collector})
+
+    def rank_divergences(self, count: int) -> None:
         """Record every pass, including zero.
 
-        An absent Prometheus series and a healthy one are indistinguishable in
-        PromQL, so a gauge only written when it is interesting cannot be
-        alerted on. `LastValueGauge` is the other half of that: it keeps the
-        series present on every scrape, not only the one after this call.
+        Zero is as interesting as a large value: a gauge written only when the
+        guard fires cannot distinguish "nothing diverged this week" from "the
+        guard stopped running".
         """
-        self._rows_captured.set(count, {"collector": self.collector})
+        self._rank_divergences.set(count, {"collector": self.collector})
+
+    def players_resolved(self, resolved: int, seen: int) -> None:
+        """Record the resolved share, every pass.
+
+        `seen == 0` records 1.0 rather than dividing: a week with no
+        opportunities at all resolved everything it was asked to, and emitting
+        0.0 would fire the identity alert on a bye.
+        """
+        ratio = resolved / seen if seen else 1.0
+        self._players_resolved_ratio.set(ratio, {"collector": self.collector})
 
 
 metrics = DefenseVsPositionMetrics()

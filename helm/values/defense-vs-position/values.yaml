@@ -54,13 +54,36 @@ extraEnv:
     value: "http://minio.monitoring.svc.cluster.local:9000"
   - name: REFRESH_MIN_INTERVAL_SECONDS
     value: "300"
-  # Scaffolded false. Flip to "true" once the real upstream is wired AND you
-  # have decided the third-party load is acceptable: the cluster is recreated
-  # on every CI run and every pod restart re-captures, so a large or
-  # rate-limited upstream should stay false here. A dispatched POST /refresh
-  # reaches the upstream regardless of this flag.
+  # Stays false, and the decisive argument is not the bandwidth.
+  #
+  # A changed pass costs 20.61 MiB (play_by_play_<season>.csv.gz 18.22 +
+  # players.csv.gz 2.39) on a one-day base interval, with conditional GET on
+  # both so an unchanged poll costs one round trip. That alone would be
+  # arguable. What settles it:
+  #
+  #   1. CAPTURE_SEASON below is 2026 and play_by_play_2026.csv.gz 404s today
+  #      -- the season has not started. With the loop on, every pod start
+  #      writes a `present: 0` failure envelope and pins
+  #      collector_coverage_ratio at 0.0 indefinitely. A permanently red gauge
+  #      for zero data is how operators learn to ignore a gauge.
+  #   2. The Kind cluster is recreated on every integration-test run and every
+  #      pod restart re-captures, so "true" means 20.61 MiB from GitHub
+  #      release assets per CI run against an artifact that does not exist.
+  #   3. Nothing here is vacuous without a running loop. broadcast-context
+  #      ships true only because its own guard cannot be exercised otherwise;
+  #      this collector's rank-divergence guard runs inside `capture`, is
+  #      driven by the service suite against a synthetic 32-team season, and
+  #      was measured against the real 2025 artifact offline.
+  #
+  # Flip to "true" once CAPTURE_SEASON names a season whose artifact exists.
+  # A dispatched POST /refresh reaches nflverse regardless of this flag.
   - name: CAPTURE_ENABLED
     value: "false"
+  # The player-identity seam. Empty fails the capture CLOSED with reason
+  # `identity_unavailable` rather than publishing ratings built from
+  # unresolved ids -- see adapters/identity.py.
+  - name: PLAYER_IDENTITY_URL
+    value: "http://player-identity:8002"
   - name: CAPTURE_SEASON
     value: "2026"
   - name: CAPTURE_WEEK

@@ -668,14 +668,37 @@ collectors:
     cadence_class: weekly
     envelope_version: "1"
     signal_types: [defense_positional_allowance]
-    # Set true if this collector narrows to roster-scope's membership list
-    # before it fetches. Checked structurally by
-    # tests/test_scope_aware_gate.py: declaring true requires importing
-    # collector_core.scope.ScopeClient (`from collector_core.scope import
-    # ScopeClient`) somewhere in this collector's source — that test is by
-    # AST, so an `import collector_core.scope` plus attribute access will
-    # not satisfy it. That check proves the narrowing seam is wired in, not
-    # that it behaves correctly; write this collector's own fail-closed test
-    # for that.
+    # false, and correct: rows are keyed by (defense team, position,
+    # alignment, scoring_format), so roster-scope's membership watchlist has
+    # no row to select. Narrowing would also be actively wrong here — a
+    # defense's allowance is what it conceded to EVERY opponent, including
+    # players outside the 416-slot universe. player-identity is still a hard
+    # dependency: every allowed opportunity must resolve to a canonical
+    # player_id before it is attributed to a position, and an unresolved one
+    # is dropped rather than adopted under its raw GSIS key.
+    #
+    # Two disclosures, both in services/defense-vs-position/README.md:
+    #
+    #   * `alignment` is always "all". The spec's enum also carries slot,
+    #     perimeter, receiving_back, early_down_back, inline_te and
+    #     detached_te, and none is sourceable — alignment means where a
+    #     player lined up ON THE SNAP, and no nflverse feed carries a
+    #     per-snap alignment column (pbp_participation's offense_positions is
+    #     the ROSTER-listed position). The spec names synthesising them from
+    #     a season-long player label as the wrong answer, so they are not
+    #     synthesised. `all` is a legal member of that enum, so this is a
+    #     narrowing within the spec's vocabulary rather than a deviation from
+    #     it. Unlocking the sub-splits needs a charting or tracking upstream
+    #     with a pre-snap-position column.
+    #   * On a `DST` row `team_id` is the conceding OFFENSE, not a defense —
+    #     a defense never faces a DST, so the spec's team_id gloss has no
+    #     referent for that one enum member. The invariant that holds for all
+    #     six is "team_id is the team that concedes", and the generator's
+    #     lookup is unchanged.
+    #
+    # pbp_participation is deliberately NOT read: docs/collectors.md leaves
+    # the 46.82 MiB field-per-megabyte question open for this collector
+    # specifically, and the answer is that its whole return here is a
+    # per-player position map that players.csv.gz supplies for 2.39 MiB.
     scope_aware: false
     depends_on: [player-identity]

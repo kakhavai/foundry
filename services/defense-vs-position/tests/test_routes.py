@@ -8,6 +8,7 @@ consulted, and that auth is mounted.
 
 import time
 
+import pytest
 from collector_core.envelope import ENVELOPE_VERSION
 
 from defense_vs_position.capture import SIGNAL_TYPES
@@ -91,15 +92,71 @@ def test_a_second_refresh_inside_the_floor_is_429(client):
     assert int(response.headers["Retry-After"]) > 0
 
 
-def test_a_row_filter_narrows_the_signals(client):
-    """`signal_matches` is this collector's own, so prove it is consulted."""
+def signal_rows(client, query: str = "") -> list[dict]:
+    body = client.get(f"/signals{query}").json()
+    return [row for envelope in body["envelopes"] for row in envelope["signals"]]
+
+
+@pytest.mark.parametrize(
+    ("query", "field", "value"),
+    [
+        pytest.param("?team_id=PHI", "team_id", "PHI", id="team_id"),
+        pytest.param("?position=WR", "position", "WR", id="position"),
+        pytest.param("?scoring_format=ppr", "scoring_format", "ppr", id="format"),
+    ],
+)
+def test_each_declared_row_filter_narrows_the_signals(client, query, field, value):
+    """`signal_matches` is this collector's own, so prove every filter it
+    declares is actually consulted.
+
+    Parametrised over the whole of `ROW_FILTERS` rather than spot-checking
+    one: a filter the router accepts and the predicate ignores returns all 576
+    rows, which looks exactly like a filter that matched everything.
+    """
     client.post("/refresh", json={})
     wait_for_signals(client, count=len(SIGNAL_TYPES))
 
-    body = client.get("/signals?key=placeholder-a").json()
-    rows = [row for envelope in body["envelopes"] for row in envelope["signals"]]
-    assert rows, "the filter matched nothing — is ROW_FILTERS wired up?"
-    assert {row["key"] for row in rows} == {"placeholder-a"}
+    rows = signal_rows(client, query)
+    assert rows, "the filter matched nothing -- is ROW_FILTERS wired up?"
+    assert {row[field] for row in rows} == {value}
+    assert len(rows) < len(signal_rows(client)), "the filter narrowed nothing"
+
+
+def test_the_alignment_filter_is_applied_even_though_it_cannot_narrow(client):
+    """`alignment` is the one filter every row satisfies, so a "it narrowed
+    something" assertion cannot cover it -- and a predicate that skipped it
+    would look identical. Asking for a sub-split this collector does not
+    source must return nothing rather than everything."""
+    client.post("/refresh", json={})
+    wait_for_signals(client, count=len(SIGNAL_TYPES))
+
+    assert len(signal_rows(client, "?alignment=all")) == len(signal_rows(client))
+    assert signal_rows(client, "?alignment=slot") == []
+
+
+def test_the_flag_filter_accepts_a_lowercase_bool(client):
+    """`rank_divergence_flagged` is a bool, so `str()` gives `True`/`False`.
+    `?rank_divergence_flagged=true` is what every other HTTP API in this repo
+    accepts, and a case-sensitive compare would return nothing while looking
+    like a week with no divergences."""
+    client.post("/refresh", json={})
+    wait_for_signals(client, count=len(SIGNAL_TYPES))
+
+    rows = signal_rows(client, "?rank_divergence_flagged=false")
+    assert rows
+    assert all(row["rank_divergence_flagged"] is False for row in rows)
+
+
+def test_every_declared_filter_is_implemented(client):
+    """The list the router validates against and the list the predicate
+    applies must be the same list, not two lists that agree today."""
+    from defense_vs_position.signals import ROW_FILTERS, SUPPORTED_FILTERS
+
+    assert set(SUPPORTED_FILTERS) - {"season", "week", "signal_type"} == set(
+        ROW_FILTERS
+    )
+    for name in ROW_FILTERS:
+        assert client.get(f"/signals?{name}=x").status_code == 200
 
 
 def test_a_data_route_without_a_token_is_401(client):
