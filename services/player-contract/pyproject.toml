@@ -1,0 +1,62 @@
+[project]
+name = "player-contract"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-grpc",
+    "opentelemetry-exporter-prometheus",
+    "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-instrumentation-httpx",
+    "prometheus-client",
+    "collector-core",
+    # THIS SERVICE ONLY, and deliberately not a fleet dependency.
+    # docs/collectors.md's "take .csv.gz, not parquet" rule is a SIZE argument
+    # about the play-by-play feed, where the parquet is larger than the gzipped
+    # CSV. It does not govern the `contracts` release, whose `.csv.gz` artifact
+    # nflverse stopped regenerating on 2022-05-29 while the parquet is rebuilt
+    # daily — there, the choice is between a live document and a dead one, and
+    # size does not enter into it. `pyproject.toml` is per-service, so the
+    # 26.7 MiB cp312 wheel lands in player-contract's image and nowhere else.
+    "pyarrow",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "httpx",
+    "respx",
+    "jsonschema[format]",
+]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=player_contract --cov-branch --cov-report=term --cov-fail-under=80"
+
+[tool.coverage.run]
+branch = true
+source = ["player_contract"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.uv.sources]
+collector-core = { workspace = true }

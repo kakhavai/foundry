@@ -586,3 +586,78 @@ collectors:
     # for that.
     scope_aware: false
     depends_on: [schedule-context]
+
+  - name: player-contract
+    path: /collectors/player-contract
+    stage: 8E
+    cadence_class: seasonal
+    envelope_version: "1"
+    signal_types: [player_contract_status]
+    # ONE signal type. The spec originally paired this with
+    # `player_incentive_progress`; that half is DEFERRED to a `player-incentives`
+    # collector and is not built. The feed carries bonus AMOUNTS
+    # (prorated/roster/workout/option/other/per-game, in the per-season table)
+    # but no thresholds and no LTBE/NLTBE classification — and the spec's own
+    # thesis is that distance-to-threshold is the load-bearing signal. A
+    # collector that can compute progress against thresholds it does not have
+    # emits nothing. Do not expect an incentive route here.
+    #
+    # READS THE PARQUET, NOT THE CSV. The release's `.csv.gz` artifact was last
+    # regenerated 2022-05-29 while the release itself rebuilds daily; its newest
+    # `year_signed` is 2022 and 2,869 of its 2,887 "active" contracts had
+    # already expired. `historical_contracts.parquet` is 6.44 MiB, 51,785 rows,
+    # 2,931 active, current. `pyarrow` is in THIS service's pyproject.toml only
+    # — docs/collectors.md's CSV-over-parquet rule is a size argument and has
+    # been amended to say "compare updated_at across formats first".
+    #
+    # MONEY IS IN MILLIONS in the parquet (the CSV's was whole dollars) and is
+    # converted once in the adapter. Published values are whole USD.
+    #
+    # CAPTURE_ENABLED=false. 6.44 MiB per changed pass with conditional GET is
+    # cheap, so cost is not the constraint. Two things are: nothing here reads
+    # back a prior lake snapshot, so `broadcast-context`'s vacuous-guard
+    # exception does not apply and one dispatched /refresh produces exactly what
+    # a season-long loop would; and this collector fails closed on the scope, so
+    # on a cluster where roster-scope has not published every loop pass would
+    # write a `present: 0` envelope and count a capture failure.
+    #
+    # FOUR FIELDS ARE NULL on every row, and for two different reasons.
+    # `dead_money_if_cut_usd`, `tag_status` and `void_years_count` have no
+    # column at all (`unsourced_by_upstream`). `guaranteed_remaining_usd` has
+    # its components in the per-season table but the source does not settle what
+    # "not yet earned" means mid-season (`requires_undefined_derivation`), and
+    # inventing a rule would be fabrication. `cap_hit_current_usd` (75.7% of
+    # active rows) and `signing_bonus_proration_usd` (59.8%) ARE sourced, from
+    # that table — the spec listed them as null-by-necessity against the dead
+    # CSV. A row missing the capture season carries `absent_in_upstream_row`,
+    # which is a different claim from either of the above. Nothing is derived
+    # from `apy`, which is average annual value and is not read at all.
+    #
+    # Also disclosed: `coverage.expected` drops the spec's original
+    # `cap_hit_current_usd` clause and keeps it dropped even though the field is
+    # now sourced — it is present on 75.7% of rows, so putting it in the
+    # predicate would re-create the clause-swallowing failure `team-scheme` hit
+    # in a smaller form. `seasons_remaining` is NOT clamped at zero, so a
+    # negative value means the source's record of the deal expired before the
+    # season captured (33 of 2,930 rows against the live parquet).
+    #
+    # Identity joins TWO ways. 76.8% of active rows carry a `gsis_id` — a
+    # published crosswalk source — and resolve at Tier 1 by adoption, with the
+    # name deliberately withheld so a crosswalk miss cannot fall through to
+    # attribute scoring. The other 23% resolve on name/team/position at Tier 3.
+    # `otc_player_id` is published as provenance and a future crosswalk seed; it
+    # is NOT an fdy- id, is never sent as a `source_id` (player-identity has no
+    # `otc` crosswalk, so it would be inert), and must never be read as
+    # `player_id`.
+    #
+    # Set true if this collector narrows to roster-scope's membership list
+    # before it fetches. Checked structurally by
+    # tests/test_scope_aware_gate.py: declaring true requires importing
+    # collector_core.scope.ScopeClient (`from collector_core.scope import
+    # ScopeClient`) somewhere in this collector's source — that test is by
+    # AST, so an `import collector_core.scope` plus attribute access will
+    # not satisfy it. That check proves the narrowing seam is wired in, not
+    # that it behaves correctly; services/player-contract/tests/
+    # test_scope_narrowing.py is the behavioural half.
+    scope_aware: true
+    depends_on: [player-identity, roster-scope]

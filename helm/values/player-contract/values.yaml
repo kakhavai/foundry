@@ -1,0 +1,109 @@
+service:
+  name: player-contract
+  port: 8024
+
+image:
+  repository: ghcr.io/kakhavai/foundry/player-contract
+
+containerPort: 8024
+
+# The chart defaults. Measure before raising either: roster-scope's first deploy
+# was OOMKilled at 256Mi because its adapter buffered a 37 MB document three
+# times, and raising the limit would have hidden the bug rather than fixed it.
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+otel:
+  resourceAttributes: "service.name=player-contract,service.namespace=foundry"
+
+grafanaAnnotations:
+  enabled: true
+
+gateway:
+  enabled: true
+  pathPrefix: /collectors/player-contract
+  # Only the paths this collector publishes as its contract. /health and
+  # /metrics are deliberately absent: they are exempt from bearer auth
+  # in-process (a kubelet probe and a Prometheus scrape cannot carry a token),
+  # and that is a reason to reach them in-cluster, not at the edge.
+  # Add a path here when you add a route beyond the standard five.
+  publicPaths:
+    - /catalog
+    - /signals
+    - /refresh
+
+extraEnv:
+  # optional: true lets the pod start before the Secret exists. player-contract then
+  # answers 503 on every data route until it arrives — the ArgoCD Application
+  # reports Healthy the whole time, so recognise that combination for what it
+  # is before assuming the deploy is broken.
+  - name: COLLECTOR_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: player-contract-collector-token
+        key: token
+        optional: true
+  - name: LAKE_BUCKET
+    value: "foundry-signals"
+  - name: LAKE_ENDPOINT_URL
+    value: "http://minio.monitoring.svc.cluster.local:9000"
+  - name: REFRESH_MIN_INTERVAL_SECONDS
+    value: "300"
+  # The narrowing seam. An EMPTY value is a refusal, not a stub: 23% of this
+  # feed's rows carry no crosswalk id at all and are joined by display NAME, so
+  # without player-identity not one of them can be resolved. The pass fails
+  # closed with `identity_unavailable` rather than fetching 6.44 MiB to publish
+  # nothing, and rather than minting ids of its own — which would be a total
+  # join failure dressed up as a working one.
+  - name: PLAYER_IDENTITY_URL
+    value: "http://player-identity:8002"
+  # Deliberately false, and NOT merely the scaffolder's default. Two reasons,
+  # and NEITHER of them is staleness — the upstream parquet is rebuilt daily and
+  # is current. (An earlier revision of this comment argued from the abandoned
+  # `.csv.gz`, which this collector no longer reads. If you are here because
+  # that rationale looked obsolete: it was, it has been corrected, and the two
+  # below still hold.)
+  #
+  # 1. `broadcast-context`'s vacuous-guard exception does not apply. Nothing
+  #    here reads a prior lake snapshot back, so one dispatched POST /refresh
+  #    produces exactly what a season-long loop would; the guard is real, not
+  #    vacuous.
+  # 2. This collector reaches a THIRD PARTY from its loop, which today only
+  #    `weather` and `broadcast-context` do. It also fails closed on the scope,
+  #    so on a cluster where roster-scope has not yet published every loop pass
+  #    would write a `present: 0` envelope and count a capture failure.
+  #
+  # 6.44 MiB per changed pass with conditional GET is cheap, so cost does not
+  # settle it either way. A dispatched POST /refresh reaches the upstream
+  # regardless of this flag.
+  - name: CAPTURE_ENABLED
+    value: "false"
+  - name: CAPTURE_SEASON
+    value: "2026"
+  - name: CAPTURE_WEEK
+    value: "1"
+  # Wall-clock ceiling for one capture pass, so total upstream failure costs at
+  # most this much rather than items x per-call timeout.
+  - name: CAPTURE_DEADLINE_SECONDS
+    value: "300"
+  # Same optional:true pattern — the pod starts before the Secret exists and
+  # the lake simply has no credentials until it arrives.
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: player-contract-lake-credentials
+        key: access-key-id
+        optional: true
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: player-contract-lake-credentials
+        key: secret-access-key
+        optional: true
+  - name: AWS_DEFAULT_REGION
+    value: "us-east-1"

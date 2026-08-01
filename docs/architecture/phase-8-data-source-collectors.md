@@ -163,7 +163,7 @@ Cadence is a declared property of each collector, not an ad-hoc number, so the p
 | Class | Interval | Collectors |
 |---|---|---|
 | `static reference` | on change, checked daily | `venue`, `player-profile` |
-| `seasonal` | daily | `player-identity`, `player-contract`, `team-scheme`, `durability-history`, `season-futures` (plus `coaching-staff`, deferred) |
+| `seasonal` | daily | `player-identity`, `player-contract`, `team-scheme`, `durability-history`, `season-futures` (plus `coaching-staff` and `player-incentives`, deferred) |
 | `weekly` | post-game, then daily | `roster-scope`, `player-stats`, `usage-share`, `game-script`, `schedule-context`, `broadcast-context`, `officiating`, and all four matchup collectors |
 | `volatile` | 15 minutes | `weather`, `betting-lines`, `depth-chart`, `injury-report`, `roster-transactions`, `news-feed`, `social-signal` |
 | `perishable` | 5 minutes in-window | `player-props`; `weather` escalates into this class inside its pre-kickoff window |
@@ -1374,13 +1374,24 @@ Answers "who is this player, structurally" — the slow-moving attributes a proj
 
 #### `player-contract`
 
-**Signal types:** `player_contract_status`, `player_incentive_progress`
+**Signal types:** `player_contract_status`
 **Cadence class:** seasonal — daily at 11:00 UTC; unconditional refresh on transaction days
 **Stage:** 8E
 **Depends on:** `player-identity`, `roster-scope`
 **Scope-aware:** yes (reads `roster-scope`)
 
-Answers "what is this player financially motivated to do over the next eight weeks." Contract-year usage bumps and late-season incentive chasing are real and measurable, and neither is visible from box scores, depth charts, or news. The load-bearing part is not salary magnitude but distance-to-threshold: a receiver 140 yards short of a $500k incentive with three games left is a different projection than one who cleared it in October.
+Answers what a player is financially committed to and for how long. The
+sourceable, load-bearing part is **contract year**: a player in the final
+season of a deal is in a measurably different situation from one with three
+years left, and that is visible from nothing else in the fleet — not box
+scores, not depth charts, not news.
+
+**This collector was originally specified with a second signal type,
+`player_incentive_progress`. It was split during 8E implementation** — see
+`player-incentives` below. The short version: the free contracts feed contains
+no incentive data of any kind, and the spec's own thesis is that
+distance-to-threshold is the load-bearing signal. Rather than ship an empty
+signal type, the incentive half is deferred and named.
 
 **Normalized signal fields**
 
@@ -1394,13 +1405,92 @@ Answers "what is this player financially motivated to do over the next eight wee
 | `seasons_remaining` | int | Contract seasons after the current one, excluding void years |
 | `total_value_usd` | int | Full stated contract value |
 | `guaranteed_total_usd` | int | Total guaranteed at signing |
-| `guaranteed_remaining_usd` | int | Guarantee not yet earned as of capture |
-| `cap_hit_current_usd` | int | Current-season cap charge |
-| `signing_bonus_proration_usd` | int | Current-season prorated bonus share |
-| `dead_money_if_cut_usd` | int | Cap charge the team eats on release, current season |
-| `tag_status` | enum | `none`, `franchise_exclusive`, `franchise_non_exclusive`, `transition` |
-| `void_years_count` | int | Void years appended to the deal; 0 when none |
-| `incentives` | array | See below — one object per incentive |
+| `cap_hit_current_usd` | int | Current-season cap charge — **sourced**, 75.7% of active rows |
+| `signing_bonus_proration_usd` | int | Current-season prorated bonus share — **sourced**, 59.8% |
+| `guaranteed_remaining_usd` | int | Guarantee not yet earned — **null, see below** |
+| `dead_money_if_cut_usd` | int | Cap charge on release — **null** |
+| `tag_status` | enum | `none`, `franchise_exclusive`, `franchise_non_exclusive`, `transition` — **null** |
+| `void_years_count` | int | Void years appended to the deal — **null** |
+| `otc_player_id` | string | OverTheCap's own key. Provenance and a future crosswalk seed — **not** an identity |
+| `null_field_reasons` | object | Why each null field is null. `unsourced_by_upstream` / `requires_undefined_derivation` / `absent_in_upstream_row` |
+
+**Extra routes beyond the standard five:** none. The incentive query route
+(`GET /signals/incentives`) belonged to the deferred half.
+
+**`coverage.expected` means:** every scoped player under an active NFL contract
+has a record with non-null `contract_end_season`. Practice-squad and unsigned
+free agents are excluded from `expected` rather than reported missing.
+
+**This is a deliberate deviation from the original wording**, which also
+required `cap_hit_current_usd` non-null. That field has no free source, so the
+original predicate would make coverage 0 for every player forever — the same
+clause-swallowing failure `team-scheme` hit, where an unsourceable field in the
+coverage predicate destroys the ratio's ability to report anything else, such
+as a truncated upstream.
+
+**Adapter notes — revised during implementation, against the live document.**
+
+*Format.* The release's `.csv.gz` artifact was last regenerated **2022-05-29**
+while the release itself rebuilds daily; its newest `year_signed` is 2022 and
+2,869 of its 2,887 "active" contracts had already expired. The collector reads
+`historical_contracts.parquet` instead, with `pyarrow` in its own
+`pyproject.toml` and nowhere else. This is a bounded exception to
+`docs/collectors.md`'s CSV-over-parquet rule, which is a *size* argument and
+does not govern an abandoned artifact; the rule has been amended to say
+"compare `updated_at` across formats first".
+
+*Units.* The CSV carried money as whole-dollar integers. **The parquet carries
+it as doubles denominated in millions** (Mahomes: `value = 448.0`). It is
+converted once, in the adapter, and published as whole USD. Getting this wrong
+is wrong for every row at once and raises nothing.
+
+*Identity.* The upstream keys players by **name**, so a `resolved: false` is a
+miss with a reason and never an adopted raw id. The parquet additionally
+carries `gsis_id` on 76.8% of active rows — a Tier-1 published crosswalk key —
+so those resolve by adoption and the remaining 23% fall back to name agreement.
+Two query shapes; the crosswalk arm withholds the name deliberately.
+
+*Nulls.* Four fields are still emitted present-and-null with a machine-readable
+reason. `guaranteed_remaining_usd` is null for a different reason from the
+other three: its components exist in the per-season table but the source does
+not settle what "not yet earned" means mid-season, so it carries
+`requires_undefined_derivation` rather than `unsourced_by_upstream`. Nothing is
+derived from `apy`, which is average annual value and is not read at all.
+
+**Failure mode to watch:** A restructured deal. A mid-season restructure changes
+proration and dead money retroactively, and the append-only S3 layout means an
+old snapshot stays correct-as-of its `captured_at` and **must not be reconciled
+backward**. This section previously called the risk latent "with the cap fields
+null" and said it would become live the moment a feed supplied them. **It is now
+live** — the parquet supplies `cap_hit_current_usd` and
+`signing_bonus_proration_usd`. The discipline is structural rather than a
+convention: nothing in the capture reads a prior envelope back, and no
+reconcile-backward path exists to be reached for.
+
+**Candidate upstreams (non-normative):** nflverse `contracts`
+(`historical_contracts.parquet`, sourced from OverTheCap) — 6.44 MiB on the
+wire, 51,785 rows, 2,931 active contracts. The `.csv.gz` variant of the same
+release is **abandoned**; do not use it.
+
+#### `player-incentives`
+
+**Signal types:** `player_incentive_progress`
+**Cadence class:** seasonal — daily; progress moves weekly, thresholds do not
+**Stage:** deferred — **paid vendor required**, see below
+**Depends on:** `player-identity`, `roster-scope`, `player-contract`, plus the statistics collectors for progress
+**Scope-aware:** yes (reads `roster-scope`)
+
+Answers what a player is financially motivated to do over the next eight weeks.
+Late-season incentive chasing is real and measurable, and the load-bearing part
+is not salary magnitude but **distance to threshold**: a receiver 140 yards
+short of a $500k incentive with three games left is a different projection from
+one who cleared it in October.
+
+**Normalized signal fields**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `player_id` | string | Canonical id from `player-identity` |
 | `incentives[].incentive_id` | string | Stable id within the contract |
 | `incentives[].metric` | enum | `receiving_yards`, `receptions`, `rushing_yards`, `touchdowns`, `snap_pct`, `games_active`, `pro_bowl`, `team_playoffs`, `other` |
 | `incentives[].threshold` | float | Value that must be reached |
@@ -1409,17 +1499,65 @@ Answers "what is this player financially motivated to do over the next eight wee
 | `incentives[].payout_usd` | int | Amount triggered |
 | `incentives[].classification` | enum | `likely_to_be_earned`, `not_likely_to_be_earned`, `unknown` |
 
-**Extra routes beyond the standard five:** `GET /signals/incentives?season=2026&week=14&max_progress_pct=0.95` — returns only incentives still live and within reach, which is the query the projection generator actually issues in the back half of a season.
+**Extra routes beyond the standard five:**
+`GET /signals/incentives?season=2026&week=14&max_progress_pct=0.95` — only
+incentives still live and within reach, which is the query the projection
+generator actually issues in the back half of a season.
 
-**`coverage.expected` means:** every scoped player under an active NFL contract has a record with non-null `contract_end_season` and `cap_hit_current_usd`; practice-squad and unsigned free agents are excluded from `expected` rather than reported missing.
+**`coverage.expected` means:** every scoped player with at least one incentive
+in their active contract has a record. A player with no incentives is excluded
+from `expected` rather than reported missing — an incentive-free contract is a
+fact, not a gap.
 
-**Adapter notes:** Contract terms are published as prose and tables with no canonical schema, so an adapter's real work is normalizing money into integer cents-free USD and reducing free-text incentive language into the `metric` enum, emitting `other` with the raw text preserved in `upstream.source_ref` rather than guessing. `current_progress` is not an upstream field — the collector computes it by joining `incentives[].metric` against the statistics collectors, which means the adapter supplies thresholds and the collector supplies progress. The hard part is restructured deals: a mid-season restructure changes proration and dead money retroactively, and the append-only S3 layout means the old snapshot stays correct-as-of its `captured_at` and must not be reconciled backward.
+**Why this is deferred rather than built.** The free contracts feed carries no
+usable incentive data. Verified during 8E against **both** artifacts of the
+`contracts` release, and the precise claim differs between them:
 
-**Failure mode to watch:** an incentive whose threshold is per-season but whose `current_progress` is accidentally computed career-to-date, or across the wrong season boundary, produces a player who looks permanently past every threshold — a plausible, well-formed record that silently removes the entire incentive-chasing signal for that player rather than corrupting it visibly. The catching assertion is a contract-level invariant that `progress_pct` for any counting-stat metric is non-decreasing within a season and resets to 0.0 at week 1, checked snapshot-over-snapshot; a mid-season reset or a week-1 nonzero value fails the check.
+* `historical_contracts.csv.gz` (31,893 rows): the `season_history` column is
+  empty on every row, and no column or value anywhere mentions `incentive`,
+  `escalator`, `LTBE`, `NLTBE` or `bonus`. Absent, not sparse. **That artifact
+  is also four years stale** — see `player-contract` above.
+* `historical_contracts.parquet` (51,785 rows — the live one, and the one
+  `player-contract` actually reads): `season_history` is gone, replaced by a
+  populated per-season `cols` table. That table **does** carry bonus columns —
+  `prorated_bonus`, `roster_bonus`, `workout_bonus`, `option_bonus`,
+  `other_bonus`, `per_game_roster_bonus`. An earlier revision of this paragraph
+  said no column anywhere mentioned `bonus`; against the parquet that is
+  **wrong**, and correcting it changes the argument rather than the conclusion.
 
-**Candidate upstreams (non-normative):** Spotrac, OverTheCap, NFLPA public salary data, club transaction wires.
+**Bonus buckets are not incentives.** Those six are contractual cash the deal
+allocates by year. None carries the three things `player_incentive_progress` is
+defined by: a `metric` from the enum, a `threshold` to measure distance against,
+and an LTBE/NLTBE classification. `per_game_roster_bonus` is the closest — it
+pays per game active — and still has neither a threshold nor a classification.
+So the load-bearing field, distance to threshold, remains unsourceable and the
+deferral stands on the sharper statement: **the feed carries bonus amounts
+without thresholds or classifications**, not "no bonus data exists".
 
----
+The split matters because **the collector computes only half of each record**.
+Per the original spec, `current_progress` is derived by joining
+`incentives[].metric` against the statistics collectors — Foundry can do that.
+The **thresholds** must be supplied by the adapter, and there is no free source
+for them. A collector that can compute progress against thresholds it does not
+have emits nothing.
+
+**Adapter notes:** Contract terms are published as prose and tables with no
+canonical schema, so an adapter's real work is normalizing money into integer
+USD and reducing free-text incentive language into the `metric` enum, emitting
+`other` with the raw text preserved rather than guessing.
+
+**Failure mode to watch:** An incentive whose threshold is per-season but whose
+`current_progress` is accidentally computed career-to-date, or across the wrong
+season boundary. That produces a player who looks permanently past every
+threshold — a plausible, well-formed record that silently removes the entire
+incentive-chasing signal for that player rather than corrupting it visibly. The
+catching assertion is a contract-level invariant that `progress_pct` for any
+counting-stat metric is non-decreasing within a season and resets to 0.0 at
+week 1, checked snapshot-over-snapshot; a mid-season reset or a week-1 nonzero
+value fails the check.
+
+**Candidate upstreams (non-normative):** Spotrac or OverTheCap's paid tiers,
+NFLPA public salary data, club transaction wires
 
 #### `durability-history`
 
