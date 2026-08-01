@@ -44,6 +44,7 @@ __all__ = [
     "PRODUCTION_WEEKS",
     "TRAJECTORY_WEEKS",
     "age_adjusted_availability_rate",
+    "age_cohort_size",
     "age_years",
     "availability_rate",
     "body_part_history",
@@ -175,6 +176,31 @@ def median_days_to_return_by_body_part(events) -> dict[str, float] | None:
         body_part: round(float(statistics.median(values)), 2)
         for body_part, values in sorted(by_part.items())
     }
+
+
+def age_cohort_size(
+    *,
+    position: str,
+    age: float | None,
+    population: list[tuple[str, float, float]],
+) -> int:
+    """How many same-position players inside the age band this pass captured.
+
+    Published beside the null it explains. A consumer seeing
+    `age_adjusted_availability_rate: null` otherwise cannot tell "the cohort was
+    too small" from "this player has no birth date" from a bug — three different
+    facts with three different responses, and `min_sample_events` already sets
+    the precedent for publishing the floor next to what it suppresses.
+    """
+    if age is None:
+        return 0
+    return len(
+        [
+            value
+            for other_position, other_age, value in population
+            if other_position == position and abs(other_age - age) <= AGE_BAND_YEARS
+        ]
+    )
 
 
 def age_adjusted_availability_rate(

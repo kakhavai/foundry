@@ -181,6 +181,89 @@ def test_a_non_injury_designation_ENDS_a_run_rather_than_extending_it():
     assert reasons.count("discipline") == 1
 
 
+def _two_season_schedule(weeks: int = 6) -> Schedule:
+    """Two consecutive seasons for one club, so a run can be offered a boundary
+    to cross."""
+    by_team_season = {}
+    for season in (SEASON - 1, SEASON):
+        by_team_season[(season, TEAM)] = tuple(
+            GameRef(
+                game_id=f"{season}_{week:02d}_BUF_{TEAM}",
+                season=season,
+                week=week,
+                game_type="REG",
+                gameday=date(season, 9, 6) + timedelta(days=7 * (week - 1)),
+                team=TEAM,
+            )
+            for week in range(1, weeks + 1)
+        )
+    return Schedule(by_team_season=by_team_season, seasons_read=(SEASON - 1, SEASON))
+
+
+def _across_seasons(*, played, designated):
+    return reconstruct(
+        player(),
+        PLAYER_ID,
+        seasons=[SEASON - 1, SEASON],
+        schedule=_two_season_schedule(),
+        designations=designated,
+        participation=played,
+        complete=True,
+    )
+
+
+def test_a_run_does_NOT_cross_a_season_boundary():
+    """An offseason is not a bye.
+
+    A hamstring designated in the last week of one season and again in Week 1 of
+    the next is two events. Collapsed into one, it publishes a `days_to_return`
+    of ~339 — mostly offseason — which lands in
+    `median_days_to_return_by_body_part` and in `/signals/return-profile`, the
+    route whose entire purpose is telling a generator when a player comes back.
+    It also hides a decision the recurrence rule should have made: split
+    correctly, the second event is well outside the 90-day window and is
+    correctly novel.
+    """
+    played = participation(1, 2, 3, 4, 5, season=SEASON - 1)
+    for week in (2, 3, 4, 5, 6):
+        played.snap_pct[(PFR, SEASON, week)] = 0.8
+        played.team_of[(PFR, SEASON, week)] = TEAM
+
+    history = _across_seasons(
+        played=played,
+        designated=[
+            *designations((6, "Hamstring"), season=SEASON - 1),
+            *designations((1, "Hamstring"), season=SEASON),
+        ],
+    )
+
+    assert len(history.events) == 2, [e.event_id for e in history.events]
+    assert [e.onset_season for e in history.events] == [SEASON - 1, SEASON]
+    assert all(
+        e.days_to_return is None or e.days_to_return < 60 for e in history.events
+    ), [e.days_to_return for e in history.events]
+    # The decision the collapse would have hidden.
+    assert history.events[1].is_recurrence_of is None
+
+
+def test_an_event_unresolved_when_the_season_ENDS_stays_unresolved():
+    """The resolution scan is bounded the same way the run is. A return measured
+    across an offseason is not a recovery time, and `None` is the honest answer:
+    the games stopped, so we do not know."""
+    played = participation(1, 2, 3, 4, 5, season=SEASON - 1)
+    for week in range(1, 7):
+        played.snap_pct[(PFR, SEASON, week)] = 0.8
+        played.team_of[(PFR, SEASON, week)] = TEAM
+
+    history = _across_seasons(
+        played=played, designated=designations((6, "Knee"), season=SEASON - 1)
+    )
+
+    knee = next(e for e in history.events if e.injury_site == "knee")
+    assert knee.days_to_return is None
+    assert knee.resolved_date is None
+
+
 # ── resolution ───────────────────────────────────────────────────────────────
 
 
@@ -225,6 +308,58 @@ def test_an_event_the_player_plays_through_is_still_an_event():
     assert len(history.events) == 1
     assert history.events[0].games_missed == 0
     assert history.games_missed_injury == 0
+
+
+def test_a_played_through_event_gets_NO_return_time():
+    """He never left, so there is nothing to return from.
+
+    Handing the event the next game's date manufactures a `days_to_return` out of
+    the ordinary weekly cadence — the event is published (that is right), but it
+    must not be able to back a return statistic.
+    """
+    history = build(played=list(range(1, 9)), designated=designations((3, "Hamstring")))
+    event = history.events[0]
+    assert event.games_missed == 0
+    assert event.days_to_return is None
+    assert event.resolved_date is None
+    assert event.resolved is False
+
+
+def test_a_never_unavailable_player_cannot_unlock_return_statistics():
+    """The whole point of the previous test, at the aggregate level.
+
+    Three played-through Questionable hamstrings and ZERO missed games would
+    otherwise publish three 9-day "returns", cross `MIN_SAMPLE_EVENTS`, and
+    unlock every derived rate — including a `soft_tissue_recurrence_rate` of
+    0.667 — for a player who has never been unavailable, while
+    `career_games_missed_injury` correctly read 0. Two published numbers about
+    the same player, disagreeing.
+    """
+    from durability_history import derive
+
+    history = build(
+        played=list(range(1, 9)),
+        designated=designations((3, "Hamstring"), (5, "Hamstring"), (7, "Hamstring")),
+    )
+
+    assert len(history.events) == 3
+    assert history.games_missed_injury == 0
+    assert derive.sample_size_events(history.events) == 0
+    assert derive.median_days_to_return_by_body_part(history.events) is None
+    assert derive.soft_tissue_recurrence_rate(history.events) is None
+    assert derive.post_return_snap_trajectory(history) is None
+    # The events themselves survive — the evidence is still published.
+    assert derive.body_part_history(history.events)["hamstring"]["event_count"] == 3
+
+
+def test_an_event_the_player_DID_miss_games_for_still_resolves():
+    """The guard must not be so wide that it stops resolving real absences —
+    every return time in the fleet would go null and the route would publish
+    nothing."""
+    history = build(played=[1, 4, 5], designated=designations((2, "Knee"), (3, "Knee")))
+    assert history.events[0].games_missed == 2
+    assert history.events[0].days_to_return == 16
+    assert history.events[0].resolved is True
 
 
 # ── recurrence ───────────────────────────────────────────────────────────────

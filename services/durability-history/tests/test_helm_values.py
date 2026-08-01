@@ -106,6 +106,46 @@ def test_the_declared_dials_agree_with_the_code_defaults():
     assert int(_env("MIN_SAMPLE_EVENTS")) == derive.MIN_SAMPLE_EVENTS
 
 
+def test_the_registry_does_not_claim_a_taxonomy_agreement_that_does_not_exist():
+    """`injury-report` and this collector read DIFFERENT feeds and publish
+    DIFFERENT `absence_reason` enums. An earlier revision of the registry entry
+    claimed both were the same; a generator joining a current-week reason to a
+    historical one on that claim gets `discipline` where it expects `suspension`
+    and two values where it expects one.
+
+    The registry is where the generator reads the fleet's inventory, so the
+    translation table belongs there — and this test is what stops it silently
+    reverting to a claim of agreement.
+    """
+    registry = (ROOT / "contracts" / "collector-registry.yaml").read_text()
+    entry = registry[registry.index("- name: durability-history") :]
+
+    assert "MUST TRANSLATE" in entry, (
+        "the registry no longer warns that the two absence_reason enums differ"
+    )
+    for pairing in ("discipline", "suspension", "non_injury_other", "undesignated"):
+        assert pairing in entry, pairing
+    assert "the same feed" not in entry, (
+        "the registry is claiming a shared feed again — injury-report reads "
+        "INJURY_REPORT_URL, this collector reads nflverse injuries_{season}.csv"
+    )
+
+
+def test_the_published_enum_still_matches_the_mapping_the_registry_documents():
+    """The table in the registry is prose; this is what keeps it true. A value
+    added to `ABSENCE_REASONS` without a row in that table leaves a generator
+    with an untranslatable reason and no warning."""
+    from durability_history.events import ABSENCE_REASONS
+
+    registry = (ROOT / "contracts" / "collector-registry.yaml").read_text()
+    entry = registry[registry.index("- name: durability-history") :]
+    for reason in ABSENCE_REASONS:
+        assert reason in entry, (
+            f"{reason!r} is published but is not in the registry's translation "
+            "table for injury-report"
+        )
+
+
 def test_the_gateway_path_matches_the_registry():
     registry = yaml.safe_load(
         (ROOT / "contracts" / "collector-registry.yaml").read_text()

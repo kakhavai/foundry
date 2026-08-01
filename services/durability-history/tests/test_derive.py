@@ -184,6 +184,23 @@ def test_age_adjustment_uses_same_position_players_inside_the_age_band():
     assert adjusted == pytest.approx(0.9 / 0.8, abs=1e-4)
 
 
+def test_the_cohort_size_makes_the_null_READABLE():
+    """Three different facts produce the same `null`, and a consumer has to be
+    able to tell them apart: no birth date, a cohort below the floor, or a bug.
+    `min_sample_events` on the trajectory row already sets the precedent for
+    publishing the floor beside what it suppresses."""
+    cohort = [("RB", 25.0, 0.8) for _ in range(derive.MIN_COHORT)]
+
+    # No age -> cohort size 0, which is distinguishable from a small cohort.
+    assert derive.age_cohort_size(position="RB", age=None, population=cohort) == 0
+    # A real cohort, counted honestly, ignoring position and out-of-band ages.
+    noise = [("WR", 25.0, 0.2), ("RB", 40.0, 0.1)]
+    assert (
+        derive.age_cohort_size(position="RB", age=25.0, population=cohort + noise)
+        == derive.MIN_COHORT
+    )
+
+
 def test_age_adjustment_is_null_without_an_age_or_a_rate():
     cohort = [("RB", 25.0, 0.8) for _ in range(derive.MIN_COHORT)]
     assert (

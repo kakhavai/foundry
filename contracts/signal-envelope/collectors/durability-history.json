@@ -32,13 +32,16 @@
         "career_games_missed_injury",
         "availability_rate",
         "age_adjusted_availability_rate",
+        "age_years",
+        "age_cohort_size",
+        "min_age_cohort",
         "body_part_history",
         "soft_tissue_recurrence_rate",
         "median_days_to_return_by_body_part",
         "sample_size_events",
         "games_missed_by_reason",
         "designated_games",
-        "observation_first_season",
+        "observation_window_first_season",
         "career_history_complete"
       ],
       "properties": {
@@ -53,9 +56,24 @@
           "maximum": 1
         },
         "age_adjusted_availability_rate": {
-          "$comment": "This player's availability_rate divided by the mean of same-position players within the age band. Null below the cohort floor.",
+          "$comment": "This player's availability_rate divided by the mean of same-position players within the age band. Null below the cohort floor -- read age_years and age_cohort_size to tell WHICH null this is.",
           "type": ["number", "null"],
           "minimum": 0
+        },
+        "age_years": {
+          "$comment": "Null means no usable birth date, which is one of the two reasons age_adjusted_availability_rate can be null.",
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "age_cohort_size": {
+          "$comment": "Same-position players inside the age band this pass captured. Below min_age_cohort is the OTHER reason the adjusted rate is null. 0 whenever age_years is null.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "min_age_cohort": {
+          "$comment": "The floor, published beside what it suppresses -- the same reasoning as min_sample_events on the trajectory row.",
+          "type": "integer",
+          "minimum": 1
         },
         "body_part_history": {
           "type": "object",
@@ -87,7 +105,11 @@
           "type": "integer",
           "minimum": 0
         },
-        "observation_first_season": { "type": "integer", "minimum": 1999 },
+        "observation_window_first_season": {
+          "$comment": "The first season of the bounded history WINDOW, not the player's own first season. career_games_possible and career_games_missed_injury are counted from here; career_history_complete says whether that reaches the player's rookie season.",
+          "type": "integer",
+          "minimum": 1999
+        },
         "career_history_complete": {
           "$comment": "False whenever the bounded history window does not reach the player's rookie season, or a season could not be read. A truncated total labelled complete is a well-formed number that is silently wrong.",
           "type": "boolean"
@@ -117,7 +139,7 @@
               "onset_date": { "type": "string", "format": "date" },
               "games_missed": { "type": "integer", "minimum": 0 },
               "days_to_return": {
-                "$comment": "Null while the event is unresolved -- the player has not played since.",
+                "$comment": "Null when the event is unresolved. THREE cases, all deliberate: the player has not played since; the season ended before he returned (an offseason is not recovery time); or games_missed is 0, so he never left and there is nothing to return from. Only events with a non-null value count toward sample_size_events.",
                 "type": ["integer", "null"],
                 "minimum": 0
               },

@@ -42,6 +42,17 @@ second as a recurrence of the first — a fabricated re-aggravation, at the exac
 26-day distance the recurrence rule is calibrated for. Runs are therefore walked
 over the team's ordered completed-game list, which has no bye in it at all.
 
+**But that list spans seasons, and a run must not.** An offseason is not a bye.
+Without a season bound, a hamstring designated in the last week of one season and
+again in Week 1 of the next collapses into ONE event with a `days_to_return` of
+339 — a number that is mostly offseason, that lands in
+`median_days_to_return_by_body_part` and in `/signals/return-profile`, and that
+hides a decision the recurrence rule should have made (split correctly, the
+second event is >90 days out and correctly novel). The resolution scan is bounded
+the same way: an event nobody returned from before the season ended is
+**unresolved**, which is the honest answer rather than a return time measured
+across an offseason.
+
 --------------------------------------------------------------------------
 3. Recurrence is a documented, versioned rule, and it keys on `injury_site`
 --------------------------------------------------------------------------
@@ -72,6 +83,16 @@ attributable to this event", which is 0 for that event and not a reason to
 discard it — the recurrence history is the product here, and dropping the
 played-through events would hide the two strains that preceded the one that
 finally cost a game.
+
+**A played-through event gets NO `days_to_return`, though, and that is the other
+half of the same decision.** He never left, so there is nothing to return from,
+and handing the event the next game's date manufactures a return time out of the
+ordinary weekly cadence. Three played-through Questionable hamstrings would
+otherwise publish three 9-day "returns", cross `MIN_SAMPLE_EVENTS`, and unlock
+every derived rate for a player who has never been unavailable — while
+`career_games_missed_injury` correctly read 0. Keeping the event is right;
+letting it back a return statistic is not. `sample_size_events` counts RESOLVED
+events, so withholding the return time is exactly what keeps the floor honest.
 """
 
 from dataclasses import dataclass
@@ -400,7 +421,7 @@ class PlayerHistory:
     games_possible: int
     games_missed_injury: int
     designated_games: int
-    observation_first_season: int
+    observation_window_first_season: int
     complete: bool
 
     def missed_by_reason(self) -> dict[str, int]:
@@ -558,8 +579,20 @@ def _find_events(
 ) -> tuple[InjuryEvent, ...]:
     """Collapse designation runs into events, then link the recurrences.
 
-    Runs are walked over `tenure`'s INDEX, so a bye week cannot split one
-    absence into two — see the module docstring, section 2.
+    Runs are walked over `tenure`'s INDEX, so a bye week cannot split one absence
+    into two — see the module docstring, section 2.
+
+    **Both the run and its resolution stop at the season boundary**, and that is
+    the limit of section 2 rather than an exception to it. `tenure` is ordered
+    chronologically across seasons, so without the bound a hamstring designated
+    in the last week of one season and again in Week 1 of the next collapses into
+    a single event with a `days_to_return` of 339 — a number that is mostly
+    offseason, that lands in `median_days_to_return_by_body_part` and in
+    `/signals/return-profile`, and that hides a decision the recurrence rule
+    should have made (split correctly the second event is >90 days out and
+    correctly novel). An event nobody returned from before the season ended is
+    **unresolved**, which is the honest answer: the games stopped, so we do not
+    know.
     """
     events: list[InjuryEvent] = []
     index = 0
@@ -569,8 +602,13 @@ def _find_events(
             index += 1
             continue
 
+        season = tenure[index].game.season
         end = index
-        while end + 1 < len(tenure) and _designation_site(tenure[end + 1]) == site:
+        while (
+            end + 1 < len(tenure)
+            and tenure[end + 1].game.season == season
+            and _designation_site(tenure[end + 1]) == site
+        ):
             end += 1
         run = list(tenure[index : end + 1])
 
@@ -579,11 +617,24 @@ def _find_events(
             1 for entry in run if entry.absence_reason == COUNTED_ABSENCE_REASON
         )
 
+        # **A return time only exists for an event the player was actually OUT
+        # for.** An event he played through never took him off the field, so
+        # there is nothing to return from — and giving it the next game's date
+        # anyway manufactures a `days_to_return` out of the ordinary weekly
+        # cadence. Three played-through Questionable hamstrings would otherwise
+        # publish three 9-day "returns", cross `MIN_SAMPLE_EVENTS`, and unlock
+        # every derived rate for a player who has never been unavailable — while
+        # `career_games_missed_injury` correctly read 0. The events are still
+        # published (see the module docstring, section 4); only the return time
+        # is withheld, so they cannot back a return statistic.
         resolved_date: date | None = None
-        for entry in tenure[end + 1 :]:
-            if entry.played:
-                resolved_date = entry.game.gameday
-                break
+        if games_missed > 0:
+            for entry in tenure[end + 1 :]:
+                if entry.game.season != season:
+                    break
+                if entry.played:
+                    resolved_date = entry.game.gameday
+                    break
 
         days_to_return = None if resolved_date is None else (resolved_date - onset).days
 
@@ -683,6 +734,6 @@ def reconstruct(
         games_possible=len(tenure),
         games_missed_injury=games_missed_injury,
         designated_games=designated_games,
-        observation_first_season=min(seasons),
+        observation_window_first_season=min(seasons),
         complete=complete,
     )

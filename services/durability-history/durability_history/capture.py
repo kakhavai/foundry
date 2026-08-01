@@ -290,7 +290,7 @@ def build_profile_row(
     games. `designated_games` is the right-hand side of the spec's assertion, so
     the assertion is checkable from the row alone.
 
-    `observation_first_season` and `career_history_complete` are the honesty
+    `observation_window_first_season` and `career_history_complete` are the honesty
     fields on every `career_*` number here. The window is bounded for cost (see
     `adapters/upstream.py`), and a truncated total labelled complete is a
     well-formed number that is silently wrong — the same call
@@ -306,6 +306,16 @@ def build_profile_row(
         "age_adjusted_availability_rate": derive.age_adjusted_availability_rate(
             rate, position=history.position, age=age, population=population
         ),
+        # The three fields that make the null above readable. Without them a
+        # consumer cannot tell "the cohort was too small" from "this player has
+        # no birth date" from a bug — `min_sample_events` on the trajectory row
+        # already sets the precedent for publishing a floor beside what it
+        # suppresses.
+        "age_years": age,
+        "age_cohort_size": derive.age_cohort_size(
+            position=history.position, age=age, population=population
+        ),
+        "min_age_cohort": derive.MIN_COHORT,
         "body_part_history": derive.body_part_history(history.events),
         "soft_tissue_recurrence_rate": derive.soft_tissue_recurrence_rate(
             history.events
@@ -318,7 +328,7 @@ def build_profile_row(
         "games_missed_by_reason": history.missed_by_reason(),
         "designated_games": history.designated_games,
         # The window, published.
-        "observation_first_season": history.observation_first_season,
+        "observation_window_first_season": history.observation_window_first_season,
         "career_history_complete": history.complete,
     }
 

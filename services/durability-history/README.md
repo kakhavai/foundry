@@ -28,6 +28,27 @@ the team's ordered completed-game list so a bye week cannot split one absence in
 two. `derive.py` turns the events into rates — and declines to, below the sample
 floor.
 
+Two bounds on that, both of which exist because the alternative publishes a
+plausible number rather than an obviously broken one:
+
+* **A run stops at the season boundary, and so does its resolution.** An
+  offseason is not a bye. Without the bound, a hamstring designated in the last
+  week of one season and Week 1 of the next collapses into one event with a
+  `days_to_return` of 339 — mostly offseason — which lands in
+  `median_days_to_return_by_body_part` and in `/signals/return-profile`, and which
+  hides a decision the recurrence rule should have made (split correctly, the
+  second event is >90 days out and correctly novel). An event nobody returned
+  from before the season ended is *unresolved*: the games stopped, so we do not
+  know.
+* **A played-through event gets no `days_to_return`.** He never left, so there is
+  nothing to return from, and handing it the next game's date manufactures a
+  return time out of the ordinary weekly cadence. Three played-through
+  Questionable hamstrings would otherwise publish three 9-day "returns", cross
+  `MIN_SAMPLE_EVENTS`, and unlock every derived rate for a player who has never
+  been unavailable — while `career_games_missed_injury` correctly read 0. The
+  events are still published; only the return time is withheld, which is exactly
+  what keeps `sample_size_events` honest.
+
 ## The named failure mode, and the guard
 
 > Games missed for non-injury reasons — a suspension, a personal-leave absence, a
@@ -71,10 +92,11 @@ falls within `RECURRENCE_WINDOW_DAYS` (90) of the earlier one's **return**
 return because a re-aggravation is measured from when the tissue was last asked to
 work again.
 
-The rule and its version are emitted in `upstream.adapter`:
+The rule and its version are emitted in `upstream.adapter`, **and the label
+describes the rule the code actually runs**:
 
 ```
-nflverse-injury-tables;recurrence=v1:same_body_part_within_90d_of_return
+nflverse-injury-tables;recurrence=v1:same_injury_site_within_90d_of_return
 ```
 
 Per the spec, and not decoration: without it, widening the window rewrites
@@ -149,14 +171,46 @@ fail-closed path:
 
 `DURABILITY_HISTORY_SEASONS` is the cost dial: each extra season is ~11.4 MB cold.
 
+## `absence_reason` does NOT match `injury-report`'s enum
+
+Both collectors publish a field called `absence_reason`; they are different
+vocabularies over different feeds (`injury-report` reads `INJURY_REPORT_URL`,
+this reads the nflverse `injuries_{season}.csv` archive). A generator joining a
+current-week reason to a historical one **must translate**:
+
+| durability-history | injury-report | relationship |
+|---|---|---|
+| `injury` / `illness` / `personal` / `rest` | same | identical |
+| `discipline` | `suspension` | **not** identical — `discipline` also covers a coach's decision / healthy scratch, which `injury-report` has no member for |
+| `non_injury_other` | `unspecified` | a designation naming a non-injury cause this collector cannot classify further |
+| `undesignated` | `unspecified` | **no designation existed.** One value upstream; split here because "the report said nothing" is what the named failure mode's guard turns on |
+
+Reconciling the enums outright was considered and not done: renaming
+`discipline` to `suspension` would mis-label a healthy scratch, and collapsing the
+last two would delete the distinction the guard exists for. The table is
+maintained in `contracts/collector-registry.yaml` beside this collector's
+`depends_on`, which is where the generator reads the fleet's inventory, and
+`tests/test_helm_values.py` fails if a published enum value is missing from it.
+
 ## Known gaps, stated rather than papered over
 
 * **"Career" is a bounded window.** The spec says career-to-date; nflverse
   publishes injuries back to 2009, and a real career sweep is ~205 MB per cold
-  process. Every row therefore carries `observation_first_season` and
+  process. Every row therefore carries `observation_window_first_season` — the
+  first season of the WINDOW, not of the player's own career — and
   `career_history_complete`, and the window is in every envelope's `scope`. A
   truncated total labelled complete is a well-formed number that is silently
   wrong — the same call `player-profile`'s `career_snaps_complete` makes.
+
+  **The per-season memos carry the scope keep-set they were built with**, and
+  that is load-bearing rather than bookkeeping: prior-season files 304 forever
+  and `roster-scope` membership changes weekly, so a season-keyed memo would
+  serve a player who entered the scope after process start a history built
+  without him — under `career_history_complete: true`. `player-profile` does not
+  have this problem because it memoises the unfiltered table and narrows
+  afterwards; pushing the filter into the parse is what creates it, and is also
+  what keeps the 8.28 MB weekly-stats file from materialising ~4,600 unwanted
+  players. See `tests/test_memo_scope_interaction.py`.
 * **A mid-season trade attributes the whole season to the club the player spent
   longer at.** That under-counts tenure games at the other club, which biases
   `availability_rate` upward — toward "this player is fine". Splitting a season

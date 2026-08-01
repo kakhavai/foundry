@@ -350,13 +350,52 @@ collectors:
     #   roster-scope — read from the LAKE via collector_core.scope.ScopeClient,
     #     never over HTTP, so the last good scope survives a roster-scope
     #     outage.
-    #   injury-report — CONCEPTUAL. Both collectors read the same weekly
-    #     designation feed; that one reports the CURRENT designation and this
-    #     one reconstructs history from it. There is no call between them, and
-    #     there deliberately is not: reading injury-report's lake output would
-    #     bound this collector's history to however far back that collector has
-    #     been deployed, which is a few weeks rather than three seasons. The
-    #     edge is declared because the two must agree about what a designation
-    #     means — this collector's absence_reason taxonomy is the same feed's
-    #     report_primary_injury text — and a change there is a change here.
+    #   injury-report — CONCEPTUAL, and the two do NOT share a feed or a
+    #     vocabulary. An earlier revision of this comment claimed they did; it
+    #     was wrong on both halves and is corrected here, because a generator
+    #     joining the two on a claimed agreement is the thing that breaks.
+    #
+    #     Different feeds: injury-report reads INJURY_REPORT_URL (season/week
+    #     templated, currently stub-mode); this collector reads the nflverse
+    #     injuries_{season}.csv archive. Same subject, different publishers.
+    #
+    #     Different `absence_reason` enums. A generator joining a current-week
+    #     reason to a historical one MUST TRANSLATE, and this is the table:
+    #
+    #       durability-history   injury-report   relationship
+    #       ------------------   -------------   ---------------------------
+    #       injury               injury          identical
+    #       illness              illness         identical
+    #       personal             personal        identical
+    #       rest                 rest            identical
+    #       discipline           suspension      NOT identical. `discipline`
+    #                                            also covers a coach's decision
+    #                                            / healthy scratch, which
+    #                                            injury-report has no member
+    #                                            for at all.
+    #       non_injury_other     unspecified     a designation naming a
+    #                                            non-injury cause this
+    #                                            collector cannot classify
+    #                                            further
+    #       undesignated         unspecified     NO designation existed. This
+    #                                            and the row above are one
+    #                                            value upstream; splitting them
+    #                                            is deliberate here, because
+    #                                            "the report said nothing" is
+    #                                            what the named failure mode's
+    #                                            guard turns on.
+    #
+    #     So the mapping is many-to-one in one direction and lossy in the other.
+    #     Reconciling the enums outright was considered and not done: renaming
+    #     `discipline` to `suspension` would mis-label a healthy scratch, and
+    #     collapsing the last two would delete the distinction the guard exists
+    #     for. Stated rather than papered over.
+    #
+    #     The edge is still declared because a change to what a designation
+    #     MEANS upstream is a change to both collectors at once, and because
+    #     this table has to be maintained beside that fact. There is no call
+    #     between them and deliberately will not be: reading injury-report's
+    #     lake output would bound this collector's history to however far back
+    #     that collector has been deployed — weeks, not three seasons — with
+    #     nothing in the data to say so.
     depends_on: [player-identity, roster-scope, injury-report]

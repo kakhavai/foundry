@@ -99,12 +99,25 @@ __all__ = [
 # about `upstream.adapter` first, which is a one-line diff rather than an
 # investigation.
 #
-# The rule: two events of the SAME canonical `body_part` are linked when the
-# later one's `onset_date` falls within `RECURRENCE_WINDOW_DAYS` of the earlier
-# one's RETURN — its `resolved_date`, falling back to its `onset_date` while it
-# is still unresolved. Anchored on the return rather than the onset because a
+# The rule: two events at the same **`injury_site`** are linked when the later
+# one's `onset_date` falls within `RECURRENCE_WINDOW_DAYS` of the earlier one's
+# RETURN — its `resolved_date`, falling back to its `onset_date` while it is
+# still unresolved. Anchored on the return rather than the onset because a
 # re-aggravation is measured from when the tissue was last asked to work again;
 # anchoring on onset would make a long absence read as a recurrence of itself.
+#
+# **`injury_site`, not the spec's `body_part`, and the LABEL BELOW SAYS SO.**
+# The spec's enum is ten values wide and has no member for a calf, a quad or an
+# oblique, so all three collapse to `other` — and keying on it would link a Week
+# 3 calf strain to a Week 8 quad strain as one re-aggravated tissue. `events.py`
+# section 3 carries the full reasoning; `injury_site` is published on every
+# event so `is_recurrence_of` stays reproducible from the row.
+#
+# The label has to describe the rule the code actually runs. The spec's whole
+# reason for demanding the rule here is that a consumer can tell a rule change
+# from a player change, and a consumer reproducing `is_recurrence_of` from a
+# label that said `same_body_part` would compute different answers and conclude
+# the players changed.
 RECURRENCE_RULE_VERSION = "v1"
 RECURRENCE_WINDOW_DAYS = int(os.getenv("RECURRENCE_WINDOW_DAYS", "90"))
 
@@ -114,7 +127,7 @@ RECURRENCE_WINDOW_DAYS = int(os.getenv("RECURRENCE_WINDOW_DAYS", "90"))
 # records the exact artifacts a pass read, which is what a consumer joins on.
 UPSTREAM_ADAPTER = (
     f"nflverse-injury-tables;recurrence={RECURRENCE_RULE_VERSION}:"
-    f"same_body_part_within_{RECURRENCE_WINDOW_DAYS}d_of_return"
+    f"same_injury_site_within_{RECURRENCE_WINDOW_DAYS}d_of_return"
 )
 
 # Deliberately the SAME variable name `venue` and `schedule-context` use: three
@@ -387,12 +400,52 @@ class Production(SeasonFeed):
 # "byte-identical to what you already read", which is only useful to a process
 # that still holds what it read. A restart costs exactly one full download per
 # key. `player-profile`'s adapter carries the full reasoning.
+#
+# **The three per-season memos carry the KEEP-SET they were built with, and that
+# is not bookkeeping — it is a correctness requirement this collector creates for
+# itself.** `player-profile` memoises the *unfiltered* table and narrows
+# afterwards, so a season-keyed memo is complete by construction there. This
+# adapter pushes the scope filter into the parse (which is what keeps the 8.28 MB
+# weekly-stats file from materialising ~4,600 unwanted players), so a memo is
+# only ever complete *for the scope that built it*.
+#
+# Season-keyed alone, the failure is silent and permanent:
+#
+#   * prior-season files are immutable and 304 forever — this module's own
+#     docstring says so;
+#   * `roster-scope` membership changes weekly;
+#   * so every player who enters the scope AFTER process start would get a 304,
+#     be served a memo built without him, and publish a history containing only
+#     the current season — while `career_history_complete` reported **true** and
+#     `observation_window_first_season` still named the window start.
+#
+# That is a believable availability rate that is simply wrong, published under a
+# flag that promises it is not, which is the exact failure the whole collector
+# exists to prevent. `_memo_covers` is the guard: a memo whose keep-set does not
+# cover the request is treated as ABSENT, and `_read_rows` then self-heals by
+# dropping the stored ETag and re-reading unconditionally.
+#
+# The stored keep-set GROWS by union on every re-read, so a scope that gains one
+# player costs one re-download and then covers both scopes forever. The bound is
+# the league, and only for the columns this collector keeps.
 
 _SCHEDULE_MEMO: dict[str, tuple[GameRef, ...]] = {}
 _PLAYERS_MEMO: dict[str, tuple[PlayerRow, ...]] = {}
-_INJURY_MEMO: dict[int, tuple[DesignationRow, ...]] = {}
-_SNAP_MEMO: dict[int, dict[str, tuple[float, str]]] = {}
-_STATS_MEMO: dict[int, dict[str, float]] = {}
+_INJURY_MEMO: dict[int, tuple[frozenset[str], tuple[DesignationRow, ...]]] = {}
+_SNAP_MEMO: dict[int, tuple[frozenset[str], dict[str, tuple[float, str]]]] = {}
+_STATS_MEMO: dict[int, tuple[frozenset[str], dict[str, float]]] = {}
+
+
+def _memo_covers(memo: dict, season: int, keep: frozenset[str]) -> bool:
+    """Whether `memo[season]` was built with a keep-set that covers `keep`.
+
+    A superset is usable — the stored rows contain everything `keep` asks for
+    plus some it does not, and the caller filters on emit. A memo that does not
+    cover is treated as absent rather than as stale, because "stale" would imply
+    the served answer is merely old; it is *wrong*, and silently so.
+    """
+    entry = memo.get(season)
+    return entry is not None and keep <= entry[0]
 
 
 def reset_upstream_memo(etag_store: ETagStore = ETAGS) -> None:
@@ -729,28 +782,35 @@ async def fetch_designations(
 
     async def read_one(one_season: int) -> None:
         url = INJURIES_URL.format(season=one_season)
+        cached = _INJURY_MEMO.get(one_season)
         rows = await _read_rows(
             client,
             url,
             required_columns=INJURIES_COLUMNS,
-            memo_present=one_season in _INJURY_MEMO,
+            memo_present=_memo_covers(_INJURY_MEMO, one_season, keep_gsis),
             etag_store=etag_store,
         )
         if rows is None:
-            kept = _INJURY_MEMO[one_season]
+            kept = cached[1]
         else:
+            # The UNION, so a scope that gained one player costs one re-read and
+            # then covers both scopes for the rest of the process's life.
+            wanted = keep_gsis | (cached[0] if cached else frozenset())
             kept = tuple(
                 designation
                 for designation in (
                     _to_designation(row)
                     for row in rows
-                    if _text(row.get("gsis_id")) in keep_gsis
+                    if _text(row.get("gsis_id")) in wanted
                 )
                 if designation is not None
             )
-            _INJURY_MEMO[one_season] = kept
+            _INJURY_MEMO[one_season] = (wanted, kept)
         for designation in kept:
-            result.by_player[designation.gsis_id].append(designation)
+            # Filtered on EMIT as well as on parse: the memo may legitimately
+            # hold a superset of this pass's scope.
+            if designation.gsis_id in keep_gsis:
+                result.by_player[designation.gsis_id].append(designation)
 
     read, missing = await _sweep(
         seasons, read_one=read_one, deadline=deadline, label="injury designations"
@@ -783,28 +843,32 @@ async def fetch_participation(
 
     async def read_one(one_season: int) -> None:
         url = SNAP_COUNTS_URL.format(season=one_season)
+        cached = _SNAP_MEMO.get(one_season)
         rows = await _read_rows(
             client,
             url,
             required_columns=SNAP_COUNTS_COLUMNS,
-            memo_present=one_season in _SNAP_MEMO,
+            memo_present=_memo_covers(_SNAP_MEMO, one_season, keep_pfr),
             etag_store=etag_store,
         )
         if rows is None:
-            table = _SNAP_MEMO[one_season]
+            table = cached[1]
         else:
+            wanted = keep_pfr | (cached[0] if cached else frozenset())
             table = {}
             for row in rows:
                 pfr_id = _text(row.get("pfr_player_id"))
                 week = _int(row.get("week"))
-                if not pfr_id or pfr_id not in keep_pfr or week is None:
+                if not pfr_id or pfr_id not in wanted or week is None:
                     continue
                 pct = _float(row.get("offense_pct"))
                 team = _text(row.get("team")) or ""
                 table[f"{pfr_id}|{week}"] = (0.0 if pct is None else pct, team)
-            _SNAP_MEMO[one_season] = table
+            _SNAP_MEMO[one_season] = (wanted, table)
         for key, (pct, team) in table.items():
             pfr_id, _, week_text = key.partition("|")
+            if pfr_id not in keep_pfr:
+                continue
             week_key = (pfr_id, one_season, int(week_text))
             result.snap_pct[week_key] = pct
             if team:
@@ -839,29 +903,33 @@ async def fetch_production(
 
     async def read_one(one_season: int) -> None:
         url = STATS_URL.format(season=one_season)
+        cached = _STATS_MEMO.get(one_season)
         rows = await _read_rows(
             client,
             url,
             required_columns=STATS_COLUMNS,
-            memo_present=one_season in _STATS_MEMO,
+            memo_present=_memo_covers(_STATS_MEMO, one_season, keep_gsis),
             etag_store=etag_store,
         )
         if rows is None:
-            table = _STATS_MEMO[one_season]
+            table = cached[1]
         else:
+            wanted = keep_gsis | (cached[0] if cached else frozenset())
             table = {}
             for row in rows:
                 gsis_id = _text(row.get("player_id"))
                 week = _int(row.get("week"))
-                if not gsis_id or gsis_id not in keep_gsis or week is None:
+                if not gsis_id or gsis_id not in wanted or week is None:
                     continue
                 points = _float(row.get("fantasy_points_ppr"))
                 if points is None:
                     continue
                 table[f"{gsis_id}|{week}"] = points
-            _STATS_MEMO[one_season] = table
+            _STATS_MEMO[one_season] = (wanted, table)
         for key, points in table.items():
             gsis_id, _, week_text = key.partition("|")
+            if gsis_id not in keep_gsis:
+                continue
             result.points[(gsis_id, one_season, int(week_text))] = points
 
     read, missing = await _sweep(
