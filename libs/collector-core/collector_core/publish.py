@@ -68,8 +68,9 @@ point to move it here; the third copy said so again. It lives here now.
 
 `publish_capture` returns a `PublishResult`: a `dict[str, Envelope]` **subclass**,
 so every caller that just returns it, compares it, or iterates it is unaffected
-— which is why nine call sites needed no edit. A caller that gates state on
-durability asks `result.landed(signal_type)`.
+— which is why ten of the thirteen call sites needed no edit, including
+`venue`'s own degraded tail. A caller that gates state on durability asks
+`result.landed(signal_type)`.
 """
 
 import logging
@@ -109,7 +110,18 @@ class PublishResult(dict[str, Envelope]):
         class exists to prevent — and `False` silently reads as a durability
         outage that did not happen. The caller has confused "unchanged, so not
         published" with "published and failed", and those need different
-        answers. Iterate the result itself and the question cannot arise.
+        answers.
+
+        **Iterate the result itself and the question cannot arise** — which is
+        the point, because this raise is not free. It fires after every write
+        has already happened, nothing in a collector catches it, and
+        `_run_capture`/`run_capture_loop`'s blanket handler drops the pass: so
+        `/signals` keeps serving the previous capture and `last_capture_at`
+        stops advancing toward a staleness alert, **even though the lake write
+        succeeded**. That is the same availability inversion this module exists
+        to prevent, and the way to reintroduce it is to loop over your own
+        `envelopes` dict — the natural slip, since `envelopes` and `digests`
+        are both in scope at that point and `published` is the newcomer.
         """
         if signal_type not in self:
             raise KeyError(

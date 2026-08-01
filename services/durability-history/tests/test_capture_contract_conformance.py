@@ -237,6 +237,57 @@ async def test_a_failed_write_does_not_record_the_digest(lake):
 
 
 @respx.mock
+async def test_a_partial_lake_failure_only_retries_the_type_that_failed(lake):
+    """One signal type's write failing must not re-append the other two.
+
+    The total-outage test above cannot see this: with nothing landing, "record
+    per signal type" and "record only if everything landed" behave identically.
+    Review found the coarser gate
+
+        if any(published.landed(st) for st in published):
+
+    survived this whole suite, while `venue` — which has this test — killed it
+    at once. A guard whose two arms look alike needs a fixture per arm.
+
+    Concretely: `player_injury_history` is the large one, and suppose that
+    single PUT fails — a transient 500, an object-size rejection, a per-object
+    permission problem — while the other two land. Under the coarse gate the
+    pass records its digest anyway, the next pass digests identical content,
+    all three match, `UpstreamUnchanged` is raised, and
+    `player_injury_history` is never written again for the rest of the season
+    while `/signals` and `/catalog` both look perfectly healthy.
+    """
+    mock_upstreams(respx.mock)
+    mock_identity(respx.mock)
+
+    real_write = lake.write
+
+    def write(envelope):
+        if lake.failing and envelope.signal_type == INJURY_HISTORY:
+            raise RuntimeError("lake unreachable")
+        return real_write(envelope)
+
+    lake.failing = True
+    lake.write = write
+
+    await capture(lake)
+    written = [e.signal_type for e in _own_writes(lake)]
+    healthy = [t for t in SIGNAL_TYPES if t != INJURY_HISTORY]
+    assert sorted(written) == sorted(healthy), written
+    assert INJURY_HISTORY not in written
+
+    lake.failing = False
+    await capture(lake)
+
+    # Exactly one more write, and it is the one that failed. An unconditional
+    # retry of the whole pass would re-append the two that already landed.
+    written = [e.signal_type for e in _own_writes(lake)]
+    assert len(written) == len(SIGNAL_TYPES), written
+    assert written[-1] == INJURY_HISTORY, written
+    assert sorted(written) == sorted(SIGNAL_TYPES), written
+
+
+@respx.mock
 async def test_an_unchanged_second_pass_raises_upstream_unchanged(lake):
     """A `seasonal` cadence must not append a byte-identical snapshot daily."""
     mock_upstreams(respx.mock)

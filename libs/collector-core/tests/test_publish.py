@@ -267,10 +267,11 @@ async def test_asking_about_an_unpublished_signal_type_raises():
 
 
 async def test_the_result_is_still_a_plain_dict_to_every_existing_caller():
-    """Nine call sites `return await publish_capture(...)` and never look at
-    the durability report. The hook is additive precisely so none of them --
-    nor `CaptureState.apply_capture`, which consumes the return value -- needed
-    an edit. A named tuple or a `(dict, set)` pair would have touched all nine.
+    """Ten of the thirteen call sites `return await publish_capture(...)` and
+    never look at the durability report. The hook is additive precisely so
+    none of them -- nor `CaptureState.apply_capture`, which consumes the
+    return value -- needed an edit. A named tuple or a `(dict, set)` pair
+    would have touched all thirteen.
     """
     lake, metrics = _SpyLake(), _SpyMetrics()
     built = make_envelopes()

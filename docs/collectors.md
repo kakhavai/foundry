@@ -547,11 +547,26 @@ for signal_type in published:
         _PUBLISHED_DIGESTS[(season, week, signal_type)] = digests[signal_type]
 ```
 
-Iterate the result, not your own `changed` dict — `landed` **raises** for a
-signal type the call never published, because the caller has confused
-"unchanged, so not published" with "published and failed" and both plausible
-defaults hide that. `True` records a digest for content never offered to the
-lake; `False` reads as an outage that did not happen.
+Iterate the result, not your own `changed` or `envelopes` dict — `landed`
+**raises** for a signal type the call never published, because the caller has
+confused "unchanged, so not published" with "published and failed" and both
+plausible defaults hide that. `True` records a digest for content never offered
+to the lake; `False` reads as an outage that did not happen.
+
+**That raise costs the pass.** It fires after every write has already happened,
+no collector catches it, and `_run_capture`/`run_capture_loop`'s blanket handler
+drops the capture — so `/signals` keeps serving the previous one and
+`last_capture_at` stops advancing toward a staleness alert, *even though the
+lake write succeeded*. Looping over your own `envelopes` dict instead of
+`published` is the natural slip (both are in scope; `published` is the
+newcomer), and nothing in CI catches it for you.
+
+Gate **per signal type**, not per pass. `if any(published.landed(st) for st in
+published)` looks equivalent and is not: one type's write failing while the
+others land records the failed type's digest anyway, and it is never written
+again. It takes a *partial* lake failure to see — a total-outage test passes
+either way, because with nothing landing the two gates agree. All three
+collectors carry a fixture per arm for exactly this reason.
 
 `venue`, `player-profile` and `durability-history` each carried a private
 `_WriteObserver` wrapper doing this before it moved here. **Do not write a
