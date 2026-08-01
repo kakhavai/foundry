@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/venue.json",
+  "title": "venue collector signal fields",
+  "signal_types": {
+    "venue_static": {
+      "description": "One revision of one venue's fixed properties, valid over [effective_from, effective_to). Revisions are append-only: a surface replacement or roof retrofit produces a NEW row with effective_from set to the install date and CLOSES the prior row's effective_to. A row is never edited in place. Many fields are deliberately nullable -- services/venue/venue/reference.py's docstring names each one and why it is null rather than guessed.",
+      "type": "object",
+      "required": [
+        "venue_id",
+        "effective_from",
+        "effective_to",
+        "name",
+        "city",
+        "country",
+        "latitude",
+        "longitude",
+        "timezone",
+        "roof_type",
+        "home_team_ids",
+        "content_hash"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "venue_id": { "type": "string", "minLength": 1 },
+        "effective_from": { "type": "string", "format": "date" },
+        "effective_to": {
+          "description": "Exclusive. null means this revision is current.",
+          "type": ["string", "null"],
+          "format": "date"
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "city": { "type": "string", "minLength": 1 },
+        "country": {
+          "description": "ISO 3166-1 alpha-2. Not assumed to be US.",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 2
+        },
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180 },
+        "timezone": {
+          "description": "IANA zone, never a fixed offset: the season crosses the November DST transition and America/Phoenix does not observe it at all.",
+          "type": "string",
+          "minLength": 1
+        },
+        "altitude_ft": { "type": ["integer", "null"] },
+        "roof_type": {
+          "type": "string",
+          "enum": ["open", "fixed_dome", "retractable"]
+        },
+        "roof_state_policy": {
+          "type": ["string", "null"],
+          "enum": ["usually_open", "usually_closed", "game_time_decision", null]
+        },
+        "surface_class": {
+          "type": ["string", "null"],
+          "enum": ["natural_grass", "hybrid", "synthetic_turf", null]
+        },
+        "surface_product": {
+          "description": "The specific product and generation, e.g. field_turf_core. Null throughout the committed table: no source consulted distinguishes generations, and the spec names this the genuinely hard part.",
+          "type": ["string", "null"]
+        },
+        "surface_installed_on": { "type": ["string", "null"], "format": "date" },
+        "surface_last_resurfaced_on": {
+          "type": ["string", "null"],
+          "format": "date"
+        },
+        "field_orientation_deg": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 359
+        },
+        "seating_capacity": { "type": ["integer", "null"], "minimum": 0 },
+        "crowd_noise_profile": {
+          "type": ["object", "null"],
+          "properties": {
+            "typical_peak_db": { "type": ["number", "null"] },
+            "enclosure_class": { "type": ["string", "null"] },
+            "home_false_start_index": { "type": ["number", "null"] }
+          }
+        },
+        "year_built": { "type": ["integer", "null"] },
+        "year_last_renovated": { "type": ["integer", "null"] },
+        "home_team_ids": {
+          "description": "Tenants. Length 2 for a shared venue, 0 for a neutral-only site.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "content_hash": {
+          "description": "sha256 over this revision's content fields, excluding venue_id and the validity window. A new snapshot is appended only when this changes, which is what keeps a daily static-reference re-read from filling the lake with identical objects.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "venue_game_assignment": {
+      "description": "Which building one game is actually played in. Exists because \"the home team's stadium\" is wrong roughly a dozen times a year -- London, Munich, Sao Paulo, neutral-site relocations, and both MetLife tenants. Carries the resolved revision's window so the spec's read-time join (no game may resolve to a revision whose window excludes its kickoff) is a field comparison on one row rather than a scan of the venue_static history.",
+      "type": "object",
+      "required": [
+        "game_id",
+        "venue_id",
+        "designated_home_team_id",
+        "is_neutral_site",
+        "is_international",
+        "home_field_advantage_class",
+        "kickoff_on",
+        "venue_effective_from",
+        "venue_effective_to",
+        "week",
+        "game_type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "game_id": { "type": "string", "minLength": 1 },
+        "venue_id": { "type": "string", "minLength": 1 },
+        "designated_home_team_id": { "type": "string", "minLength": 1 },
+        "is_neutral_site": { "type": "boolean" },
+        "is_international": {
+          "description": "The venue's country differs from the league's home country.",
+          "type": "boolean"
+        },
+        "home_field_advantage_class": {
+          "type": "string",
+          "enum": ["normal", "shared_venue", "neutral", "international"]
+        },
+        "kickoff_on": { "type": "string", "format": "date" },
+        "venue_effective_from": { "type": "string", "format": "date" },
+        "venue_effective_to": { "type": ["string", "null"], "format": "date" },
+        "week": { "type": "integer", "minimum": 1 },
+        "game_type": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
