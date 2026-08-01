@@ -298,14 +298,24 @@ collectors:
     cadence_class: static reference
     envelope_version: "1"
     signal_types: [venue_static, venue_game_assignment]
-    # Set true if this collector narrows to roster-scope's membership list
-    # before it fetches. Checked structurally by
-    # tests/test_scope_aware_gate.py: declaring true requires importing
-    # collector_core.scope.ScopeClient (`from collector_core.scope import
-    # ScopeClient`) somewhere in this collector's source — that test is by
-    # AST, so an `import collector_core.scope` plus attribute access will
-    # not satisfy it. That check proves the narrowing seam is wired in, not
-    # that it behaves correctly; write this collector's own fail-closed test
-    # for that.
+    # Checked structurally by tests/test_scope_aware_gate.py; nothing verifies
+    # the reasoning below. False, and for this collector it is not a judgement
+    # call: the spec's own line is "no — venues are not players". Neither
+    # signal type carries a player_id at all. `venue_static` is keyed by
+    # building and `venue_game_assignment` by game, so roster-scope's
+    # membership list has nothing here to narrow — and narrowing the SEASON's
+    # venues to anything smaller would break the coverage rule, which is
+    # defined as every venue hosting at least one game.
     scope_aware: false
+    # Empty, and the spec says so outright ("Depends on: nothing"). Worth one
+    # line because two edges look like they belong here and do not:
+    #
+    #   schedule-context — reads venue coordinates, so the arrow points the
+    #     other way; it would be its entry declaring this one, once its
+    #     in-process venues.py is rewired (a follow-up).
+    #   player-identity — every OTHER collector declares it because it decides
+    #     what a player_id is. This one emits none.
+    #
+    # The nflverse game table this collector reads for assignments is a third
+    # party, not a collector, so it is not a depends_on either.
     depends_on: []
