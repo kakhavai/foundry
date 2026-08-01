@@ -1,23 +1,15 @@
 """team-scheme's binding to the shared collector metrics.
 
-A subclass rather than a bare `CollectorMetrics(COLLECTOR)` instance, and
-deliberately **not** consolidated into `collector-core`: the fleet-wide series
-(`collector_capture_*`, `collector_coverage_ratio`, `collector_staleness_
-seconds`) belong to the library, and the series that answer "is THIS collector
-wrong in the way only it can be wrong" belong here. A metric only one service
-records must not grow into the shared library — see player-identity's
-`identity_merge_conflicts` and roster-scope's `scope_missed_producers` for what
-that looks like when it is real.
-
-`TeamSchemeMetrics` is still a `CollectorMetrics`, so it satisfies
-`CollectorDescriptor.metrics` unchanged. Exactly one instance exists per
-process — the library never constructs one, it takes the one below.
+The fleet-wide series (`collector_capture_*`, `collector_coverage_ratio`,
+`collector_staleness_seconds`) belong to the library. The three below answer
+"is THIS collector wrong in the way only it can be wrong", which
+`collector_coverage_ratio` structurally cannot — every one of them describes a
+failure in which coverage reads 1.0.
 
 **Every gauge is a `LastValueGauge`, never `meter.create_gauge`.** OTel's
-synchronous gauge is *consumed* by a collection, so a value written on a
-capture cadence is absent from every scrape that does not immediately follow
-one — and PromQL cannot tell an absent series from a healthy idle one. Counters
-are fine as they are; only gauges need the wrapper.
+synchronous gauge is consumed by a collection, so a value written on a capture
+cadence is absent from every scrape that does not immediately follow one — and
+PromQL cannot tell an absent series from a healthy idle one.
 """
 
 from collector_core.metrics import CollectorMetrics, LastValueGauge
@@ -30,26 +22,75 @@ class TeamSchemeMetrics(CollectorMetrics):
     def __init__(self, collector: str = COLLECTOR) -> None:
         super().__init__(collector)
         meter = otel_metrics.get_meter(collector)
-        # PLACEHOLDER. Replace with the series that make THIS collector's own
-        # failure mode visible — the one `collector_coverage_ratio` cannot see
-        # because coverage is computed against the same input that drove the
-        # fetch. If there genuinely is no such series, delete the subclass and
-        # use `metrics = CollectorMetrics(COLLECTOR)` (weather does).
-        self._rows_captured = LastValueGauge(
+
+        self._window_refusals = LastValueGauge(
             meter,
-            "team_scheme_rows_captured",
-            description="Rows captured in the last pass, by collector.",
+            "team_scheme_window_refusals",
+            description=(
+                "Teams whose rate window was refused by the team-season guard "
+                "in the last pass, by collector."
+            ),
+        )
+        self._min_games_sampled = LastValueGauge(
+            meter,
+            "team_scheme_min_games_sampled",
+            description=(
+                "The smallest games_sampled behind any published profile in "
+                "the last pass, by collector."
+            ),
+        )
+        self._degraded_upstreams = LastValueGauge(
+            meter,
+            "team_scheme_degraded_upstreams",
+            description=(
+                "Optional upstreams missing in the last pass (0, 1 or 2), by collector."
+            ),
         )
 
-    def rows_captured(self, count: int) -> None:
-        """Record every pass, including zero.
+    def window_refusals(self, count: int) -> None:
+        """The guard's firing count. **Zero is the expected value.**
 
-        An absent Prometheus series and a healthy one are indistinguishable in
-        PromQL, so a gauge only written when it is interesting cannot be
-        alerted on. `LastValueGauge` is the other half of that: it keeps the
-        series present on every scrape, not only the one after this call.
+        Non-zero means the collector built a rate window that is not one
+        team's regular season — a bug in this service, not an upstream
+        problem, because `pbp.py` accumulates per `(team, week)` and
+        `rates.py` folds a selection of those. Alert on `> 0`, not on a rate of
+        change.
         """
-        self._rows_captured.set(count, {"collector": self.collector})
+        self._window_refusals.set(count, {"collector": self.collector})
+
+    def min_games_sampled(self, count: int) -> None:
+        """The smallest sample behind any published profile.
+
+        **The failure coverage cannot see.** A play-by-play document truncated
+        in the *week* direction — half a season, an interrupted release build
+        — still carries all 32 teams, so every team is present and
+        `collector_coverage_ratio` reads 1.0 while every rate is computed over
+        three weeks instead of twelve. Every number is wrong and nothing in
+        the coverage accounting moves.
+
+        Read it against the week: by week 10 it should sit near 9 (a team has
+        had one bye). A value far below the week number with coverage at 1.0
+        is the truncation signature. 0 with rows published means at least one
+        team is in the document and has not played, which is normal in week 1
+        and suspicious in week 12.
+        """
+        self._min_games_sampled.set(count, {"collector": self.collector})
+
+    def degraded_upstreams(self, count: int) -> None:
+        """How many of the two optional feeds were missing, 0..2.
+
+        Also invisible to coverage: `personnel_rates`, `play_action_rate` and
+        `pre_snap_motion_rate` going null costs no coverage at all, because a
+        team is counted present on `neutral_pass_rate`. That is the right
+        coverage predicate — the phase doc's — and it means the loss of the
+        46.82 MiB participation feed would otherwise be a perfectly healthy
+        pass with three fields quietly nulled on every row.
+
+        A sustained 1 or 2 is a feed that stopped publishing, not a blip:
+        `collector_capture_failures_total` counts each occurrence, this says
+        whether the current state is degraded.
+        """
+        self._degraded_upstreams.set(count, {"collector": self.collector})
 
 
 metrics = TeamSchemeMetrics()

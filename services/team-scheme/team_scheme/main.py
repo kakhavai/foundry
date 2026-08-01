@@ -1,9 +1,19 @@
-"""Process wiring: the descriptor, and nothing else yet.
+"""Process wiring: the descriptor, and nothing else.
 
 Everything else — environment parsing, `CaptureState`, the capture loop, bearer
 auth, the OTel guard and the standard five routes — lives in
 `collector_core.app`. If you find yourself writing any of it here, it already
 exists; see docs/collectors.md.
+
+**No routes beyond the standard five, deliberately.** The original
+`coaching-scheme` spec had a `GET /teams/{team_id}/revisions` timeline route;
+it served the staff-revision timeline and moved to the deferred
+`coaching-staff` collector along with everything that made it meaningful. With
+rates keyed to a team-season there is exactly one row per team per season, so
+`/signals?team_id=KC` already is the whole answer and a bespoke route would be
+a second way to spell it. There is also no `smoke.sh` — the standard contract
+surface is asserted for every registered collector automatically, and a
+collector with no extra routes writes no hook.
 """
 
 from collector_core.app import CollectorDescriptor, build_collector_app
@@ -32,19 +42,10 @@ app = build_collector_app(
         # never pass a callable here — an already-bound function defeats the
         # guard while every test stays green.
         #
-        # No `next_event_at`: the loop runs on its cadence class's base
-        # interval and never escalates. Add one only if this collector has a
-        # genuinely perishable moment to escalate toward — weather's
-        # `next_kickoff` is the only example in the fleet.
+        # No `next_event_at`: `seasonal` runs on its base interval and has
+        # nothing perishable to escalate toward. The rates move after a week's
+        # games, and the nflverse release lands some hours later on no
+        # announced schedule, so there is no instant to escalate *toward* —
+        # which is exactly the case the field does not serve.
     )
 )
-
-# Routes beyond the standard five go below this line, as plain `@app.get` /
-# `@app.post` handlers. Reach the lake and the collector name through
-# `app.state.collector_spec` — never a module-level global, which only this
-# file could see. Anything that touches the lake must be offloaded with
-# `asyncio.to_thread` (or `collector_core.lake`'s awrite/aread/alist_keys);
-# the lake you are handed refuses a synchronous call from the loop thread.
-#
-# Remember to publish any new path in this collector's Helm values under
-# `gateway.publicPaths`, or it 404s at the gateway while working in-cluster.

@@ -4,13 +4,103 @@
   "title": "team-scheme collector signal fields",
   "signal_types": {
     "team_scheme_profile": {
-      "$comment": "TODO(new-collector): placeholder fields. Replace these with this collector's real signal shape, then delete this $comment. Kept deliberately meaningless -- the generated build_signal agrees with them by construction, so leaving both in place would prove only that two placeholders match.",
       "type": "object",
-      "required": ["key", "observed_at", "value"],
+      "required": [
+        "team_id",
+        "season",
+        "games_sampled",
+        "sampled_weeks",
+        "neutral_pass_rate",
+        "pass_rate_over_expected",
+        "sec_per_play_neutral",
+        "no_huddle_rate",
+        "personnel_rates",
+        "shotgun_rate",
+        "play_action_rate",
+        "pre_snap_motion_rate",
+        "fourth_down_go_rate",
+        "fourth_down_go_rate_over_expected",
+        "degraded_upstreams",
+        "null_field_reason"
+      ],
+      "additionalProperties": false,
+      "description": "One row per (team_id, season). There is deliberately no revision_id and no effective_from_week/effective_to_week: those key a staff revision, and the staff half of the original coaching-scheme spec is deferred to the coaching-staff collector because no reliable free source exists for per-week NFL coaching staff. A mid-season coordinator change therefore produces a BLENDED season profile rather than a mis-attributed one -- a true statement about the season and a poor predictor of next week. Consumers wanting regime-aware rates need coaching-staff to exist first.",
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "observed_at": { "type": "string", "format": "date-time" },
-        "value": { "type": "number" }
+        "team_id": { "type": "string", "minLength": 2, "maxLength": 3 },
+        "season": { "type": "integer", "minimum": 1999 },
+        "games_sampled": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Regular-season games behind these rates. The guard refuses a row whose games_sampled exceeds the number of weeks folded -- a team plays at most one game a week -- so a duplicate fold is a refusal rather than a doubled sample."
+        },
+        "sampled_weeks": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 18 },
+          "description": "Every week that contributed an offensive snap to these rates. Published so a consumer can verify the window rather than trust it: the rates are a fold over exactly these weeks of exactly this team's season, and nothing else."
+        },
+        "neutral_pass_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Pass rate on snaps in neutral game script (quarters 1-3, win probability 0.20-0.80). Null means no neutral snap was observed -- 'no evidence', never 'this team never passed'. It is also the coverage predicate's headline clause: a null here makes the team missing rather than present-with-nulls."
+        },
+        "pass_rate_over_expected": {
+          "type": ["number", "null"],
+          "description": "PERCENTAGE POINTS, not a share: nflfastR's pass_oe is (pass - xpass) * 100, against a baseline already conditioned on down, distance, score and time. A consumer reading it as a share is off by 100x and every value still looks plausible."
+        },
+        "sec_per_play_neutral": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Mean inter-snap clock delta within a drive, neutral script only, bounded to 1-60s. UNVALIDATED against any published pace figure -- see the service README. Live 2025 through this adapter gives a 32.37s league mean with a 4.64s inter-team spread over 13,945 samples: plausible, internally consistent, and not the published statistic."
+        },
+        "no_huddle_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "personnel_rates": {
+          "type": ["object", "null"],
+          "required": ["p11", "p12", "p21", "p13", "heavy"],
+          "additionalProperties": false,
+          "properties": {
+            "p11": { "type": "number", "minimum": 0, "maximum": 1 },
+            "p12": { "type": "number", "minimum": 0, "maximum": 1 },
+            "p21": { "type": "number", "minimum": 0, "maximum": 1 },
+            "p13": { "type": "number", "minimum": 0, "maximum": 1 },
+            "heavy": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "description": "Shares of classified offensive snaps. They do NOT sum to 1.0: 10 and 20 personnel are real and belong in no named bucket, and forcing the five to close would push those snaps into whichever bucket was written last. Null when the participation feed was unavailable -- 'no evidence', never 'zero'."
+        },
+        "shotgun_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "play_action_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "pre_snap_motion_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fourth_down_go_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Denominator is every fourth-down DECISION -- punts and field-goal attempts included -- not fourth-down snaps. A denominator of attempts-only would report every team at 1.0."
+        },
+        "fourth_down_go_rate_over_expected": {
+          "type": "null",
+          "description": "Null by necessity. nflfastR publishes wp and vegas_wp but no win-probability-optimal fourth-down recommendation column; a baseline invented here would look like the well-known public one and not be it. Re-checked against the live column list for this build; the finding still holds."
+        },
+        "degraded_upstreams": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["ftn_charting_unavailable", "participation_unavailable"]
+          },
+          "description": "Which optional feeds were missing on the pass that produced this row, so a null rate is attributable rather than merely absent. Neither costs coverage, which is why team_scheme_degraded_upstreams exists as a gauge."
+        },
+        "null_field_reason": {
+          "type": "object",
+          "required": ["fourth_down_go_rate_over_expected"],
+          "additionalProperties": { "type": "string", "minLength": 1 },
+          "properties": {
+            "fourth_down_go_rate_over_expected": { "type": "string", "minLength": 1 }
+          },
+          "description": "Machine-readable reasons for the nulls that are nulls BY NECESSITY rather than by this pass's luck. A field nulled because its feed was down is explained by degraded_upstreams instead."
+        }
       }
     }
   }
