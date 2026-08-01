@@ -90,7 +90,7 @@ extraEnv:
     value: "false"
   # How many seasons back "career" reaches, INCLUDING the scoped one. This is
   # the cost dial: each extra season is ~11.4 MB on a cold process. Every
-  # published row carries `observation_first_season` and
+  # published row carries `observation_window_first_season` and
   # `career_history_complete` so a truncated total is never labelled complete.
   - name: DURABILITY_HISTORY_SEASONS
     value: "3"

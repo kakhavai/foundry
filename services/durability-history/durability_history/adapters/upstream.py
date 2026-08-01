@@ -23,8 +23,8 @@ season that has ended is immutable, so its three per-season files 304 forever.
 publishes injuries back to 2009. A genuine career sweep is ~18 seasons x 11.4 MB
 = ~205 MB per cold process, which is not a cost this collector may impose for a
 field nobody has yet asked to be exact. So the window is bounded, and — this is
-the half that matters — **every row says so**: `observation_first_season` names
-where the count starts and `career_history_complete` is `false` whenever a
+the half that matters — **every row says so**: `observation_window_first_season`
+names where the count starts and `career_history_complete` is `false` whenever a
 player's tenure predates it. `player-profile`'s `career_snaps_complete` is the
 same decision for the same reason. A truncated total labelled complete is a
 well-formed number that is silently wrong.
