@@ -1,0 +1,87 @@
+service:
+  name: officiating
+  port: 8021
+
+image:
+  repository: ghcr.io/kakhavai/foundry/officiating
+
+containerPort: 8021
+
+# The chart defaults. Measure before raising either: roster-scope's first deploy
+# was OOMKilled at 256Mi because its adapter buffered a 37 MB document three
+# times, and raising the limit would have hidden the bug rather than fixed it.
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+otel:
+  resourceAttributes: "service.name=officiating,service.namespace=foundry"
+
+grafanaAnnotations:
+  enabled: true
+
+gateway:
+  enabled: true
+  pathPrefix: /collectors/officiating
+  # Only the paths this collector publishes as its contract. /health and
+  # /metrics are deliberately absent: they are exempt from bearer auth
+  # in-process (a kubelet probe and a Prometheus scrape cannot carry a token),
+  # and that is a reason to reach them in-cluster, not at the edge.
+  # Add a path here when you add a route beyond the standard five.
+  publicPaths:
+    - /catalog
+    - /signals
+    - /refresh
+
+extraEnv:
+  # optional: true lets the pod start before the Secret exists. officiating then
+  # answers 503 on every data route until it arrives — the ArgoCD Application
+  # reports Healthy the whole time, so recognise that combination for what it
+  # is before assuming the deploy is broken.
+  - name: COLLECTOR_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: officiating-collector-token
+        key: token
+        optional: true
+  - name: LAKE_BUCKET
+    value: "foundry-signals"
+  - name: LAKE_ENDPOINT_URL
+    value: "http://minio.monitoring.svc.cluster.local:9000"
+  - name: REFRESH_MIN_INTERVAL_SECONDS
+    value: "300"
+  # Scaffolded false. Flip to "true" once the real upstream is wired AND you
+  # have decided the third-party load is acceptable: the cluster is recreated
+  # on every CI run and every pod restart re-captures, so a large or
+  # rate-limited upstream should stay false here. A dispatched POST /refresh
+  # reaches the upstream regardless of this flag.
+  - name: CAPTURE_ENABLED
+    value: "false"
+  - name: CAPTURE_SEASON
+    value: "2026"
+  - name: CAPTURE_WEEK
+    value: "1"
+  # Wall-clock ceiling for one capture pass, so total upstream failure costs at
+  # most this much rather than items x per-call timeout.
+  - name: CAPTURE_DEADLINE_SECONDS
+    value: "300"
+  # Same optional:true pattern — the pod starts before the Secret exists and
+  # the lake simply has no credentials until it arrives.
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: officiating-lake-credentials
+        key: access-key-id
+        optional: true
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: officiating-lake-credentials
+        key: secret-access-key
+        optional: true
+  - name: AWS_DEFAULT_REGION
+    value: "us-east-1"

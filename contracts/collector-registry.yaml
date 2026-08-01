@@ -435,3 +435,21 @@ collectors:
     #     that collector has been deployed — weeks, not three seasons — with
     #     nothing in the data to say so.
     depends_on: [player-identity, roster-scope, injury-report]
+
+  - name: officiating
+    path: /collectors/officiating
+    stage: 8E
+    cadence_class: weekly
+    envelope_version: "1"
+    signal_types: [game_crew_assignment, crew_tendency_rates]
+    # Set true if this collector narrows to roster-scope's membership list
+    # before it fetches. Checked structurally by
+    # tests/test_scope_aware_gate.py: declaring true requires importing
+    # collector_core.scope.ScopeClient (`from collector_core.scope import
+    # ScopeClient`) somewhere in this collector's source — that test is by
+    # AST, so an `import collector_core.scope` plus attribute access will
+    # not satisfy it. That check proves the narrowing seam is wired in, not
+    # that it behaves correctly; write this collector's own fail-closed test
+    # for that.
+    scope_aware: false
+    depends_on: [schedule-context]
