@@ -1,68 +1,207 @@
 """The coverage floor, which is the thing most likely to be got wrong.
 
-`coverage.expected` must never derive from what a fetch returned. These tests
-are the ones that fail if somebody "simplifies" `capture.py` by computing the
-expectation from `rows`.
+`coverage.expected` must never derive from what a fetch returned. These are the
+tests that fail if somebody "simplifies" `capture.py` by computing the
+expectation from the rows it got back.
+
+This collector has a sharper version of the trap than most, and it is the
+subject of the first two tests: **the officials feed is post-game**. In week 3
+it describes 48 games out of 272, so "games the crew feed knows about" is a
+number that starts small and grows — and using it as the expectation reports
+`ratio 1.0` all season while most of the season is missing.
+
+Every test here attacks BOTH halves. Mutating only the floor scores well and
+still misses a deleted `present` check, because the floor and the present
+predicate fail in opposite directions: a wrong floor understates coverage on a
+healthy pass, and a wrong `present` overstates it on a broken one.
 """
 
 import httpx
+import respx
 
 from officiating.capture import (
+    ASSIGNMENT,
     EXPECTED_FLOOR,
+    RATES,
     SIGNAL_TYPES,
     capture_officiating,
 )
 
-from .conftest import NOW, SpyLake
+from .conftest import NOW, SEASON, SpyLake, mock_upstreams, season_of
 
 
-async def _capture(rows, monkeypatch, lake):
-    async def fake(*args, **kwargs):
-        return list(rows)
-
-    monkeypatch.setattr("officiating.capture.fetch_rows", fake)
+async def _capture(lake=None, **kwargs):
     async with httpx.AsyncClient() as client:
         return await capture_officiating(
-            2026,
+            SEASON,
             1,
             client=client,
-            lake=lake,
+            lake=lake or SpyLake(),
             now=NOW,
+            **kwargs,
         )
 
 
-async def test_a_truncated_upstream_does_not_report_full_coverage(monkeypatch):
-    """The failure this floor exists for: an upstream returning one row of many
-    must not yield `expected: 1, present: 1`, ratio 1.0."""
-    envelopes = await _capture(
-        [{"key": "only-one", "value": 1.0}], monkeypatch, SpyLake()
+@respx.mock
+async def test_a_post_game_feed_partway_through_the_season_reports_the_gap():
+    """THE failure this collector's floor exists for.
+
+    The schedule lists all 48 games; the officials feed has published crews for
+    only the first 16, because the rest have not been played. `expected` must
+    stay the full season's floor, `present` must be 16, and every unplayed game
+    must appear as a miss with a reason — not vanish from the universe.
+    """
+    schedule = season_of(crews=8, weeks=6)
+    played = [g for g in schedule if g.week == 1]
+    mock_upstreams(
+        schedule,
+        officials_response=httpx.Response(200, text=_officials_for(played)),
     )
-    for signal_type, envelope in envelopes.items():
-        assert envelope.coverage.expected == EXPECTED_FLOOR[signal_type]
-        assert envelope.coverage.present == 1
-        assert envelope.coverage.ratio < 1.0
-        reasons = {error["reason"] for error in envelope.errors}
-        assert "below_expected_floor" in reasons, reasons
+
+    envelopes = await _capture()
+    coverage = envelopes[ASSIGNMENT].coverage
+
+    assert coverage.present == 8
+    assert coverage.expected == EXPECTED_FLOOR[ASSIGNMENT]
+    assert coverage.ratio < 0.05
+    reasons = {error["reason"] for error in envelopes[ASSIGNMENT].errors}
+    assert "crew_not_published" in reasons, reasons
+    # The 40 unplayed games are named, not merely counted.
+    assert len(coverage.missing) == 40
 
 
-async def test_an_empty_upstream_reports_zero_not_one(monkeypatch):
+def _officials_for(games):
+    from .conftest import officials_csv
+
+    return officials_csv(games)
+
+
+@respx.mock
+async def test_a_truncated_upstream_does_not_report_full_coverage():
+    """An upstream returning one crew of eight must not yield ratio 1.0."""
+    schedule = season_of(crews=8, weeks=6)
+    one_crew = [g for g in schedule if g.referee_id == "701"]
+    mock_upstreams(
+        schedule, officials_response=httpx.Response(200, text=_officials_for(one_crew))
+    )
+
+    envelopes = await _capture()
+
+    assert envelopes[ASSIGNMENT].coverage.present == 6
+    assert envelopes[ASSIGNMENT].coverage.expected == EXPECTED_FLOOR[ASSIGNMENT]
+    assert envelopes[RATES].coverage.present == 1
+    assert envelopes[RATES].coverage.expected == EXPECTED_FLOOR[RATES]
+    for signal_type in SIGNAL_TYPES:
+        reasons = {e["reason"] for e in envelopes[signal_type].errors}
+        assert "below_expected_floor" in reasons, (signal_type, reasons)
+
+
+@respx.mock
+async def test_an_empty_upstream_reports_zero_not_one():
     """`Coverage.ratio` returns 1.0 when `expected` is 0 — correct for a bye
-    week, catastrophic for a pass that captured nothing."""
-    envelopes = await _capture([], monkeypatch, SpyLake())
-    for envelope in envelopes.values():
-        assert envelope.coverage.present == 0
-        assert envelope.coverage.ratio == 0.0
+    week, catastrophic for a pass that captured nothing. The floor is what
+    keeps `expected` non-zero here."""
+    schedule = season_of()
+    mock_upstreams(
+        schedule, officials_response=httpx.Response(200, text=_officials_for([]))
+    )
+
+    envelopes = await _capture()
+
+    for signal_type in SIGNAL_TYPES:
+        coverage = envelopes[signal_type].coverage
+        assert coverage.present == 0
+        assert coverage.expected == EXPECTED_FLOOR[signal_type]
+        assert coverage.ratio == 0.0
 
 
-async def test_expansion_past_the_floor_still_reports_honestly(monkeypatch):
-    """The floor must not CAP a genuine count, only raise a short one."""
-    rows = [{"key": f"k{i}", "value": float(i)} for i in range(50)]
-    envelopes = await _capture(rows, monkeypatch, SpyLake())
-    for signal_type, envelope in envelopes.items():
-        assert envelope.coverage.expected == max(50, EXPECTED_FLOOR[signal_type])
-        assert envelope.coverage.ratio == 1.0
+@respx.mock
+async def test_expansion_past_the_floor_still_reports_honestly():
+    """The floor must not CAP a genuine count, only raise a short one.
+
+    Twenty crews is more than the league fields, but a floor that capped would
+    report `expected: 17, present: 20` — a ratio above 1.0, or a silently
+    dropped crew, depending on which side got clamped.
+    """
+    schedule = season_of(crews=20, weeks=6)
+    mock_upstreams(schedule)
+
+    envelopes = await _capture()
+
+    assert envelopes[RATES].coverage.expected == 20
+    assert envelopes[RATES].coverage.present == 20
+    assert envelopes[RATES].coverage.ratio == 1.0
+    assert envelopes[ASSIGNMENT].coverage.expected == EXPECTED_FLOOR[ASSIGNMENT]
+    assert envelopes[ASSIGNMENT].coverage.present == 120
+
+
+@respx.mock
+async def test_a_game_with_no_referee_is_a_miss_not_a_dropped_row():
+    """Without a white hat there is no crew key, and inventing one from the
+    umpire would produce a crew that exists in no other week. The game stays
+    expected, with its own reason."""
+    schedule = season_of(crews=8, weeks=1)
+    # Strip the referee from one game by giving it a crew of six non-referees.
+    target = schedule[0]
+    target.positions = ("Umpire", "Down Judge", "Line Judge")
+    mock_upstreams(
+        schedule,
+        officials_response=httpx.Response(
+            200, text=_no_referee_officials(schedule, target)
+        ),
+    )
+
+    envelopes = await _capture()
+    coverage = envelopes[ASSIGNMENT].coverage
+
+    assert target.game_id in coverage.missing
+    assert coverage.present == 7
+    reasons = {e["reason"] for e in envelopes[ASSIGNMENT].errors}
+    assert "no_referee_in_crew" in reasons, reasons
+
+
+def _no_referee_officials(schedule, target):
+    """`officials_csv`, minus the Referee row of one game."""
+    from .conftest import officials_csv
+
+    text = officials_csv(schedule)
+    kept = [
+        line
+        for line in text.splitlines()
+        if not (line.startswith(target.legacy_game_id) and ",Referee," in line)
+    ]
+    return "\n".join(kept) + "\n"
+
+
+@respx.mock
+async def test_a_crew_with_no_play_by_play_stays_expected_in_the_rates_universe():
+    """A crew whose games play-by-play does not carry cannot have rates — but
+    it is still a crew the season fielded, so it is expected and missing rather
+    than absent."""
+    schedule = season_of(crews=8, weeks=6)
+    for game in schedule:
+        if game.referee_id == "703":
+            game.in_pbp = False
+    mock_upstreams(schedule)
+
+    envelopes = await _capture()
+    coverage = envelopes[RATES].coverage
+
+    assert f"{SEASON}-ref703" in coverage.missing
+    assert coverage.present == 7
+    assert coverage.expected == EXPECTED_FLOOR[RATES]
+    reasons = {e["reason"] for e in envelopes[RATES].errors}
+    assert "no_games_sampled" in reasons, reasons
 
 
 def test_every_signal_type_declares_a_floor():
     assert set(EXPECTED_FLOOR) == set(SIGNAL_TYPES)
     assert all(floor >= 1 for floor in EXPECTED_FLOOR.values())
+
+
+def test_the_floors_are_the_leagues_real_shape():
+    """Stated as numbers rather than derived, which is the point — but they
+    still have to be the RIGHT numbers, and a floor nobody checks drifts into
+    being whatever made the tests pass."""
+    assert EXPECTED_FLOOR[ASSIGNMENT] == 272, "17 weeks x 16 games"
+    assert EXPECTED_FLOOR[RATES] == 17, "the league has fielded 17 crews since 2015"

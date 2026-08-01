@@ -36,6 +36,11 @@ gateway:
     - /catalog
     - /signals
     - /refresh
+    # officiating's own extra route: GET /crews/{crew_id}. A PathPrefix match,
+    # so the id comes along. Omit it and the route works in-cluster and 404s at
+    # the edge, which reads like a broken handler rather than a missing line
+    # here.
+    - /crews
 
 extraEnv:
   # optional: true lets the pod start before the Secret exists. officiating then
@@ -54,11 +59,31 @@ extraEnv:
     value: "http://minio.monitoring.svc.cluster.local:9000"
   - name: REFRESH_MIN_INTERVAL_SECONDS
     value: "300"
-  # Scaffolded false. Flip to "true" once the real upstream is wired AND you
-  # have decided the third-party load is acceptable: the cluster is recreated
-  # on every CI run and every pod restart re-captures, so a large or
-  # rate-limited upstream should stay false here. A dispatched POST /refresh
-  # reaches the upstream regardless of this flag.
+  # False, deliberately, with the numbers rather than as a scaffold default
+  # nobody revisited. One pass reads three upstreams, measured live on
+  # 2026-08-01:
+  #
+  #     games.csv                       2.07 MiB
+  #     officials.csv                   1.23 MiB
+  #     play_by_play_<season>.csv.gz   18.2  MiB   (93.4 MiB uncompressed)
+  #     ----------------------------------------
+  #                                    21.5  MiB per changed pass
+  #
+  # That is four times what `player-identity` ships false for (~5 MB) and about
+  # half of `player-profile`'s cold read. The Kind cluster is rebuilt on every
+  # CI run and every pod restart re-captures, so a true here would pull ~21 MiB
+  # from GitHub on every PR — for a collector whose entire product is eight
+  # numbers per crew, recomputed weekly.
+  #
+  # Conditional GET makes the STEADY state cheap (all three feeds serve ETags
+  # and answer If-None-Match with a 304 carrying zero bytes, verified live),
+  # but it cannot help a fresh pod: the ETag store is in memory, so every
+  # restart pays the full 21.5 MiB again. That is the cost this flag controls.
+  #
+  # Consequence for the smoke hook: a dispatched POST /refresh reaches the
+  # upstreams REGARDLESS of this flag, so services/officiating/smoke.sh must
+  # not post one. It exercises GET /crews/{crew_id} instead, which needs no
+  # capture to answer correctly.
   - name: CAPTURE_ENABLED
     value: "false"
   - name: CAPTURE_SEASON
