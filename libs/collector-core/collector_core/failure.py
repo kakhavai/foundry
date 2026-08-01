@@ -134,8 +134,17 @@ async def fail_capture(
     the counter for failures the library cannot see: a single bad row, one
     item's fetch inside a multi-call pass, a degraded path that builds its own
     envelopes rather than routing through here.
+
+    **`reason` reaches Prometheus, not just the envelope.** It is handed to
+    `metrics.capture_failure` as well as written into `errors`, so a fail-closed
+    pass is labelled `scope_unavailable` rather than falling through the
+    exception classifier to `unknown` — `ScopeUnavailable` is not an exception
+    type `CollectorMetrics._reason` can recognise, and an alert that cannot tell
+    "roster-scope published nothing" from an unclassified crash is not much of
+    an alert. Passing it in both places is also what stops the two surfaces
+    disagreeing about the same failure.
     """
-    metrics.capture_failure(exc)
+    metrics.capture_failure(exc, reason=reason)
 
     envelopes = failure_envelopes(
         exc,

@@ -15,6 +15,7 @@ import httpx
 import jsonschema
 import pytest
 import respx
+from collector_core.conditional import ETAGS, UpstreamUnchanged
 from jsonschema import Draft202012Validator, FormatChecker
 
 from depth_chart.adapters.upstream import source_ref
@@ -146,6 +147,23 @@ async def test_a_failed_capture_writes_a_present_zero_envelope():
             "makes Coverage.ratio read 1.0"
         )
         assert envelope.errors, "a failure envelope with no errors explains nothing"
+
+
+@respx.mock
+async def test_a_304_propagates_instead_of_writing_a_failure_envelope():
+    """The trap this guards: `capture_depth_chart`'s generic handler routes
+    every exception to `fail_capture`, which writes a `present: 0` envelope
+    and re-raises. Doing that for a 304 would destroy a healthy capture's
+    published coverage over an upstream that is simply stable."""
+    ETAGS.set(FEED, 'W/"v1"')
+    respx.get(FEED).mock(return_value=httpx.Response(304))
+    lake = SpyLake()
+
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(UpstreamUnchanged):
+            await capture_depth_chart(2026, 1, client=client, lake=lake, now=NOW)
+
+    assert lake.writes == []
 
 
 @respx.mock

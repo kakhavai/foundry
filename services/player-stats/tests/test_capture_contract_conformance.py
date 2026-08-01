@@ -28,7 +28,7 @@ from player_stats.capture import (
     capture_player_stats,
 )
 
-from .conftest import NOW, SEASON, WEEK, SpyLake, feed_csv, feed_row
+from .conftest import NOW, SEASON, WEEK, SpyLake, feed_csv, feed_row, seed_scope
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts" / "signal-envelope"
 ENVELOPE_SCHEMA = json.loads((CONTRACTS / "envelope.v1.schema.json").read_text())
@@ -95,6 +95,10 @@ REALISTIC_WEEK = [
 
 async def capture(lake, rows=None, **kwargs):
     """One capture through the real streaming adapter."""
+    # Team-defense-anchor-only (see `conftest.seed_scope`): an empty player
+    # watchlist, successfully fetched, so these tests exercise the box-score
+    # path exactly as before narrowing shipped on.
+    seed_scope(lake)
     document = feed_csv(REALISTIC_WEEK if rows is None else rows)
     with respx.mock:
         respx.get(stats_url(SEASON)).mock(
@@ -107,7 +111,14 @@ async def capture(lake, rows=None, **kwargs):
 
 
 async def capture_failing(lake):
-    """One capture whose upstream is unreachable."""
+    """One capture whose upstream is unreachable.
+
+    The scope is seeded so the failure genuinely comes from the mocked
+    upstream `ConnectError` rather than from `fetch_watchlist` raising first
+    — narrowing is fetched before the upstream, so an unseeded lake here
+    would turn this into a scope-failure test by accident.
+    """
+    seed_scope(lake)
     with respx.mock:
         respx.get(stats_url(SEASON)).mock(side_effect=httpx.ConnectError("down"))
         async with httpx.AsyncClient() as client:

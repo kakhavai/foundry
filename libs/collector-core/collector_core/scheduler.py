@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 from .cadence import CadenceClass, next_interval
+from .conditional import UpstreamUnchanged
 from .lake import LakeWriter
 from .metrics import CollectorMetrics
 from .routes import (
@@ -132,16 +133,24 @@ async def run_capture_loop(
                 if process_started_at is None:
                     process_started_at = now
                 deadline = None if capture_deadline is None else now + capture_deadline
-                async with client_factory() as client:
-                    envelopes = await capture(
-                        season,
-                        week,
-                        client=client,
-                        lake=lake,
-                        now=now,
-                        deadline=deadline,
-                    )
-                state.apply_capture(envelopes, now)
+                try:
+                    async with client_factory() as client:
+                        envelopes = await capture(
+                            season,
+                            week,
+                            client=client,
+                            lake=lake,
+                            now=now,
+                            deadline=deadline,
+                        )
+                except UpstreamUnchanged:
+                    # A healthy pass, not a failure. Confirmed current, so
+                    # staleness resets; nothing new to install, so the
+                    # published envelopes stay exactly as they are.
+                    metrics.upstream_unchanged()
+                    state.mark_unchanged(now)
+                else:
+                    state.apply_capture(envelopes, now)
         except Exception:  # noqa: BLE001 -- the loop must survive anything
             logger.exception("capture failed; retrying on the next tick")
 

@@ -1,4 +1,23 @@
-FROM ubuntu:22.04
+# 24.04, not 22.04, and the Python version is the whole reason.
+#
+# Every pyproject.toml in this repo declares `requires-python = ">=3.12"` and
+# every runtime image is `python:3.12-slim`. 22.04's distro python3 is 3.10,
+# which made this image the single place in the system where 3.10 existed.
+#
+# That only bites `uv run --no-project`, which resolves against the ambient
+# interpreter rather than the workspace's — so a step that pulls in a
+# workspace package fails at RESOLUTION with "the current Python version
+# (3.10.12) does not satisfy Python>=3.12", naming the package rather than
+# the command that needs a `--python` flag. It cost a red REQUIRED check and
+# a wrong first diagnosis. 24.04's python3 is 3.12.3, so the ambient
+# interpreter now agrees with what the repo declares.
+#
+# Every tool below is a static binary curl'd from its own upstream release,
+# so none of them depends on the base image's OS version; only `curl`, `git`,
+# `python3`, `python3-pip` and `ca-certificates` come from apt, and all exist
+# in 24.04. Nothing in this repo invokes pip (it uses uv), so 24.04's
+# PEP 668 externally-managed restriction on pip is not reachable.
+FROM ubuntu:24.04
 
 ARG KIND_VERSION=0.24.0
 ARG KUBECTL_VERSION=1.31.0

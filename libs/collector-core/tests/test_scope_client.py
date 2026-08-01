@@ -2,7 +2,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from collector_core.scope import Scope, ScopeClient, ScopeUnavailable
+from collector_core.scope import (
+    Scope,
+    ScopeClient,
+    ScopeUnavailable,
+    fetch_scope_or_fail,
+)
 
 
 class FakeLake:
@@ -289,3 +294,266 @@ def test_age_seconds_measures_from_captured_at():
         signal_type="scope_membership_weekly",
     )
     assert scope.age_seconds(datetime(2026, 9, 2, 1, 0, 0, tzinfo=UTC)) == 3600.0
+
+
+class SignalTypeAwareFakeLake:
+    """Like `WeekAwareFakeLake`, but keyed by `signal_type` as well as `week`.
+
+    `fetch_union` calls `fetch` once per signal type against the *same*
+    partition, and both existing fakes return one fixed key list regardless
+    of which signal type is asked for -- neither can exercise a real union
+    across two distinct lists living in the same season/week. Like
+    `WeekAwareFakeLake`, `season` is accepted but ignored -- these tests only
+    ever exercise one season.
+    """
+
+    def __init__(self, keys_by_partition=None, objects=None):
+        self._keys_by_partition = keys_by_partition or {}
+        self._objects = objects or {}
+        self.list_calls = []
+
+    def list_keys(self, collector, signal_type, season, week, version="1"):
+        self.list_calls.append((collector, signal_type, season, week))
+        return list(self._keys_by_partition.get((signal_type, week), []))
+
+    def read(self, key):
+        return self._objects[key]
+
+    def write(self, envelope):  # pragma: no cover - unused here
+        raise AssertionError("ScopeClient must never write")
+
+
+@pytest.fixture
+def lake():
+    return SignalTypeAwareFakeLake()
+
+
+def _seed(
+    lake,
+    signal_type: str,
+    season: int,
+    week: int,
+    player_ids: list[str],
+    captured_at: str = "2026-09-02T00:00:00Z",
+) -> None:
+    """Write one envelope for `signal_type`/`season`/`week` into `lake`."""
+    key = (
+        f"signals/roster-scope/v1/season={season}/week={week:02d}/"
+        f"{captured_at}-{signal_type}.json"
+    )
+    lake._keys_by_partition.setdefault((signal_type, week), []).append(key)
+    lake._objects[key] = _envelope(captured_at, player_ids)
+
+
+@pytest.mark.asyncio
+async def test_fetch_union_returns_every_members_set_combined(lake):
+    """injury-report needs offensive watchlist AND matchup defenders."""
+    _seed(lake, "scope_membership_weekly", 2026, 1, ["fdy-a", "fdy-b"])
+    _seed(lake, "scope_matchup_weekly", 2026, 1, ["fdy-c"])
+
+    scope = await ScopeClient(lake).fetch_union(
+        ("scope_membership_weekly", "scope_matchup_weekly"), 2026, 1
+    )
+
+    assert scope.members == frozenset({"fdy-a", "fdy-b", "fdy-c"})
+    assert len(scope.members) == 3
+
+
+@pytest.mark.asyncio
+async def test_fetch_union_fails_closed_when_any_signal_type_is_missing(lake):
+    """Strictly all-or-nothing. A present membership list with an absent
+    matchup list would narrow to offence only and silently drop every
+    defender -- a partial scope that looks like a working one."""
+    _seed(lake, "scope_membership_weekly", 2026, 1, ["fdy-a"])
+
+    with pytest.raises(ScopeUnavailable):
+        await ScopeClient(lake).fetch_union(
+            ("scope_membership_weekly", "scope_matchup_weekly"), 2026, 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_fetch_union_reports_the_oldest_contributing_capture(lake):
+    """`age_seconds` must describe the STALEST input, not the freshest --
+    otherwise a fresh membership list hides a week-old matchup list."""
+    _seed(
+        lake,
+        "scope_membership_weekly",
+        2026,
+        1,
+        ["fdy-a"],
+        captured_at="2026-09-10T00:00:00Z",
+    )
+    _seed(
+        lake,
+        "scope_matchup_weekly",
+        2026,
+        1,
+        ["fdy-c"],
+        captured_at="2026-09-03T00:00:00Z",
+    )
+
+    scope = await ScopeClient(lake).fetch_union(
+        ("scope_membership_weekly", "scope_matchup_weekly"), 2026, 1
+    )
+
+    assert scope.captured_at.isoformat().startswith("2026-09-03")
+
+
+@pytest.mark.asyncio
+async def test_fetch_union_with_no_signal_types_fails_closed(lake):
+    """An empty union has no contributing envelope to be stale or fresh --
+    returning an empty `Scope` here would be indistinguishable from a
+    caller-error fail-open, not a legitimately narrowed-to-nothing scope."""
+    with pytest.raises(ScopeUnavailable):
+        await ScopeClient(lake).fetch_union((), 2026, 1)
+
+
+# --- fetch_scope_or_fail: both refusal arms, once, for the whole fleet -------
+#
+# The two-arm pattern lived in three near-identical ~35-line comment blocks in
+# three collectors. What gets copied at twenty-six collectors is one of the
+# three, and the copy that drops the SECOND arm fails silently: the exception
+# escapes the capture coroutine, no `present: 0` envelope is written, and
+# `collector_capture_failures_total` never moves.
+
+
+class _RecordingLake:
+    """Records the failure envelopes `fail_capture` writes."""
+
+    def __init__(self) -> None:
+        self.writes = []
+
+    def write(self, envelope):
+        self.writes.append(envelope)
+        return "key"
+
+
+class _RecordingMetrics:
+    def __init__(self) -> None:
+        self.failures: list[tuple[BaseException, str | None]] = []
+        self.coverage_calls: list[tuple[str, float]] = []
+
+    def capture_failure(self, exc, reason=None):
+        self.failures.append((exc, reason))
+
+    def coverage(self, signal_type, ratio):
+        self.coverage_calls.append((signal_type, ratio))
+
+
+def _context(lake, metrics, **overrides):
+    context = dict(
+        collector="fake",
+        signal_types=("alpha", "beta"),
+        adapter="fake-adapter",
+        now=datetime(2026, 9, 15, 12, 0, tzinfo=UTC),
+        scope={"season": 2026, "week": 1},
+        lake=lake,
+        metrics=metrics,
+        expected={"alpha": 384, "beta": 384},
+    )
+    context.update(overrides)
+    return context
+
+
+async def test_it_returns_whatever_the_fetch_returned():
+    """Generic on purpose: `injury-report` hands back a `Scope`,
+    `player-stats` a `frozenset`, `usage-share` a `(client, Scope)` tuple.
+    A signature pinned to `Scope` would have fitted one of the three."""
+    lake, metrics = _RecordingLake(), _RecordingMetrics()
+
+    async def fetch():
+        return ("identity-client", "the-scope")
+
+    result = await fetch_scope_or_fail(fetch, **_context(lake, metrics))
+
+    assert result == ("identity-client", "the-scope")
+    assert lake.writes == [], "a successful fetch must write no failure envelope"
+    assert metrics.failures == []
+
+
+async def test_scope_unavailable_forwards_its_own_reason():
+    """`scope_unavailable`, `scope_empty` and a collector's own
+    `identity_unavailable` have three different fixes. Flattening them to one
+    literal costs an operator the only thing the envelope could have told
+    them — and now the Prometheus label too."""
+    lake, metrics = _RecordingLake(), _RecordingMetrics()
+
+    async def fetch():
+        raise ScopeUnavailable("scope_empty")
+
+    with pytest.raises(ScopeUnavailable):
+        await fetch_scope_or_fail(fetch, **_context(lake, metrics))
+
+    assert len(lake.writes) == 2
+    assert {e.errors[0]["reason"] for e in lake.writes} == {"scope_empty"}
+    assert [reason for _, reason in metrics.failures] == ["scope_empty"]
+
+
+async def test_a_synchronous_raise_before_the_first_await_is_caught_too():
+    """Why the parameter is a callable rather than an awaitable.
+    `usage-share`'s `build_identity_client` raises `ScopeUnavailable`
+    synchronously when `PLAYER_IDENTITY_URL` is empty — the config half of
+    failing closed, and the one an awaitable-shaped signature would miss."""
+    lake, metrics = _RecordingLake(), _RecordingMetrics()
+
+    async def fetch():
+        raise ScopeUnavailable("identity_unavailable")
+
+    with pytest.raises(ScopeUnavailable):
+        await fetch_scope_or_fail(fetch, **_context(lake, metrics))
+
+    assert {e.errors[0]["reason"] for e in lake.writes} == {"identity_unavailable"}
+
+
+async def test_a_lake_that_fails_outright_still_writes_an_envelope():
+    """THE arm. `ScopeUnavailable` is only what `ScopeClient` raises when the
+    lake ANSWERED and held nothing usable; botocore errors, JSON decode
+    failures and an unparseable `captured_at` propagate untouched. Without the
+    second arm they escape the capture coroutine entirely."""
+    lake, metrics = _RecordingLake(), _RecordingMetrics()
+
+    async def fetch():
+        raise RuntimeError("list_objects_v2: endpoint is unreachable")
+
+    with pytest.raises(RuntimeError):
+        await fetch_scope_or_fail(fetch, **_context(lake, metrics))
+
+    assert len(lake.writes) == 2
+    for envelope in lake.writes:
+        assert envelope.coverage.present == 0
+        assert envelope.coverage.expected == 384
+        assert envelope.coverage.ratio == 0.0
+    # Classified, and deliberately NOT mistakable for an absent scope.
+    assert {e.errors[0]["reason"] for e in lake.writes} == {"unknown"}
+    assert [reason for _, reason in metrics.failures] == [None]
+
+
+async def test_a_malformed_lake_object_is_classified_not_flattened():
+    """`ScopeClient._parse_captured_at` raises `ValueError` on a timestamp it
+    does not recognise, which the shared classifier reads as `malformed` — a
+    true statement, and one that cannot be confused with `scope_unavailable`."""
+    lake, metrics = _RecordingLake(), _RecordingMetrics()
+
+    async def fetch():
+        raise ValueError("time data does not match format")
+
+    with pytest.raises(ValueError):
+        await fetch_scope_or_fail(fetch, **_context(lake, metrics))
+
+    assert {e.errors[0]["reason"] for e in lake.writes} == {"malformed"}
+
+
+async def test_the_original_exception_is_re_raised_unchanged():
+    """`fail_capture` re-raises so `CaptureState` never installs an empty
+    capture over the last good one. The helper must not swallow that."""
+    lake, metrics = _RecordingLake(), _RecordingMetrics()
+    boom = ScopeUnavailable("scope_unavailable")
+
+    async def fetch():
+        raise boom
+
+    with pytest.raises(ScopeUnavailable) as caught:
+        await fetch_scope_or_fail(fetch, **_context(lake, metrics))
+
+    assert caught.value is boom

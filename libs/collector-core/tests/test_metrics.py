@@ -167,6 +167,68 @@ def test_every_recorded_signal_type_survives_together(scrape):
     assert found == recorded
 
 
+def test_an_explicit_reason_overrides_the_exception_classifier(scrape):
+    """The alerting surface must carry the same reason the envelope does.
+
+    `_reason` classifies from the exception TYPE, and has no case for
+    `ScopeUnavailable` — so every fail-closed pass in the fleet
+    (`scope_unavailable`, `scope_empty`, `identity_unavailable`: three facts
+    with three different fixes, kept carefully apart in the envelope's `errors`
+    array) arrived in Prometheus labelled `unknown`, in the same bucket as an
+    unclassified crash. The most likely fleet-wide failure narrowing creates
+    was, in PromQL, invisible.
+    """
+
+    class ScopeUnavailable(Exception):  # the shape, without the import
+        pass
+
+    m = CollectorMetrics("reason-override")
+    m.capture_failure(ScopeUnavailable("nothing published"), reason="scope_unavailable")
+
+    scrape()
+    series = scrape()
+
+    assert (
+        read(
+            series,
+            "collector_capture_failures_total",
+            collector="reason-override",
+            reason="scope_unavailable",
+        )
+        == 1.0
+    )
+    assert (
+        read(
+            series,
+            "collector_capture_failures_total",
+            collector="reason-override",
+            reason="unknown",
+        )
+        is None
+    ), "the classifier's fallback was recorded alongside the explicit reason"
+
+
+def test_an_absent_reason_still_falls_back_to_the_classifier(scrape):
+    """`reason` is an override, not a replacement: every collector that does
+    not name one — and every failure path where the exception genuinely is the
+    whole story — must keep the classified label it had."""
+    m = CollectorMetrics("reason-fallback")
+    m.capture_failure(httpx.TimeoutException("x"))
+
+    scrape()
+    series = scrape()
+
+    assert (
+        read(
+            series,
+            "collector_capture_failures_total",
+            collector="reason-fallback",
+            reason="timeout",
+        )
+        == 1.0
+    )
+
+
 def test_the_counters_are_unaffected(scrape):
     """A counter is a different instrument class and is already cumulative.
     Pinned so a future 'fix' to the counters is a visible change."""
@@ -266,3 +328,24 @@ def test_last_value_gauge_is_reusable_by_a_per_collector_subclass(scrape):
     series = scrape()
 
     assert read(series, "example_subclass_gauge", collector="survives-subclass") == 7.0
+
+
+def test_upstream_unchanged_is_recorded_as_a_counter(scrape):
+    """Named `collector_upstream_unchanged`; OTel appends `_total`. A separate
+    series from `collector_capture_failures_total` -- a 304 is a healthy
+    outcome, not a failure -- so it is pinned on its own name and label set
+    rather than folded into the failure counter's assertions."""
+    m = CollectorMetrics("survives-unchanged")
+    m.upstream_unchanged()
+
+    scrape()
+    series = scrape()
+
+    assert (
+        read(
+            series,
+            "collector_upstream_unchanged_total",
+            collector="survives-unchanged",
+        )
+        == 1.0
+    )

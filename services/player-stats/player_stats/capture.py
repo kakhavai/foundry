@@ -4,7 +4,16 @@
 upstream outage costs **freshness, not availability**. A collector that reaches
 its upstream inside a request handler has inverted that contract.
 
-Four things here are correctness rather than style.
+Five things here are correctness rather than style.
+
+**The watchlist is fetched from the lake before the upstream is touched, and
+a failure to fetch it is fatal to the pass.** `adapters/scope.py` reads the
+last `roster-scope` capture straight out of the lake — never `roster-scope`
+over HTTP — so a `roster-scope` outage costs this collector's coverage
+freshness, not `/signals`'s availability. `fetch_watchlist` raises
+`ScopeUnavailable` rather than returning an empty set, and this coroutine
+never falls back to an unnarrowed capture: no scope means zero calls to the
+box-score feed and a `present: 0` envelope for every signal type.
 
 **`coverage.expected` never derives from what succeeded.** `EXPECTED_FLOOR`
 below is computed from `roster-scope`'s *config*, before any upstream is
@@ -45,6 +54,7 @@ from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
 from collector_core.lake import LakeWriter
 from collector_core.publish import publish_capture
+from collector_core.scope import fetch_scope_or_fail
 
 from .adapters.identity import UnresolvedPlayer, build_id_resolver
 from .adapters.scope import fetch_watchlist
@@ -178,20 +188,25 @@ async def capture_player_stats(
         adapter=UPSTREAM_ADAPTER, fetched_at=now, source_ref=source_ref(season, week)
     )
 
+    # Stated once, so every failure path below writes the same envelope and
+    # differs only in how the failure is named. Also the kwargs
+    # `fetch_scope_or_fail` forwards to `fail_capture` on its own two arms —
+    # which is why `reason` is deliberately NOT in here: that helper supplies
+    # its own, and a duplicate keyword would be a TypeError.
+    failure_context = dict(
+        collector=COLLECTOR_NAME,
+        signal_types=SIGNAL_TYPES,
+        adapter=UPSTREAM_ADAPTER,
+        now=now,
+        scope=scope,
+        lake=lake,
+        metrics=metrics,
+        expected=EXPECTED_FLOOR,
+        source_ref=source_ref(season, week),
+    )
+
     def fail(exc: BaseException, reason: str | None = None):
-        return fail_capture(
-            exc,
-            collector=COLLECTOR_NAME,
-            signal_types=SIGNAL_TYPES,
-            adapter=UPSTREAM_ADAPTER,
-            now=now,
-            scope=scope,
-            lake=lake,
-            metrics=metrics,
-            reason=reason,
-            expected=EXPECTED_FLOOR,
-            source_ref=source_ref(season, week),
-        )
+        return fail_capture(exc, reason=reason, **failure_context)
 
     # `to_thread` rather than a direct call, and deliberately the very first
     # thing this coroutine does: it is both the offload AND the `await` that
@@ -206,7 +221,18 @@ async def capture_player_stats(
         await fail(exc, reason="previous_snapshot_unavailable")
 
     metrics.capture_attempt()
-    watchlist, errors = await fetch_watchlist(client)
+
+    # BEFORE the upstream fetch, deliberately, and this ordering is the whole
+    # of failing closed: a pass that cannot narrow costs zero upstream calls
+    # rather than an ~8.3 MB season CSV fetched to publish nothing.
+    #
+    # `fetch_scope_or_fail` owns both refusal arms — `ScopeUnavailable`
+    # forwarding `exc.reason`, and the lake failing outright with no reason at
+    # all — see its docstring for why the second one is the load-bearing half
+    # and why it lives in the library rather than in three collectors.
+    watchlist = await fetch_scope_or_fail(
+        lambda: fetch_watchlist(lake, season, week), **failure_context
+    )
 
     try:
         rows, row_errors = await fetch_box_rows(season, week, client=client, now=now)
@@ -214,7 +240,7 @@ async def capture_player_stats(
         await fail(exc)
 
     acc = CoverageAccumulator(floor=EXPECTED_FLOOR[BOX_SIGNAL])
-    for error in (*errors, *row_errors):
+    for error in row_errors:
         acc.add_error(error["reason"], error.get("detail", ""))
     # Owed because `roster-scope` names them, not because a row turned up.
     for player_id in watchlist:

@@ -12,7 +12,10 @@ expectation from `rows`, and the ones that hold the spec's definition:
 from datetime import UTC, datetime
 
 import httpx
+import pytest
 import respx
+from collector_core.lake import lake_key
+from collector_core.scope import ScopeUnavailable
 
 from player_stats.adapters.upstream import stats_url
 from player_stats.capture import (
@@ -31,35 +34,24 @@ from .conftest import (
     SpyLake,
     feed_csv,
     feed_row,
+    scope_envelope,
+    seed_scope,
     stub_player_id,
 )
 
-ROSTER_SCOPE = "http://roster-scope:8003"
-
 
 async def capture(rows, lake=None, *, watchlist=None, **kwargs):
-    """A capture over `rows`, optionally with a roster-scope watchlist served."""
+    """A capture over `rows`, with a roster-scope watchlist seeded into the
+    lake. `watchlist=None` seeds the team-defense-anchor-only default (see
+    `conftest.seed_scope`) — an empty player watchlist, successfully
+    fetched, matching the old unscoped baseline most of these tests describe.
+    """
     lake = SpyLake() if lake is None else lake
+    seed_scope(lake, watchlist or ())
     with respx.mock:
         respx.get(stats_url(SEASON)).mock(
             return_value=httpx.Response(200, text=feed_csv(rows))
         )
-        if watchlist is not None:
-            respx.get(f"{ROSTER_SCOPE}/scope/players").mock(
-                return_value=httpx.Response(
-                    200,
-                    json={
-                        "players": [
-                            {
-                                "player_id": player_id,
-                                "entity_type": "player",
-                                "membership_status": "active",
-                            }
-                            for player_id in watchlist
-                        ]
-                    },
-                )
-            )
         async with httpx.AsyncClient() as client:
             return await capture_player_stats(
                 SEASON, WEEK, client=client, lake=lake, now=NOW, **kwargs
@@ -119,10 +111,9 @@ async def test_expansion_past_the_floor_still_reports_honestly():
 # ── what makes a key owed ─────────────────────────────────────────────────────
 
 
-async def test_a_watchlist_player_with_no_row_is_missing_with_a_reason(monkeypatch):
+async def test_a_watchlist_player_with_no_row_is_missing_with_a_reason():
     """Expected because roster-scope names them, not because a row turned up.
     The spec: emit nothing, and count it in `coverage.missing` with a reason."""
-    monkeypatch.setenv("ROSTER_SCOPE_URL", ROSTER_SCOPE)
     envelope = (
         await capture(
             [feed_row(player_id="00-0000001", position="WR", targets=1)],
@@ -134,10 +125,9 @@ async def test_a_watchlist_player_with_no_row_is_missing_with_a_reason(monkeypat
     assert "no_box_row" in {error["reason"] for error in envelope.errors}
 
 
-async def test_a_watchlist_player_with_a_row_is_recorded_not_missing(monkeypatch):
+async def test_a_watchlist_player_with_a_row_is_recorded_not_missing():
     """The join is the whole point of being scope-aware — if it silently never
     matched, every watchlist player would read as missing forever."""
-    monkeypatch.setenv("ROSTER_SCOPE_URL", ROSTER_SCOPE)
     upstream_id = "00-0000001"
     envelope = (
         await capture(
@@ -149,27 +139,93 @@ async def test_a_watchlist_player_with_a_row_is_recorded_not_missing(monkeypatch
     assert envelope.coverage.missing == []
 
 
-async def test_a_roster_scope_outage_still_floors_the_expectation(monkeypatch):
-    """An unreachable watchlist must not shrink `expected` to what the
-    box-score feed happened to return."""
-    monkeypatch.setenv("ROSTER_SCOPE_URL", ROSTER_SCOPE)
+async def test_a_roster_scope_outage_fails_closed_before_touching_the_upstream():
+    """No scope means zero upstream calls: the watchlist is fetched before
+    the box-score feed, and a lake with nothing for this partition (never
+    seeded — decision 5's own failure mode, `roster-scope` never having
+    published) must not fall through to an unnarrowed capture."""
     lake = SpyLake()
     with respx.mock:
-        respx.get(stats_url(SEASON)).mock(
+        route = respx.get(stats_url(SEASON)).mock(
             return_value=httpx.Response(
                 200, text=feed_csv([feed_row(position="WR", targets=1)])
             )
         )
-        respx.get(f"{ROSTER_SCOPE}/scope/players").mock(
-            return_value=httpx.Response(503)
-        )
         async with httpx.AsyncClient() as client:
-            envelopes = await capture_player_stats(
-                SEASON, WEEK, client=client, lake=lake, now=NOW
-            )
-    envelope = envelopes[BOX_SIGNAL]
+            with pytest.raises(ScopeUnavailable):
+                await capture_player_stats(
+                    SEASON, WEEK, client=client, lake=lake, now=NOW
+                )
+    assert route.call_count == 0
+    envelope = lake.writes[0]
+    assert envelope.coverage.present == 0
     assert envelope.coverage.expected == EXPECTED_FLOOR[BOX_SIGNAL]
     assert "scope_unavailable" in {error["reason"] for error in envelope.errors}
+
+
+async def test_a_published_but_empty_scope_is_reported_as_scope_empty():
+    """`scope_unavailable` (roster-scope never published for this partition)
+    and `scope_empty` (it published, and named nobody) are two different
+    fixes, and `capture.py`'s `reason=exc.reason` is the whole reason they
+    stay distinguishable rather than collapsing to one literal. `ScopeClient`
+    sets `scope_empty` when `week`'s own envelope resolves zero members
+    (`collector_core/scope.py`) — with `WEEK == 1` the `week - 1` fallback
+    candidate is `0`, which is skipped outright, so this reason survives to
+    the raised exception rather than being overwritten by a fallback
+    attempt."""
+    lake = SpyLake()
+    envelope = scope_envelope([])
+    lake.objects[lake_key(envelope)] = envelope.to_dict()
+    with respx.mock:
+        route = respx.get(stats_url(SEASON)).mock(
+            return_value=httpx.Response(
+                200, text=feed_csv([feed_row(position="WR", targets=1)])
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(ScopeUnavailable):
+                await capture_player_stats(
+                    SEASON, WEEK, client=client, lake=lake, now=NOW
+                )
+    assert route.call_count == 0
+    envelope_written = lake.writes[0]
+    assert "scope_empty" in {error["reason"] for error in envelope_written.errors}
+
+
+async def test_a_lake_error_during_the_scope_fetch_still_fails_closed():
+    """`ScopeUnavailable` is only what `ScopeClient` raises when the lake
+    answered and had nothing usable. The lake can also fail outright — here,
+    `ScopeClient._parse_captured_at` raises `ValueError` on a timestamp it
+    does not recognise — and the capture's SECOND `except` arm around the
+    scope fetch (a bare `Exception`, not just `ScopeUnavailable`) is what
+    stops that escaping with no `present: 0` envelope and no
+    `collector_capture_failures_total`."""
+    lake = SpyLake()
+    envelope = scope_envelope(["fdy-a"])
+    body = envelope.to_dict()
+    body["captured_at"] = "not-a-timestamp"
+    lake.objects[lake_key(envelope)] = body
+    with respx.mock:
+        route = respx.get(stats_url(SEASON)).mock(
+            return_value=httpx.Response(
+                200, text=feed_csv([feed_row(position="WR", targets=1)])
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(ValueError):
+                await capture_player_stats(
+                    SEASON, WEEK, client=client, lake=lake, now=NOW
+                )
+    assert route.call_count == 0
+    failure_envelope = lake.writes[0]
+    assert failure_envelope.coverage.present == 0
+    assert failure_envelope.coverage.expected == EXPECTED_FLOOR[BOX_SIGNAL]
+    # No `reason=` was passed on this arm, so it is whatever
+    # `CollectorMetrics.reason_for` classifies a `ValueError` as — must not be
+    # mistaken for `scope_unavailable`, which has a different fix.
+    reasons = {error["reason"] for error in failure_envelope.errors}
+    assert "scope_unavailable" not in reasons
+    assert reasons, "a failure envelope with no errors explains nothing"
 
 
 # ── rows that must not be emitted ─────────────────────────────────────────────

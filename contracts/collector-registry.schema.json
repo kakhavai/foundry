@@ -67,7 +67,7 @@
         },
         "scope_aware": {
           "type": "boolean",
-          "description": "Whether the collector narrows to the roster scope. TYPE-CHECKED ONLY — no automated check confirms the value is correct."
+          "description": "Whether the collector narrows to the roster scope. Checked structurally by tests/test_scope_aware_gate.py: true requires importing collector_core.scope.ScopeClient. That proves the narrowing seam is wired in, not that it behaves correctly."
         },
         "depends_on": {
           "type": "array",

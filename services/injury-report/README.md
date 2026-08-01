@@ -9,7 +9,7 @@ A Foundry signal collector. Scaffolded by `scripts/new-collector.py`; see
 | Gateway path | `/collectors/injury-report` |
 | Cadence class | `volatile` |
 | Signal types | `player_injury_status`, `team_injury_report` |
-| Scope-aware | **no**, on purpose — see below |
+| Scope-aware | **partially** — `player_injury_status` narrows to membership ∪ matchup; `team_injury_report` does not, see below |
 | Status | **Stub upstreams** — `INJURY_REPORT_URL` and `SCHEDULE_URL` ship empty |
 
 ## What it captures
@@ -26,18 +26,30 @@ It is the only collector that distinguishes **"no designation was published"**
 filed a report listing nobody from a club that filed nothing at all. Those two
 distinctions are the collector; everything else here is in service of them.
 
-### It deliberately ignores the roster scope
+### `player_injury_status` narrows to membership UNION matchup
 
-Every other signal collector narrows to `roster-scope`'s membership list before
-it fetches. This one does not, and `scope_aware: false` in
-`contracts/collector-registry.yaml` is a decision rather than a default falling
-through. An opposing cornerback ruled out moves a receiver's projection as much
-as the receiver's own hamstring does, and defenders never appear on an
-offence-oriented watchlist at all. Narrowing here would silently discard the
-half of the signal that is hardest to get anywhere else.
+Every other signal collector narrows to `roster-scope`'s membership list
+before it fetches. This one narrows too, but to the **union** of membership
+and matchup: an opposing cornerback ruled out moves a receiver's projection as
+much as the receiver's own hamstring does, and defenders never appear on the
+offence-oriented membership list at all. `roster-scope` publishes a
+separately-bounded ~608-slot CB/S/LB/DL/OL matchup list for exactly this
+reason, and `adapters/scope.py` reads both lists from the lake and narrows to
+their union (`ScopeClient.fetch_union`, which is all-or-nothing: a present
+membership list with an absent matchup list fails the whole pass closed
+rather than silently narrowing to offence alone). No usable union means ZERO
+calls to either upstream and a `present: 0` envelope for both signal types —
+there is no unnarrowed fallback.
 
-`GET /signals?team=…` is still available as a convenience. It is not a
-boundary, and a consumer that uses it has thrown away the opponent side.
+**`team_injury_report` is not narrowed.** It is keyed by team, not by player,
+and answers "did this club file a report" for every scheduled club regardless
+of which of its players happen to be in scope; narrowing it by player
+membership would silently drop a club's filing (and the coverage tracking
+built on it) whenever every player it listed was out of scope.
+
+`GET /signals?team=…` is still available as a convenience on both signal
+types. It is not a boundary, and a consumer filtering `player_injury_status`
+to its own club has thrown away the opponent side.
 
 ## The two upstreams, and why there are two
 
@@ -54,6 +66,36 @@ ships empty and ids are minted deterministically from the upstream's own stable
 player key; a row with no such key is dropped and counted rather than hashed
 from a display name.
 
+**Known gap: the stub ids do not join with `roster-scope`'s real ones, so
+`player_injury_status` publishes NOTHING today.** `roster-scope` (and
+`usage-share`, `player-stats`) resolve through the real `player-identity`
+deployment, so their published ids are canonical `player-identity` ids
+(`fdy-<sha1("sleeper:<id>")[:12]>`, see `roster_scope/scope.py`). This
+collector's stub mints `fdy-<sha256(external_id)[:12]>` locally instead — a
+different digest over a different input, so the two id spaces do not
+intersect. Until `adapters/identity.py` grows
+an HTTP crosswalk like `player-stats`' `HttpIdCrosswalk` (unlike that
+collector, this one's `PLAYER_IDENTITY_URL` path is not built; it deliberately
+raises `identity_resolver_unavailable` rather than silently minting stub ids
+against a cluster expecting real ones), `player_injury_status` narrows against
+a scope it can never actually match in **any** real deployment, local Kind
+included — every row is dropped, every pass, because none of its stub ids are
+ever in `roster-scope`'s real membership or matchup lists. `team_injury_report`
+is unaffected, since it does not narrow by player id at all.
+
+**This is loud, not silent — that is how an operator will know.** Coverage
+alone can't show it: `coverage.expected`/`present`/`ratio` are computed from
+team-level filing keys shared with `team_injury_report`, so a
+`player_injury_status` pass that drops every row still reports a *healthy*
+ratio. Instead, whenever narrowing resolves at least one player row and keeps
+none of them, the pass records an `errors` entry with reason
+`scope_dropped_everything` (carrying how many rows were offered) and
+increments `injury_report_scope_dropped_everything`. It does **not**
+fire on a genuinely quiet week (no rows offered at all) — those two states
+must stay distinguishable, which is the entire point. Until the crosswalk
+above is built, expect this counter to increment on essentially every pass
+that has an injury to report.
+
 ## Empty report vs. no report
 
 The distinction is structural, so nothing has to remember to check it:
@@ -68,6 +110,16 @@ A club that filed appears in `signals` either way, so a consumer reading only
 the rows sees the difference. A club that did not file appears in
 `coverage.missing`, so a consumer reading only coverage sees it too. Neither
 channel can express "healthy" for a club that said nothing.
+
+**`team_injury_report.player_count` is not narrowed, so it will not equal the
+number of that club's `player_injury_status` rows.** The count is taken off
+the unfiltered filing (every player the club actually listed); the
+`player_injury_status` rows for the same club are filtered to the
+membership/matchup union. A club that listed three players, only one of whom
+is in scope, reports `player_count: 3` alongside exactly one published
+`player_injury_status` row for that team — correct behaviour on both sides,
+not a discrepancy, but a consumer diffing the two counts will file a bug
+report over it if this is not read first.
 
 ## What `coverage.expected` counts
 
@@ -101,6 +153,7 @@ Beyond the fleet-wide `collector_*` series:
 |---|---|
 | `injury_report_teams_published{practice_day}` / `injury_report_teams_with_games{practice_day}` | one club's feed breaking on **one day**, which a week-level ratio hides |
 | `injury_report_unmapped_rows{reason}` | understanding less of the feed every week, which otherwise looks like the feed getting quieter |
+| `injury_report_scope_dropped_everything` | narrowing excluding every resolved `player_injury_status` row in a pass — invisible to `coverage.ratio`, which is team-keyed, so this is the only signal that distinguishes it from a genuinely quiet week. See "Known gap" above |
 
 ## Before the real upstream is wired
 

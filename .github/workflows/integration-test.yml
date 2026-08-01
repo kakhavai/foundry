@@ -167,6 +167,129 @@ jobs:
           helmfile repos
           helmfile apply
 
+      # The collector that publishes the fleet's scope lists ships
+      # CAPTURE_ENABLED=false (its upstream is a ~37 MB weekly document, and
+      # this cluster is rebuilt on every run — see that collector's own Helm
+      # values), so no scope envelope ever reaches the lake here unless
+      # something else writes one. That matters because every OTHER
+      # collector's capture loop runs its first pass immediately at pod
+      # startup, before its first scheduled sleep (see
+      # collector_core.scheduler.run_capture_loop) — so whichever narrowed
+      # collector captures automatically in CI reads whatever scope exists
+      # (or doesn't) at the moment ITS pod starts in "Deploy services" below,
+      # not at whatever moment this workflow happens to seed one. This step
+      # must therefore run BEFORE "Deploy services", not after — an earlier
+      # version of this file ran it between "Wait for pods ready" and "Smoke
+      # test services", which seeded the lake only after every narrowed
+      # collector had already taken its one automatic capture and found
+      # nothing, making the seed a no-op.
+      #
+      # Two of the narrowed collectors ship CAPTURE_ENABLED=false themselves
+      # in CI and never capture at all regardless of ordering (same load
+      # reasoning as above). Of the one that does capture automatically, its
+      # own player ids are minted independently of this fixture's (a
+      # documented gap — see scripts/seed-scope-fixture.py's docstring), so
+      # seeding this BEFORE its pod starts gets it onto the `fetch_union`
+      # success path — publishing its team-keyed signal unfiltered and its
+      # player-keyed signal narrowed to empty — rather than the
+      # `ScopeUnavailable` / `scope_unavailable` failure path. That is real,
+      # if partial, coverage of the narrowing code path, not full coverage of
+      # narrowing actually filtering rows.
+      #
+      # Rejected alternatives: enabling that collector's real capture in CI
+      # (pulls a real ~37 MB document on every push), and having this step —
+      # or the smoke test — POST /refresh (a dispatched refresh reaches the
+      # real upstream regardless of CAPTURE_ENABLED, which is exactly why its
+      # own values file says the smoke test must not).
+      #
+      # No collector is named in this comment on purpose —
+      # tests/test_collector_tooling.py's
+      # test_no_collector_name_is_hardcoded_in_the_tooling fails this file if
+      # one is; see that test's docstring for why.
+      - name: Seed a scope fixture into the lake
+        run: |
+          # helmfile's `wait: true` (infra/grafana-stack/helmfile.yaml)
+          # already blocks "Deploy observability stack" above until every
+          # release there, MinIO included, is Ready. This wait is a second,
+          # explicit check rather than relying on that alone — the same
+          # `kubectl wait` "Wait for pods ready" uses further down — so a
+          # future change to helmfile's own defaults can't silently turn this
+          # step's ordering fix into the same rely-on-something-implicit bug
+          # it exists to close.
+          kubectl wait --for=condition=ready pod \
+            --all -n monitoring --timeout=180s
+
+          # MinIO's in-cluster DNS name (what every collector's own
+          # LAKE_ENDPOINT_URL points at) is not reachable directly from this
+          # container: it sits on the cluster's pod network, and this
+          # container is only bridged to the Kind control-plane node's own
+          # network interface (see "Fix kubeconfig for container networking"
+          # above). kubectl port-forward tunnels through the API server
+          # instead, the same way scripts/smoke-test.sh reaches every
+          # in-cluster service from this same container.
+          kubectl port-forward -n monitoring svc/minio 9000:9000 &
+          PF_PID=$!
+          trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
+
+          # Wait on the tunnel being USABLE, not on a guess at how long it
+          # takes to come up. Everything else in this file waits on a
+          # condition; a fixed sleep here meant a slow port-forward refused
+          # the boto3 write below and turned the REQUIRED integration-test
+          # check red for a reason that has nothing to do with the diff.
+          #
+          # MinIO's liveness endpoint needs no credentials and no bucket, so
+          # a 200 from it means exactly "the tunnel carries HTTP to MinIO" —
+          # which is the only thing this step needs to know before writing.
+          for attempt in $(seq 1 30); do
+            if curl -fsS -o /dev/null --max-time 2 \
+                 http://localhost:9000/minio/health/live; then
+              echo "MinIO reachable through the port-forward after ${attempt}s"
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "MinIO did not answer through the port-forward within 30s" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Credentials match scripts/deploy-local.py's LOCAL_LAKE_ACCESS_KEY /
+          # LOCAL_LAKE_SECRET_KEY — the same values infra/grafana-stack/values/
+          # minio.yaml's rootUser/rootPassword seed MinIO with. Kind-only,
+          # committed deliberately, same as the collector bearer token.
+          #
+          # --with ./libs/collector-core, not --with boto3 alone: the script
+          # builds its envelopes through collector_core.envelope and writes
+          # them through collector_core.lake rather than a second, hand-rolled
+          # implementation of either, and collector-core already declares
+          # boto3 as its own runtime dependency, so this pulls both in.
+          #
+          # --python 3.12 is deliberate, and it is what makes this step work
+          # against BOTH ci-runner images during the bump.
+          #
+          # `--no-project` resolves against the ambient interpreter rather
+          # than the workspace's, and collector-core declares
+          # `requires-python = ">=3.12"`. The pre-bump image (ubuntu 22.04)
+          # had python3 3.10, so without this pin uv failed at RESOLUTION —
+          # "the current Python version (3.10.12) does not satisfy
+          # Python>=3.12" — before the script was ever imported, reddening a
+          # REQUIRED check with a message naming collector-core rather than
+          # this line. infra/ci/Dockerfile now bases on 24.04 (python 3.12.3),
+          # which fixes it at the source.
+          #
+          # The pin stays anyway. ci-runner:latest is rebuilt only by a push
+          # to main touching infra/ci/Dockerfile, and every consumer pins
+          # `:latest`, so runs between the merge and that rebuild still get
+          # the 3.10 image. Keeping the pin means this step never depended on
+          # which of the two it landed on. Verified working on both.
+          LAKE_BUCKET=foundry-signals \
+          LAKE_ENDPOINT_URL=http://localhost:9000 \
+          AWS_ACCESS_KEY_ID=foundry \
+          AWS_SECRET_ACCESS_KEY=foundry-local-dev \
+          AWS_DEFAULT_REGION=us-east-1 \
+          uv run --no-project --python 3.12 --with ./libs/collector-core python3 \
+            scripts/seed-scope-fixture.py --season 2026 --week 1 --lake
+
       - name: Deploy collector gateway
         run: |
           cd infra/gateway

@@ -288,3 +288,67 @@ def test_the_cap_is_configurable_per_accumulator():
     errors = acc.errors
     assert len(errors) == 3
     assert errors[-1]["omitted"] == 8
+
+
+# --- add_priority_error: the entry that explains the pass must survive -------
+#
+# `injury-report` reached into `acc._errors` from `services/` to insert its
+# `scope_dropped_everything` entry at the front, because the accumulator had no
+# public way to say "this one must not be capped away". The behaviour was
+# right; the private attribute was the problem, and at twenty-six collectors
+# that is exactly the kind of thing that gets copied.
+
+
+def test_a_priority_error_survives_the_cap():
+    """The whole point. Append it and a busy pass deletes it silently."""
+    acc = CoverageAccumulator()
+    for index in range(MAX_ERRORS * 2):
+        acc.add_error("routine", f"key-{index}")
+    acc.add_priority_error("scope_dropped_everything", "0 of 40 rows survived")
+
+    errors = acc.errors
+    assert errors[0]["reason"] == "scope_dropped_everything"
+    assert errors[0]["detail"] == "0 of 40 rows survived"
+    # `cap_errors` keeps MAX_ERRORS real entries PLUS its own marker.
+    assert len(errors) == MAX_ERRORS + 1
+    assert errors[-1]["reason"] == ERRORS_TRUNCATED
+    reasons = [error["reason"] for error in errors]
+    assert "routine" in reasons, "the cap was not genuinely reached"
+
+
+def test_an_appended_error_would_not_have_survived():
+    """The control. Without it the test above could pass for any list length,
+    and the defect it guards would be untestable."""
+    acc = CoverageAccumulator()
+    for index in range(MAX_ERRORS * 2):
+        acc.add_error("routine", f"key-{index}")
+    acc.add_error("scope_dropped_everything", "0 of 40 rows survived")
+
+    reasons = [error["reason"] for error in acc.errors]
+    assert len(reasons) == MAX_ERRORS + 1
+    assert "scope_dropped_everything" not in reasons
+
+
+def test_the_floor_shortfall_still_outranks_a_priority_error():
+    """`errors` prepends `below_expected_floor` ahead of everything in
+    `_errors`, so a priority entry lands second when a shortfall is also
+    present. Both survive the cap, which is the property that matters."""
+    acc = CoverageAccumulator(floor=384)
+    acc.expect("only-one")
+    acc.add_priority_error("scope_dropped_everything", "0 survived")
+
+    reasons = [error["reason"] for error in acc.errors]
+    assert reasons[0] == BELOW_EXPECTED_FLOOR
+    assert reasons[1] == "scope_dropped_everything"
+    assert len(reasons) == 2
+
+
+def test_priority_errors_keep_their_own_insertion_order_reversed():
+    """Two priority entries: the most recent lands first. Pinned rather than
+    left implicit, because `insert(0, ...)` is the only reason it is so."""
+    acc = CoverageAccumulator()
+    acc.add_priority_error("first")
+    acc.add_priority_error("second")
+
+    reasons = [error["reason"] for error in acc.errors]
+    assert reasons == ["second", "first"]

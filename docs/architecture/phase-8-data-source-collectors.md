@@ -567,7 +567,7 @@ Answers who is ahead of whom at each position on each team, and separately wheth
 **Cadence class:** volatile — every 15 minutes from Wednesday through each game's kickoff
 **Stage:** 8B
 **Depends on:** `player-identity`
-**Scope-aware:** no — an opposing defender's absence changes a player's projection as much as their own, and defenders never appear on an offense-oriented watchlist
+**Scope-aware:** yes (reads `roster-scope`'s membership list **union** its matchup list) — an opposing defender's absence changes a player's projection as much as their own, and defenders never appear on the offense-oriented membership list at all. That is the reason this collector also reads the separately-bounded matchup list rather than the reason it stays unnarrowed: `roster-scope` publishes a ~608-slot CB/S/LB/DL/OL universe for exactly this case, and the union of the two lists is this collector's watchlist. Only `player_injury_status` is filtered by it; `team_injury_report` is team-keyed and answers a question every scheduled team owes regardless of which of its players are in scope
 
 Answers whether a player will be available and, more usefully, the week-long trajectory that predicts it: a Questionable tag preceded by DNP/DNP/Limited means something different from one preceded by Limited/Full/Full. It carries the report for every team, not only for watchlist players, because a shadow corner ruled out or a run-stuffing interior lineman missing reshapes the matchup for players who are perfectly healthy themselves. It is the only collector that distinguishes "no designation was published" from "published as healthy."
 
@@ -1547,7 +1547,7 @@ Per-collector field schemas live under `contracts/signal-envelope/collectors/<na
 
 **Scope is a service, not a config file per collector.** One place declares the player universe by position and depth-chart rules; every collector reads it. Widening the universe is one config change that drops cost and coverage expectations in lockstep across the fleet, instead of twenty-six configs drifting apart until the generator is joining across inconsistent player sets.
 
-**`injury-report` deliberately ignores scope.** The opponent's injuries change a player's projection as much as their own. A handful of collectors have this property, and each states it explicitly in its `Scope-aware` line rather than leaving it to be inferred.
+**`injury-report` narrows to a union, not a single list.** The opponent's injuries change a player's projection as much as their own, and a defender never appears on the offense-oriented membership list — so this collector reads `roster-scope`'s membership list *and* its separately-bounded matchup list, and narrows to the union of the two rather than staying unnarrowed. A handful of collectors have a comparable wrinkle in how they use scope, and each states it explicitly in its `Scope-aware` line rather than leaving it to be inferred. (Its narrowing code path is real but currently publishes zero rows against a live `roster-scope`, because its `player_id` minting and `roster-scope`'s do not yet share a crosswalk — see its own section above.)
 
 **A registry that is both committed and served.** Committed makes a signal-shape change reviewable in a PR. Served means the generator needs no repository access. The CI drift gate between them is what stops the committed file from becoming a well-formatted lie.
 

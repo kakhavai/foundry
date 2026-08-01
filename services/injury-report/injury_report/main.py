@@ -6,15 +6,14 @@ parsing, `CaptureState`, the capture loop, bearer auth, the OTel guard and the
 five routes themselves — lives in `collector_core.app`. If you find yourself
 writing any of it here, it already exists; see docs/collectors.md.
 
-**This collector deliberately ignores the roster scope** (`scope_aware: false`
-in `contracts/collector-registry.yaml`). Every other signal collector narrows
-to `roster-scope`'s membership list before it fetches; narrowing here would
-silently discard the half of the signal that is hardest to get anywhere else.
-An opposing cornerback ruled out moves a receiver's projection as much as the
-receiver's own hamstring does, and defenders never appear on an offence-oriented
-watchlist at all — so the report is captured for **every** club with a game,
-and the filtering is left to the consumer. It looks like an oversight without
-this paragraph, which is exactly why the paragraph is here.
+**`player_injury_status` narrows to `roster-scope`'s membership UNION
+matchup list.** An opposing cornerback ruled out moves a receiver's
+projection as much as the receiver's own hamstring does, and defenders never
+appear on an offence-oriented membership list at all — so `capture.py` also
+reads `roster-scope`'s separately-bounded matchup list (`adapters/scope.py`)
+rather than fetching every player in the league. `team_injury_report` is
+unaffected: it is keyed by team, not by player, and is captured for **every**
+club with a game regardless of which of its players are in scope.
 """
 
 from collector_core.app import CollectorDescriptor, build_collector_app

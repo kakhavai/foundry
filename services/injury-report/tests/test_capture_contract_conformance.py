@@ -24,7 +24,7 @@ from injury_report.capture import (
 )
 from injury_report.report import practice_days_elapsed
 
-from .conftest import NOW, SpyLake
+from .conftest import NOW, SpyLake, seed_full_stub_scope
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts" / "signal-envelope"
 ENVELOPE_SCHEMA = json.loads((CONTRACTS / "envelope.v1.schema.json").read_text())
@@ -52,7 +52,12 @@ def validate(envelopes: dict) -> None:
 async def capture(lake, **kwargs):
     """The real capture, against the adapters' own deterministic stub week —
     not a mocked `fetch_*`. That is the point: a renamed field has to fail here
-    rather than in the generator six weeks later."""
+    rather than in the generator six weeks later. `seed_full_stub_scope` (in
+    `conftest.py`, shared with the route tests) seeds every id that week will
+    produce, so narrowing changes nothing this file observes -- it is about
+    producer-side contract shape, not about narrowing, which
+    `test_narrowing.py` owns."""
+    await seed_full_stub_scope(lake)
     async with httpx.AsyncClient() as client:
         return await capture_injury_report(
             2026, 1, client=client, lake=lake, now=NOW, **kwargs

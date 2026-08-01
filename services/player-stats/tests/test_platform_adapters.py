@@ -1,9 +1,12 @@
-"""The two platform seams: `player-identity`'s crosswalk and `roster-scope`'s
-watchlist.
+"""The `player-identity` crosswalk seam.
 
-Both ship switched off (`PLAYER_IDENTITY_URL` / `ROSTER_SCOPE_URL` empty), so
-the stub paths below are what actually runs today and the HTTP paths are what
-runs the moment a values file names either service.
+Ships switched off (`PLAYER_IDENTITY_URL` empty), so the stub path below is
+what actually runs today and the HTTP path is what runs the moment a values
+file names the service.
+
+The `roster-scope` watchlist seam used to live in this file too, gated by its
+own env var and reached over HTTP. It is now read unconditionally from the
+lake — see `test_scope_adapter.py` and `adapters/scope.py`.
 """
 
 import httpx
@@ -16,7 +19,6 @@ from player_stats.adapters.identity import (
     UnresolvedPlayer,
     build_id_resolver,
 )
-from player_stats.adapters.scope import fetch_watchlist
 
 # ── the identity crosswalk ────────────────────────────────────────────────────
 
@@ -128,83 +130,3 @@ async def test_a_player_identity_outage_is_classified_not_swallowed():
             with pytest.raises(UnresolvedPlayer) as caught:
                 await resolver.resolve("00-0034796")
     assert caught.value.reason == "identity_upstream_error"
-
-
-# ── the roster-scope watchlist ────────────────────────────────────────────────
-
-
-async def test_an_unset_url_means_no_narrowing_and_no_error(monkeypatch):
-    monkeypatch.setenv("ROSTER_SCOPE_URL", "")
-    async with httpx.AsyncClient() as client:
-        watchlist, errors = await fetch_watchlist(client)
-    assert watchlist == frozenset()
-    assert errors == []
-
-
-async def test_active_and_grace_slots_are_owed_but_excluded_ones_are_not(monkeypatch):
-    """A player who left the depth chart on Tuesday still played on Sunday."""
-    monkeypatch.setenv("ROSTER_SCOPE_URL", "http://roster-scope:8003")
-    payload = {
-        "players": [
-            {
-                "player_id": "fdy-a",
-                "entity_type": "player",
-                "membership_status": "active",
-            },
-            {
-                "player_id": "fdy-b",
-                "entity_type": "player",
-                "membership_status": "grace",
-            },
-            {
-                "player_id": "fdy-c",
-                "entity_type": "player",
-                "membership_status": "excluded",
-            },
-        ]
-    }
-    with respx.mock:
-        respx.get("http://roster-scope:8003/scope/players").mock(
-            return_value=httpx.Response(200, json=payload)
-        )
-        async with httpx.AsyncClient() as client:
-            watchlist, errors = await fetch_watchlist(client)
-    assert watchlist == frozenset({"fdy-a", "fdy-b"})
-    assert errors == []
-
-
-async def test_a_team_defense_slot_is_never_owed_a_box_score(monkeypatch):
-    """32 of roster-scope's 416 slots are team defenses, which is exactly the
-    difference between its universe and this collector's floor of 384."""
-    monkeypatch.setenv("ROSTER_SCOPE_URL", "http://roster-scope:8003")
-    payload = {
-        "players": [
-            {
-                "player_id": "fdy-dst-kc",
-                "entity_type": "team_defense",
-                "membership_status": "active",
-            }
-        ]
-    }
-    with respx.mock:
-        respx.get("http://roster-scope:8003/scope/players").mock(
-            return_value=httpx.Response(200, json=payload)
-        )
-        async with httpx.AsyncClient() as client:
-            watchlist, _ = await fetch_watchlist(client)
-    assert watchlist == frozenset()
-
-
-async def test_a_roster_scope_outage_is_recorded_not_treated_as_empty(monkeypatch):
-    """An empty watchlist with no error would shrink the expectation to
-    whatever the box-score feed happened to return."""
-    monkeypatch.setenv("ROSTER_SCOPE_URL", "http://roster-scope:8003")
-    with respx.mock:
-        respx.get("http://roster-scope:8003/scope/players").mock(
-            return_value=httpx.Response(503)
-        )
-        async with httpx.AsyncClient() as client:
-            watchlist, errors = await fetch_watchlist(client)
-    assert watchlist == frozenset()
-    assert len(errors) == 1
-    assert errors[0]["reason"] == "scope_unavailable"

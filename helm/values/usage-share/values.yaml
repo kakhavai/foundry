@@ -48,6 +48,17 @@ extraEnv:
         name: usage-share-collector-token
         key: token
         optional: true
+  # Not optional in the way roster-scope's and player-stats' are. This
+  # collector narrows FORWARD -- every upstream row's GSIS id is resolved here
+  # and checked against roster-scope's membership list -- so an empty value is
+  # not "run unnarrowed", it is "resolve nothing, narrow to nothing, publish
+  # nothing". `usage_share/adapters/scope.py` therefore fails closed on an
+  # empty value rather than falling back to a stub id space that could never
+  # intersect the scope: zero upstream calls and a present:0 envelope saying
+  # `identity_unavailable`, instead of an ~8.3 MB season CSV fetched to publish
+  # an empty week.
+  - name: PLAYER_IDENTITY_URL
+    value: "http://player-identity:8002"
   - name: LAKE_BUCKET
     value: "foundry-signals"
   - name: LAKE_ENDPOINT_URL

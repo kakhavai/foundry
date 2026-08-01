@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from .cadence import CadenceClass
+from .conditional import UpstreamUnchanged
 from .envelope import ENVELOPE_VERSION, Envelope
 from .lake import LakeWriter
 from .metrics import CollectorMetrics
@@ -98,6 +99,27 @@ class CaptureState:
         """
         if self.last_capture_at is None or now > self.last_capture_at:
             self.envelopes = envelopes
+            self.last_capture_at = now
+
+    def mark_unchanged(self, now: datetime) -> None:
+        """Record a pass that confirmed the upstream is unchanged (a 304).
+
+        Advances `last_capture_at` but leaves `envelopes` alone. Staleness
+        means "how long since we confirmed this data is current", not "since
+        we last wrote bytes" — otherwise a perfectly healthy collector climbs
+        toward a staleness alert precisely *because* its upstream is stable,
+        which is backwards.
+
+        Consequence worth knowing: `/catalog`'s `last_capture_at` advances
+        while the newest lake envelope's `captured_at` does not. That is the
+        two fields meaning different things, not drift — a lake consumer
+        reading the older timestamp is reading the truth, because the data
+        genuinely is that old.
+
+        Same monotonicity guard as `apply_capture`, for the same reason.
+        Call only while holding `lock`.
+        """
+        if self.last_capture_at is None or now > self.last_capture_at:
             self.last_capture_at = now
 
 
@@ -189,16 +211,21 @@ async def _run_capture(
             deadline = (
                 None if spec.capture_deadline is None else now + spec.capture_deadline
             )
-            async with spec.client_factory() as client:
-                envelopes = await spec.capture(
-                    season,
-                    week,
-                    client=client,
-                    lake=spec.lake,
-                    now=now,
-                    deadline=deadline,
-                )
-            spec.state.apply_capture(envelopes, now)
+            try:
+                async with spec.client_factory() as client:
+                    envelopes = await spec.capture(
+                        season,
+                        week,
+                        client=client,
+                        lake=spec.lake,
+                        now=now,
+                        deadline=deadline,
+                    )
+            except UpstreamUnchanged:
+                spec.metrics.upstream_unchanged()
+                spec.state.mark_unchanged(now)
+            else:
+                spec.state.apply_capture(envelopes, now)
     except Exception:
         logger.exception("dispatched capture failed")
 

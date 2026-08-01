@@ -1,77 +1,56 @@
 """The `roster-scope` seam — the watchlist this collector's coverage is owed.
 
-`player-stats` is scope-aware: the spec's `coverage.expected` is "one row per
-`roster-scope` watchlist player whose team has completed its game for the
-scoped week, plus any non-watchlist player who recorded at least one offensive
-snap in those games". The first half of that sentence is this module.
+Read from the **lake**, not from `roster-scope` over HTTP. That is decision 5
+of the narrowing design: the lake is append-only and already carries every
+scope capture, so the last good scope survives a `roster-scope` outage — a
+`roster-scope` outage costs this collector's coverage *freshness*, never the
+availability of `/signals`. Reaching the service directly would make one
+collector's downtime a fleet-wide stop.
 
-**A fetch failure is not fatal and is not silent.** An empty watchlist would
-shrink the expectation to whatever the box-score feed happened to return, which
-is precisely the derive-expected-from-what-succeeded failure the coverage block
-exists to catch. `fetch_watchlist` therefore returns the players it got *and*
-the error entries explaining anything it did not, and `capture.py` floors the
-expectation at `EXPECTED_FLOOR` regardless — so a `roster-scope` outage reads
-as a low ratio, never as a healthy one.
+This module used to reach `roster-scope` over HTTP, gated by an env var that
+shipped empty: `roster-scope` minted `player_id`s from its own stub resolver
+(a hash of `name|team|position`) while this collector minted them from the
+GSIS crosswalk stub, so the two id spaces did not intersect and narrowing
+would have reported every watchlist player as missing. Both collectors now
+resolve through the real `player-identity`, the blocker is gone, and the HTTP
+path — which contradicted the lake-read decision even before that — is
+deleted along with the env var that gated it.
 
-`ROSTER_SCOPE_URL` ships **empty**, and that is a decision rather than an
-oversight. `roster-scope`'s own `PLAYER_IDENTITY_URL` is empty too, so its
-`player_id`s come from its stub resolver (a hash of `name|team|position`) while
-this collector's come from ours (a hash of the GSIS id). The two id spaces do
-not intersect, so narrowing to that watchlist today would report every
-watchlist player as missing. Unscoped is the honest configuration until both
-services point at a real `player-identity`; see `adapters/identity.py`.
+**Raises rather than returning empty.** An empty watchlist would shrink
+`coverage.expected` to whatever the box-score feed happened to return, which
+reports a truncated upstream as perfect — `Coverage.ratio` reads `1.0` when
+`expected` is 0. `capture.py` still floors the expectation at `EXPECTED_FLOOR`
+regardless, independent of whatever this returns.
 """
 
-import os
+from collector_core.lake import LakeWriter
+from collector_core.scope import ScopeClient
 
-import httpx
-
-# Empty means "do not narrow" — see the module docstring for why that is the
-# shipped default. Read at call time, not import time.
-ROSTER_SCOPE_URL_ENV = "ROSTER_SCOPE_URL"
+# The scope list this collector narrows to. Membership only — box scores are
+# an offensive-production feed, so the matchup list (`injury-report`'s other
+# half) names nobody this collector has a row for.
+SCOPE_SIGNAL_TYPE = "scope_membership_weekly"
 
 # A team defense has no box score, so it is not a row this collector can ever
-# be owed. Excluding it here is what turns roster-scope's 416-slot universe
-# into this collector's 384.
-BOX_SCORE_ENTITY_TYPE = "player"
-
-# Slots roster-scope is still fetching under its grace window count as owed:
-# a player who left the depth chart on Tuesday still played on Sunday.
-OWED_STATUSES: frozenset[str] = frozenset({"active", "grace"})
+# be owed. This is what turns roster-scope's 416-slot universe into this
+# collector's 384. Verified against `roster_scope.scope.resolve_membership`'s
+# own minting (`f"fdy-dst-{team.lower()}"`) rather than assumed.
+TEAM_DEFENSE_PREFIX = "fdy-dst-"
 
 
-async def fetch_watchlist(
-    client: httpx.AsyncClient,
-) -> tuple[frozenset[str], list[dict]]:
+async def fetch_watchlist(lake: LakeWriter, season: int, week: int) -> frozenset[str]:
     """The canonical `player_id`s this week's capture is owed a row for.
 
-    Returns `(watchlist, errors)`. An empty watchlist with no errors means
-    narrowing is switched off (`ROSTER_SCOPE_URL` unset); an empty watchlist
-    *with* an error means `roster-scope` could not be reached, which
-    `capture.py` records rather than treating as "nothing was owed".
+    Raises `ScopeUnavailable` when there is no usable scope; the caller must
+    treat that as zero upstream calls and a `present: 0` envelope — see
+    `capture.py`. `ScopeClient` already falls back to `week - 1` and already
+    drops `excluded` rows while keeping `grace` ones, so a player who left the
+    depth chart on Tuesday still played on Sunday; this module does not
+    reimplement either.
     """
-    base_url = os.getenv(ROSTER_SCOPE_URL_ENV, "").strip()
-    if not base_url:
-        return frozenset(), []
-
-    headers = {}
-    token = os.getenv("COLLECTOR_TOKEN", "")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    try:
-        response = await client.get(
-            f"{base_url.rstrip('/')}/scope/players", headers=headers
-        )
-        response.raise_for_status()
-        players = response.json().get("players") or []
-    except Exception as exc:  # noqa: BLE001 — classified, recorded, not fatal
-        return frozenset(), [{"reason": "scope_unavailable", "detail": str(exc)}]
-
-    watchlist = {
-        str(row["player_id"])
-        for row in players
-        if row.get("entity_type", BOX_SCORE_ENTITY_TYPE) == BOX_SCORE_ENTITY_TYPE
-        and row.get("membership_status") in OWED_STATUSES
-        and row.get("player_id")
-    }
-    return frozenset(watchlist), []
+    scope = await ScopeClient(lake).fetch(SCOPE_SIGNAL_TYPE, season, week)
+    return frozenset(
+        player_id
+        for player_id in scope.members
+        if not player_id.startswith(TEAM_DEFENSE_PREFIX)
+    )

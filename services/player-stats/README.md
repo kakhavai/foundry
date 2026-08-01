@@ -106,17 +106,27 @@ player who was on the field but never involved is therefore invisible until
 | `stat_state` | `null` | The spec requires exposing the upstream's *own* certification level "rather than inferring it from elapsed time". nflverse publishes none. **Do not** replace this with a Monday-to-Wednesday heuristic |
 | `played` | always `true` | The feed cannot see a dressed player who never took a snap, so this collector never emits `played: false` — a watchlist player with no row is a `coverage.missing` entry instead |
 
-## The two platform seams, and why both ship off
+## The two platform seams
 
-`ROSTER_SCOPE_URL` and `PLAYER_IDENTITY_URL` are both empty in
-`helm/values/player-stats/values.yaml`. That is a decision, not an oversight:
-`roster-scope` mints `player_id`s from its own stub resolver (a hash of
-`name|team|position`) while this collector mints them from the GSIS crosswalk
-stub, so the two id spaces do not intersect. Narrowing to that watchlist today
-would report every watchlist player as missing.
+**The roster-scope watchlist is read from the lake, not over HTTP, and has no
+on/off switch.** `adapters/scope.py`'s `fetch_watchlist` reads the last
+`roster-scope` capture straight out of the lake on every pass — decision 5 of
+the narrowing design — so a `roster-scope` outage costs this collector's
+coverage *freshness*, never `/signals`'s availability. It raises
+`ScopeUnavailable` rather than returning an empty set, and `capture.py` fails
+the whole pass closed on that: no scope means zero calls to the box-score
+feed and a `present: 0` envelope, never an unnarrowed capture.
 
-**Set both, or neither.** Setting only `ROSTER_SCOPE_URL` produces a total
-join failure — loud, but a wasted week.
+**`PLAYER_IDENTITY_URL` points at the real crosswalk in
+`helm/values/player-stats/values.yaml`, matching `roster-scope` and
+`usage-share`.** That is this collector's own crosswalk seam
+(`adapters/identity.py`), separate from the watchlist above:
+`build_id_resolver` uses it to resolve real ids through `player-identity`
+rather than falling back to the deterministic GSIS-hash stub. It has to be
+set for the watchlist join to land anything — `roster-scope` mints its
+`player_id`s from the same `player-identity` deployment, so leaving this
+empty would join this collector's stub ids against roster-scope's real ones
+and report every one of the ~384 watchlist entries as missing on every pass.
 
 ## Metrics beyond the fleet-wide set
 

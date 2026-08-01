@@ -17,6 +17,16 @@ a row that emitted nothing. They are recorded in `errors` too, but that array
 is capped at 50 and lives inside an envelope; a counter is what can be alerted
 on and graphed by reason.
 
+**A pass where narrowing dropped every candidate row.** `coverage.ratio` is
+team-keyed here (see `capture.py`), so it cannot distinguish "narrowing
+excluded every player this pass resolved" from "a genuinely quiet week" —
+both read as a healthy ratio with `player_injury_status.signals == []`. That
+is exactly the "we failed" vs "we never tried" conflation
+`collector_core.failure` exists to prevent one level up, so it gets its own
+counter rather than folding into `_unmapped_rows`: the rows this counts were
+resolved fine, they were excluded by scope, which is a materially different
+condition from a row this collector could not map at all.
+
 Every one of these is recorded on **every** pass, including zero. An absent
 Prometheus series and a healthy one are indistinguishable in PromQL, so a gauge
 written only when it is interesting cannot be alerted on.
@@ -56,6 +66,15 @@ class InjuryReportMetrics(CollectorMetrics):
                 "Upstream rows that produced no signal, by collector and reason."
             ),
         )
+        self._scope_dropped_everything = meter.create_counter(
+            "injury_report_scope_dropped_everything",
+            description=(
+                "Passes where every resolved player_injury_status row was "
+                "excluded by the roster-scope membership/matchup union, by "
+                "collector. Distinct from a quiet week: rows were resolved "
+                "and offered, and narrowing dropped all of them."
+            ),
+        )
 
     def filings(self, practice_day: str, *, published: int, with_games: int) -> None:
         """Record one practice day's filing count against what was owed.
@@ -76,6 +95,18 @@ class InjuryReportMetrics(CollectorMetrics):
         quieter".
         """
         self._unmapped_rows.add(1, {"collector": self.collector, "reason": reason})
+
+    def scope_dropped_everything(self) -> None:
+        """A pass where narrowing excluded every resolved `player_injury_status`
+        row.
+
+        Recorded once per pass it happens, never once per dropped row —
+        narrowing dropping *most* rows is the whole point and must not alarm.
+        This fires only on the all-or-nothing case: rows were resolved and
+        offered, and the membership/matchup union kept none of them. See
+        `capture.py`'s guard.
+        """
+        self._scope_dropped_everything.add(1, {"collector": self.collector})
 
 
 metrics = InjuryReportMetrics()

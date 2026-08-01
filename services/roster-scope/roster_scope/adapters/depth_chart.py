@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
+from collector_core.conditional import ETAGS, conditional_stream
 
 from ..rules import ALL_RULES, MATCHUP_RULES, canonical_position, canonical_team
 
@@ -349,9 +350,20 @@ async def fetch_depth_charts(
     consumed = 0
     remainder = ""
 
-    async with client.stream("GET", url, follow_redirects=True) as response:
-        response.raise_for_status()
-        async for chunk in response.aiter_text():
+    # The URL is the cache key: one ETag per season's asset. `depth_chart_url`
+    # already returns exactly the string `capture.py` records as this
+    # envelope's `upstream.source_ref`, so the key and the provenance cannot
+    # drift apart. This collector does not route through `stream_csv_dicts`
+    # (it streams and folds per-team charts itself, see the module docstring),
+    # so it drives `conditional_stream` by hand -- the same helper
+    # `stream_csv_dicts` uses, rather than a second copy of the protocol.
+    # `stream.commit()` is the last statement below, after the trailing row
+    # and the header check: any early exit leaves the store untouched and the
+    # next pass re-downloads unconditionally.
+    async with conditional_stream(
+        client, url, etag_key=url, etag_store=ETAGS
+    ) as stream:
+        async for chunk in stream.response.aiter_text():
             consumed += len(chunk)
             if consumed > MAX_DEPTH_CHART_CHARS:
                 raise DepthChartTooLarge(
@@ -382,4 +394,7 @@ async def fetch_depth_charts(
 
     if not header_seen:
         raise DepthChartSchemaError("depth chart feed was empty")
+
+    # The commit the conditional GET still owes -- last, after every check.
+    stream.commit()
     return accumulator.result()

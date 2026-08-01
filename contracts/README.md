@@ -74,9 +74,12 @@ collector's live `GET /catalog` from inside `scripts/smoke-test.sh`.
 Two things it does **not** prove, stated here so a green run is not
 over-read:
 
-- `scope_aware` is type-checked as a bool and nothing more. There is no
-  representation of scope-awareness in code today, so its correctness is
-  human-reviewed at PR time.
+- `scope_aware` is checked structurally, by `tests/test_scope_aware_gate.py`:
+  a collector declaring `true` must import `collector_core.scope.ScopeClient`
+  somewhere in its source (read by AST, same reasoning as above). That proves
+  the narrowing seam is wired in — it does not prove the capture actually
+  behaves correctly, which is left to each collector's own test suite and is
+  human-reviewed where it isn't.
 - The registry lists **deployed** collectors, not planned ones. The staging
   table in `docs/architecture/phase-8-data-source-collectors.md` is the plan.
   A green registry says nothing about the twenty-odd collectors still unbuilt.

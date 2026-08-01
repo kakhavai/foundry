@@ -27,6 +27,7 @@ from .conftest import (
     SpyLake,
     feed_csv,
     feed_row,
+    seed_scope,
     stub_player_id,
 )
 
@@ -44,7 +45,7 @@ class RecordingMetrics:
     def capture_attempt(self):
         self.attempts += 1
 
-    def capture_failure(self, exc):
+    def capture_failure(self, exc, reason=None):
         self.failures.append(exc)
 
     def coverage(self, signal_type, ratio):
@@ -73,6 +74,10 @@ def recorded(monkeypatch) -> RecordingMetrics:
 
 async def capture(rows, lake=None, **kwargs):
     lake = SpyLake() if lake is None else lake
+    # The team-defense-anchor-only default (see `conftest.seed_scope`): an
+    # empty player watchlist, successfully fetched, matching the old unscoped
+    # baseline these tests were written against.
+    seed_scope(lake)
     with respx.mock:
         respx.get(stats_url(SEASON)).mock(
             return_value=httpx.Response(200, text=feed_csv(rows))

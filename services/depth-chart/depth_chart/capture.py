@@ -31,6 +31,7 @@ from datetime import UTC, datetime
 
 import httpx
 from collector_core.cadence import CadenceClass
+from collector_core.conditional import UpstreamUnchanged
 from collector_core.coverage import CoverageAccumulator
 from collector_core.envelope import ENVELOPE_VERSION, Envelope, Upstream
 from collector_core.failure import fail_capture
@@ -215,6 +216,12 @@ async def capture_depth_chart(
         fetched = await fetch_depth_charts(
             season, week, client=client, now=now, deadline=deadline
         )
+    except UpstreamUnchanged:
+        # NOT a failure. `fail_capture` below would write a `present: 0`
+        # envelope over a healthy capture and count a failure that did not
+        # happen. `run_capture_loop` catches this and marks the pass
+        # unchanged. Must stay ABOVE the generic handler.
+        raise
     except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
         # Writes a `present: 0` envelope per signal type, then re-raises `exc`.
         # Never returns — do not add code after this call.

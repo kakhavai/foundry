@@ -25,6 +25,8 @@ from collections.abc import AsyncIterator
 
 import httpx
 
+from .conditional import ETAGS, ETagStore, conditional_stream
+
 logger = logging.getLogger(__name__)
 
 # A ceiling on how much a collector will pull before giving up. Not a memory
@@ -70,6 +72,8 @@ async def stream_csv_dicts(
     required_columns: frozenset[str] | set[str] | None = None,
     max_chars: int = MAX_UPSTREAM_CHARS,
     follow_redirects: bool = True,
+    etag_key: str | None = None,
+    etag_store: ETagStore = ETAGS,
 ) -> AsyncIterator[dict[str, str]]:
     """Stream a CSV document, yielding one header-keyed dict per row.
 
@@ -80,14 +84,35 @@ async def stream_csv_dicts(
     `required_columns`, when given, is asserted against the header before any
     row is yielded — schema drift fails immediately rather than after a
     million rows have been mapped to nulls.
+
+    `etag_key` opts into conditional GET. When set, the request carries
+    `If-None-Match` from `etag_store` and a `304` raises `UpstreamUnchanged`
+    before a single row is yielded. Left unset (the default), this function
+    behaves exactly as it did before conditional GET existed — which is what
+    lets a collector opt in one at a time.
+
+    **The ETag is committed by the last statement of this generator's body**,
+    and that placement is the whole guarantee. A generator's tail runs only
+    when the generator is exhausted: a consumer that `break`s gets
+    `GeneratorExit` thrown in at the `yield`, and an upstream error, the size
+    ceiling or schema drift all raise before the tail is reached. So every
+    partial read leaves the store untouched and the next pass re-downloads
+    unconditionally. Committing on the response headers instead — before the
+    body is read — is the bug this shape exists to make unrepresentable; see
+    `ConditionalStream.commit`.
     """
     header: list[str] | None = None
     consumed = 0
     remainder = ""
 
-    async with client.stream("GET", url, follow_redirects=follow_redirects) as response:
-        response.raise_for_status()
-        async for chunk in response.aiter_text():
+    async with conditional_stream(
+        client,
+        url,
+        etag_key=etag_key,
+        etag_store=etag_store,
+        follow_redirects=follow_redirects,
+    ) as stream:
+        async for chunk in stream.response.aiter_text():
             consumed += len(chunk)
             if consumed > max_chars:
                 raise UpstreamTooLarge(
@@ -116,6 +141,9 @@ async def stream_csv_dicts(
 
     if header is None:
         raise UpstreamSchemaError(f"{url} returned an empty document")
+
+    # The tail. Reached only on a complete, valid read — see the docstring.
+    stream.commit()
 
 
 def _validated_header(

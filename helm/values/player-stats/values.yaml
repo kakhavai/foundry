@@ -67,16 +67,19 @@ extraEnv:
   # not post one.
   - name: CAPTURE_ENABLED
     value: "false"
-  # Empty means "do not narrow to the roster-scope watchlist", which is the
-  # honest configuration today: roster-scope mints player_ids from its own stub
-  # resolver while this collector mints them from the GSIS crosswalk stub, so
-  # the two id spaces do not intersect. Set BOTH of these, or neither — setting
-  # only ROSTER_SCOPE_URL reports every watchlist player as missing. See
-  # player_stats/adapters/scope.py.
-  - name: ROSTER_SCOPE_URL
-    value: ""
+  # The roster-scope watchlist has no env var of its own any more: it is read
+  # straight from the lake on every pass (see player_stats/adapters/scope.py),
+  # never from roster-scope over HTTP, so a roster-scope outage costs this
+  # collector's coverage freshness rather than the availability of /signals.
+  #
+  # PLAYER_IDENTITY_URL points at the real crosswalk, matching roster-scope's
+  # and usage-share's own values files. This collector's ids and roster-
+  # scope's must agree for the watchlist join to land anything: leaving this
+  # empty would mint stub ids here against roster-scope's real `player-
+  # identity`-issued ones, and every one of the ~384 watchlist entries would
+  # read as missing on every pass.
   - name: PLAYER_IDENTITY_URL
-    value: ""
+    value: "http://player-identity:8002"
   - name: CAPTURE_SEASON
     value: "2026"
   - name: CAPTURE_WEEK

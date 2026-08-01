@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 import respx
+from collector_core.conditional import ETAGS, UpstreamUnchanged
 from collector_core.coverage import ERRORS_TRUNCATED, MAX_ERRORS
 
 from roster_scope.capture import capture_scope
@@ -430,3 +431,23 @@ async def test_missed_producers_is_recorded_on_the_ledger_failure_path(
     after = metric_value("scope_missed_producers_total", collector="roster-scope")
     assert after is not None
     assert after - before == 0.0
+
+
+@respx.mock
+async def test_a_304_propagates_instead_of_writing_a_failure_envelope(lake):
+    """The trap this guards: unlike `depth-chart`, this collector's own fetch
+    failure handling does not raise at all -- `test_a_total_upstream_outage_
+    still_writes_an_envelope` above pins that a fetch failure degrades the
+    pass in place and still writes three envelopes. Routing a 304 into that
+    same generic handler would report degraded coverage (missing every human
+    slot) over an upstream that is simply unchanged. The ledger read has
+    already succeeded by the time the feed is fetched, so this also is not
+    the `LedgerUnavailable` path -- `lake.writes == []` confirms neither
+    present:0 shape reaches the lake."""
+    ETAGS.set(FEED_2026, 'W/"v1"')
+    respx.get(FEED_2026).mock(return_value=httpx.Response(304))
+
+    with pytest.raises(UpstreamUnchanged):
+        await run_capture(lake)
+
+    assert lake.writes == []

@@ -62,16 +62,22 @@ class _SpyMetrics:
     def __init__(self) -> None:
         self.coverage_calls: list[tuple[str, float]] = []
         self.failures: list[BaseException] = []
+        self.failure_reasons: list[str | None] = []
 
     def coverage(self, signal_type: str, ratio: float) -> None:
         self.coverage_calls.append((signal_type, ratio))
 
-    def capture_failure(self, exc: BaseException) -> None:
+    def capture_failure(self, exc: BaseException, reason: str | None = None) -> None:
         """`fail_capture` records this itself now. It used to be the caller's
         job, which meant nothing in the library ever touched
         `collector_capture_failures_total` and every collector had to remember
-        it on every failure path. `tests/test_publish.py` pins the count."""
+        it on every failure path. `tests/test_publish.py` pins the count.
+
+        `reason` is recorded separately because it is the Prometheus label, and
+        the real `CollectorMetrics` folds it into a counter attribute where a
+        test cannot see which of the two sources it came from."""
         self.failures.append(exc)
+        self.failure_reasons.append(reason)
 
 
 async def _fail(exc, lake, metrics, **overrides):
@@ -170,6 +176,44 @@ async def test_an_explicit_reason_overrides_the_classifier():
         await _fail(ValueError("shape moved"), lake, metrics, reason="schema")
 
     assert {e.errors[0]["reason"] for e in lake.writes} == {"schema"}
+
+
+async def test_the_reason_reaches_prometheus_not_only_the_envelope():
+    """The envelope and the counter must name the same failure.
+
+    `metrics.capture_failure` used to be called with the exception alone, so
+    the classifier decided the Prometheus label on its own. It classifies by
+    exception TYPE and has no case for `ScopeUnavailable`, so every fail-closed
+    pass — the most likely fleet-wide failure narrowing creates — landed in the
+    `unknown` bucket next to unclassified crashes, while the carefully-kept
+    distinction between `scope_unavailable`, `scope_empty` and
+    `identity_unavailable` reached only the envelope. Prometheus is the
+    alerting surface; a distinction that never gets there cannot be alerted on.
+    """
+    lake, metrics = _SpyLake(), _SpyMetrics()
+
+    with pytest.raises(RuntimeError):
+        await _fail(
+            RuntimeError("roster-scope published nothing"),
+            lake,
+            metrics,
+            reason="scope_unavailable",
+        )
+
+    assert metrics.failure_reasons == ["scope_unavailable"]
+    assert {e.errors[0]["reason"] for e in lake.writes} == {"scope_unavailable"}
+
+
+async def test_an_unnamed_reason_leaves_the_classifier_in_charge():
+    """The override must not become a requirement: a caller that names no
+    reason keeps the classified label it had, in both surfaces."""
+    lake, metrics = _SpyLake(), _SpyMetrics()
+
+    with pytest.raises(ValueError):
+        await _fail(ValueError("shape moved"), lake, metrics)
+
+    assert metrics.failure_reasons == [None]
+    assert {e.errors[0]["reason"] for e in lake.writes} == {"malformed"}
 
 
 async def test_a_per_signal_type_floor_is_honoured():

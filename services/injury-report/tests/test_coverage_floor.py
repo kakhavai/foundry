@@ -27,7 +27,7 @@ from injury_report.capture import (
 )
 from injury_report.report import practice_days_elapsed
 
-from .conftest import NOW, SpyLake, empty_filing, wire
+from .conftest import NOW, SpyLake, empty_filing, player_ids_in, seed_scope, wire
 
 # NOW is a Tuesday, so the whole report week has elapsed.
 DAYS = practice_days_elapsed(NOW)
@@ -43,6 +43,12 @@ async def _capture(scheduled, rows, monkeypatch, lake, *, now=NOW, deadline=None
 
     monkeypatch.setattr("injury_report.capture.fetch_scheduled_games", fake_schedule)
     monkeypatch.setattr("injury_report.capture.fetch_report_rows", fake_rows)
+    # This file is about the coverage floor, not narrowing -- seeded with
+    # every player id `rows` will actually resolve to, so player-level
+    # narrowing changes nothing any of these tests observe. `fetch_union`
+    # needs both lists; only `membership` matters here since either half of
+    # the union is sufficient for a member to survive the filter.
+    seed_scope(lake, membership=player_ids_in(rows), captured_at=now)
     async with httpx.AsyncClient() as client:
         return await capture_injury_report(
             2026, 1, client=client, lake=lake, now=now, deadline=deadline
