@@ -709,14 +709,58 @@ collectors:
     cadence_class: weekly
     envelope_version: "1"
     signal_types: [defensive_front_strength]
-    # Set true if this collector narrows to roster-scope's membership list
-    # before it fetches. Checked structurally by
-    # tests/test_scope_aware_gate.py: declaring true requires importing
-    # collector_core.scope.ScopeClient (`from collector_core.scope import
-    # ScopeClient`) somewhere in this collector's source — that test is by
-    # AST, so an `import collector_core.scope` plus attribute access will
-    # not satisfy it. That check proves the narrowing seam is wired in, not
-    # that it behaves correctly; write this collector's own fail-closed test
-    # for that.
+    # Pass-rush disruption per defense, before the offense's own quality is
+    # factored in: pressure and sack rates generated and opponent-adjusted,
+    # blitz rate, pressure-when-blitzing, run stuffs, adjusted line yards, the
+    # front's continuity and its key absences. The deliberate mirror of the
+    # unbuilt `offensive-line` collector -- the generator's matchup feature is
+    # `front.<metric>_generated_adj - line.<metric>_allowed_adj`, so every
+    # shared-stem metric is emitted on the scale that field will have to match.
+    #
+    # **Off the "needs a paid charting provider" list.** Sixteen of the spec's
+    # eighteen fields come from four free nflverse feeds: pbp (18.22 MiB
+    # .csv.gz), pbp_participation (46.82 MiB CSV -- no .gz is published),
+    # players (2.39 MiB) and injuries (0.12 MiB). Freshness re-checked against
+    # the releases API before format: every format of every feed shares a
+    # timestamp, so `player-contract`'s abandoned-artifact exception does not
+    # apply here.
+    #
+    # TWO DISCLOSED NARROWINGS, both forced by what free data supports:
+    #
+    # 1. `unit` is `overall` ONLY, not the spec's overall|interior|edge. The
+    #    spec's own adapter note requires that split to come from alignment
+    #    technique on the snap rather than a defender's listed position, and no
+    #    free source publishes alignment. Participation gives `defense_players`
+    #    (ids) and `defense_positions` (roster-listed) -- precisely the basis
+    #    the spec rules out. The schema's enum is narrowed to match, with
+    #    additionalProperties: false, so a synthesised split fails conformance
+    #    rather than reaching the lake.
+    #
+    #    **Coverage moves with it.** The spec's predicate is 32 defenses x 3
+    #    units = 96, present only when all three are populated -- which with
+    #    one sourceable unit is 0.0 forever, and a ratio pinned at zero cannot
+    #    report a truncated upstream either. `coverage.expected` is 32, one per
+    #    defense, and BOTH halves move together: the floor and the `present`
+    #    predicate (a team is present when its row carries a pass-rush sample).
+    #
+    # 2. `yards_before_contact_allowed_per_carry` and its `_adj` are null by
+    #    necessity, present-and-null with a machine-readable reason on the row.
+    #    PFR publishes YBC season-level and offense-side, so it cannot be
+    #    attributed to the opposing defense, and nothing free publishes it per
+    #    play. Deliberately NOT derived from anything -- it measures tackling
+    #    depth, and `adjusted_line_yards_allowed` is a different quantity.
+    #
+    # The spec's named failure mode -- pressure rate confounded by the release
+    # timing a front happens to face -- is implemented as a real guard, not a
+    # comment: every pass regresses `pressure_rate_generated_adj` on
+    # `mean_time_to_throw_faced` across the league and flags a residual slope
+    # distinguishable from zero. Measured on the live 2025 season through the
+    # shipped path: slope -0.0494/s, 95% CI [-0.2546, +0.1559], t -0.49 on
+    # 30 df -- PASSES. Shuffled null 4.66% against a nominal 5%, and a positive
+    # control fires it, so it is calibrated and it can fire.
+    #
+    # depends_on player-identity for `key_absences` only; every other column is
+    # keyed by team. Not scope_aware: rows are keyed by defensive team, and the
+    # front is projected as a unit rather than as watchlisted individuals.
     scope_aware: false
     depends_on: [player-identity]

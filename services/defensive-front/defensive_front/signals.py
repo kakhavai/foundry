@@ -11,20 +11,25 @@ a loud error, not look like a quiet week.
 
 from collections.abc import Mapping
 
-# TODO: declare the filters this collector's rows actually support.
-# Do not list one you do not implement below — the router will accept it and
-# `signal_matches` will ignore it, which returns everything and looks like a
-# working filter.
 SUPPORTED_FILTERS: tuple[str, ...] = (
     "season",
     "week",
     "signal_type",
-    "key",
+    "team_id",
+    "unit",
 )
 
 # The subset of the above this module filters on: the universal three are
 # already applied by the router before a row reaches here.
-ROW_FILTERS: tuple[str, ...] = ("key",)
+#
+# `unit` is declared even though `ratings.UNITS` currently holds one value. It
+# is a real dimension of the row — the spec keys rows by `(team_id, unit)` —
+# and a consumer written against `?unit=overall` must keep working on the day
+# an alignment source appears and `interior`/`edge` join it. Declaring a
+# filter that IS implemented is safe; the rule `docs/collectors.md` warns
+# about is the reverse — a filter declared and not implemented returns
+# everything and looks exactly like one that works.
+ROW_FILTERS: tuple[str, ...] = ("team_id", "unit")
 
 
 def signal_matches(row: dict, params: Mapping[str, str]) -> bool:

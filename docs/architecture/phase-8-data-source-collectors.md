@@ -933,7 +933,7 @@ Answers how much disruption a defensive front generates before the offense's own
 | Field | Type | Meaning |
 |---|---|---|
 | `team_id` | string | Defensive team |
-| `unit` | enum | `overall`, `interior`, `edge` — the split the row describes |
+| `unit` | enum | `overall` only as shipped. **The spec's `interior` / `edge` are not emitted** — see "Revised during implementation" below |
 | `pass_rush_snaps` | int | Sample size for the pressure metrics |
 | `run_defense_snaps` | int | Sample size for the run metrics |
 | `pressure_rate_generated` | float | Raw share of opposing dropbacks producing a pressure |
@@ -945,21 +945,121 @@ Answers how much disruption a defensive front generates before the offense's own
 | `pressure_rate_when_blitzing` | float | Pressure rate conditional on a blitz; the gap against the four-man rate is the scheme's dependence on extra rushers |
 | `mean_time_to_throw_faced` | float | Seconds; the context variable that makes raw pressure rate comparable across opponents |
 | `run_stuff_rate_generated` | float | Share of carries stopped at or behind the line |
-| `yards_before_contact_allowed_per_carry` | float | Raw; the direct counterpart to the offensive-line metric of the same stem |
-| `yards_before_contact_allowed_per_carry_adj` | float | Opponent-adjusted counterpart, same units |
+| `yards_before_contact_allowed_per_carry` | null | **Null by necessity as shipped**, with a machine-readable reason on the row; no free source publishes per-play yards before contact |
+| `yards_before_contact_allowed_per_carry_adj` | null | **Null by necessity as shipped**, for the same reason |
 | `adjusted_line_yards_allowed` | float | Line-attributed share of rushing yards conceded, same definition and scale as the offensive-line field |
 | `front_continuity_index` | float | Share of the sampled snaps played by the current projected front rotation |
 | `key_absences` | array&lt;string&gt; | Canonical player ids of front starters listed out or doubtful for the upcoming week |
 
 **Extra routes beyond the standard five:** none — the head-to-head differential is a caller-side join against `offensive-line`, deliberately not hosted here so neither collector depends on the other
 
-**`coverage.expected` means:** all 32 defenses × the three declared `unit` values (96 rows); a team is present only when `overall`, `interior`, and `edge` are all populated for the scoped week.
+**`coverage.expected` means:** **32 defenses, one row each** — a team is
+present when its row carries a pass-rush sample for the scoped week.
+
+**This is a deliberate deviation from the original wording**, which read "all
+32 defenses × the three declared `unit` values (96 rows); a team is present
+only when `overall`, `interior`, and `edge` are all populated". With only
+`overall` sourceable (below), that predicate is **0.0 forever** — and worse, a
+ratio pinned at zero cannot report anything else either: a truncated upstream,
+a dead join and a half-empty week all read identically. It is the same
+clause-swallowing failure `team-scheme` and `player-contract` hit, where an
+unsourceable term in the coverage predicate destroys the ratio's ability to
+report a truncated upstream. **Both halves moved together** — the declared
+floor *and* the `present` predicate.
 
 **Adapter notes:** The adapter must attribute pressure to the rushing unit rather than to the play outcome, so that hurries and knockdowns count even when the ball is out. Interior/edge classification has to come from alignment technique on the snap, not from the defender's listed position, or every 3-4 outside linebacker lands in the wrong bucket. All shared-stem metrics must be emitted on the same scale as `offensive-line` — rates as fractions of the relevant snap denominator, `yards_before_contact` per carry, `adjusted_line_yards` on the identical baseline — because any divergence silently corrupts the differential rather than failing.
 
 **Failure mode to watch:** Pressure rate is jointly produced by the front and the offense's time to throw, so a front that draws quick-game and screen-heavy opponents posts a depressed `pressure_rate_generated` that survives naive opponent adjustment, because the adjustment corrects for line quality and not for release timing. The result is a genuinely disruptive front rated as average, which then under-projects sack risk for the quarterbacks facing it. The assertion is a conditional one: regress `pressure_rate_generated_adj` on `mean_time_to_throw_faced` across the 32 teams and require the residual slope to be statistically indistinguishable from zero; a non-zero slope means the adjustment model is missing the timing term entirely.
 
-**Candidate upstreams (non-normative):** commercial pass-rush charting providers, player-tracking feeds, participation-annotated play-by-play
+**Revised during implementation — and it is free.** This collector was on the
+"needs a paid charting provider" list. **Sixteen of the eighteen fields above
+come from feeds the fleet already reads**, and the charting columns were
+verified populated against the live 2025 regular season before implementation
+began: on 22,002 charted pass-rush snaps, `was_pressure` is 100% populated,
+`number_of_pass_rushers` 100% (0 on runs, 4 on a base rush, 5-6 on a blitz),
+`defense_players` 100%, and `time_to_throw` 42.8% — the last being correct
+rather than a gap, since a sack, scramble or throwaway has no release.
+
+Four feeds, ~67.6 MiB a changed pass, freshness re-checked across formats
+against the releases API before size (per `player-contract`'s finding): every
+format of every feed shares a timestamp, so the abandoned-artifact exception
+does not apply here. `play_by_play_<season>.csv.gz` (18.22 MiB) and
+`pbp_participation_<season>.csv` (46.82 MiB) are **fatal**; `players.csv.gz`
+(2.39 MiB) and `injuries_<season>.csv.gz` (0.12 MiB) degrade two fields and one
+field respectively. The injury feed is an **addition** to the spec's implied
+set: `key_absences` asks for "out or doubtful for the upcoming week", which is
+game status, and `players.csv`'s `status` column is roster status — a different
+quantity wearing the same name.
+
+*Two narrowings, both forced by what free data supports.*
+
+1. **`unit` is `overall` only.** The adapter note above requires the split to
+   come from alignment technique on the snap rather than a listed position —
+   and no free source publishes alignment. `pbp_participation` gives
+   `defense_players` (ids) and `defense_positions` (roster-listed), which is
+   precisely the basis this spec rules out. Synthesising it would publish two
+   populated, plausible, wrong columns. The contract's enum is narrowed to
+   `["overall"]` with `additionalProperties: false`, so a synthesised split
+   fails conformance rather than reaching the lake. **Whether `interior` /
+   `edge` warrant their own deferred entry (as `coaching-staff` and
+   `player-incentives` got) rather than this note is an open question for the
+   issue #102 follow-up set**; the fields are one enum value apart from what
+   ships rather than a separate collector's worth of work, so it is recorded
+   here for now.
+2. **`yards_before_contact_allowed_per_carry` and its `_adj` are null**,
+   present-and-null with a machine-readable reason, and `"type": "null"` in the
+   contract so a later "fill-in" fails conformance. PFR publishes YBC
+   season-level and offense-side, so it cannot be attributed to the opposing
+   defense, and nothing free publishes it per play. Deliberately **not**
+   derived from anything: it measures tackling depth, and
+   `adjusted_line_yards_allowed` is a different quantity.
+
+*The one place a listed position IS used* is the coarse front-versus-secondary
+cut behind `front_continuity_index` (`position_group` `DL`/`LB` against `DB`).
+The objection above does not generalise to it — a 3-4 outside linebacker is
+listed `OLB`, which is in `LB`, which is in the front either way, and no listed
+position puts a safety in the front or a nose tackle out of it.
+
+*`adjusted_line_yards_allowed`* is the Football Outsiders line-yards weighting
+(120% behind the line, full through 4, half from 5 to 10, none past 10) in
+named constants. **`offensive-line` must import the identical weighting**, per
+this section's own warning that a divergence corrupts the differential
+silently.
+
+*The two feeds are joined as an intersection* — a play counts only when
+play-by-play calls it a regular-season dropback AND participation charted a
+pass rush on it. 5.24% of charted pass-rush snaps are penalty-nullified
+`no_play` rows, which can carry a pressure but never a sack; counting them
+would deflate `pressure_to_sack_rate` by that much while every field stayed
+populated and plausible.
+
+**The failure mode's assertion is implemented, and it was measured before it
+was trusted.** Every pass regresses `pressure_rate_generated_adj` on
+`mean_time_to_throw_faced` across the league; a residual slope distinguishable
+from zero flags every row and files a priority coverage error. Run on the live
+2025 regular season through the shipped path: slope **-0.0494**/s, SE 0.1005,
+**t -0.49 on 30 df**, p 0.63, 95% CI **[-0.2546, +0.1559]** — **passes**. A
+shuffled null over 20,000 permutations fires it **4.66%** of the time against a
+nominal 5%, and an injected confound fires it at k >= 0.30 (minimum detectable
+R² 0.122), so it is calibrated *and* it can fire — unlike `coaching-scheme`'s
+changepoint detector, which fired on 65% of teams against a 55% null and
+shipped disabled.
+
+The adjustment deliberately does **not** residualise on team-mean release time.
+An OLS residual is orthogonal to its own regressor by construction, so doing
+that would make this assertion structurally incapable of failing — a green
+number forever, on every dataset, including one where the confound is total.
+The timing term instead arrives through the opponent yardstick, which is fit on
+the opposing offense's own leave-one-out pressure *allowed*; measured at the
+offense level on the same season, `pressure_allowed ~ own mean_time_to_throw`
+has slope +0.106/s, t +2.10, r +0.358 over a 2.490-3.059s spread. Offenses that
+hold the ball longer allow more pressure, so a quick-release offense is rated as
+a strong line and the defense that faced it is adjusted up.
+
+**Candidate upstreams (non-normative):** ~~commercial pass-rush charting
+providers, player-tracking feeds~~, **participation-annotated play-by-play** —
+nflverse `pbp` + `pbp_participation` + `players` + `injuries`. No paid vendor is
+required and none is used.
 
 ---
 
