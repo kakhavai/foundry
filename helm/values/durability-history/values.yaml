@@ -15,13 +15,6 @@ containerPort: 8020
 # The chart defaults. Measure before raising either: roster-scope's first deploy
 # was OOMKilled at 256Mi because its adapter buffered a 37 MB document three
 # times, and raising the limit would have hidden the bug rather than fixed it.
-resources:
-  limits:
-    cpu: 250m
-    memory: 256Mi
-  requests:
-    cpu: 100m
-    memory: 128Mi
 
 otel:
   resourceAttributes: "service.name=durability-history,service.namespace=foundry"

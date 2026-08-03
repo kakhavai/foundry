@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/defensive-front.json",
+  "title": "defensive-front collector signal fields",
+  "signal_types": {
+    "defensive_front_strength": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One row per (team_id, unit) describing how much disruption a defensive front generates before the offense's own quality is factored in. Two disclosed deviations from the phase spec, both narrowings forced by what free data supports and neither synthesised around. (1) unit is 'overall' ONLY: the spec's interior/edge split has to come from alignment technique on the snap, and no free source publishes it -- pbp_participation gives roster-listed defense_positions, which is precisely the basis the spec rules out. (2) yards_before_contact_allowed_per_carry and its _adj are null by necessity, with the reason on the row in null_field_reason. Coverage follows narrowing 1: expected is 32 defenses, not 32x3=96, because the spec's all-three-units predicate would pin the ratio at 0.0 forever and destroy its ability to report a truncated upstream.",
+      "required": [
+        "team_id",
+        "unit",
+        "pass_rush_snaps",
+        "run_defense_snaps",
+        "pressure_rate_generated",
+        "pressure_rate_generated_adj",
+        "sack_rate_generated",
+        "sack_rate_generated_adj",
+        "pressure_to_sack_rate",
+        "blitz_rate",
+        "pressure_rate_when_blitzing",
+        "mean_time_to_throw_faced",
+        "run_stuff_rate_generated",
+        "yards_before_contact_allowed_per_carry",
+        "yards_before_contact_allowed_per_carry_adj",
+        "adjusted_line_yards_allowed",
+        "front_continuity_index",
+        "key_absences",
+        "opponent_pressure_strength_index",
+        "adjustment_method",
+        "adjustment_window_weeks",
+        "timing_guard_ran",
+        "timing_confound_flagged",
+        "degraded_upstreams",
+        "null_field_reason"
+      ],
+      "properties": {
+        "team_id": {
+          "type": "string",
+          "minLength": 2,
+          "description": "The DEFENSIVE team's nflverse abbreviation."
+        },
+        "unit": {
+          "enum": ["overall"],
+          "description": "The spec declares overall | interior | edge. Only overall is emitted, and the enum is narrowed to match rather than left open, so a row claiming a synthesised interior/edge split fails conformance instead of reaching the lake. See the signal type description."
+        },
+        "pass_rush_snaps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sample size for every pressure metric. Charted pass-rush snaps that are ALSO regular-season dropbacks in play-by-play -- an intersection, because 5.24% of charted rush snaps are penalty-nullified no_play rows that can carry a pressure but never a sack."
+        },
+        "run_defense_snaps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sample size for the run metrics: scrimmage carries faced, excluding two-point attempts."
+        },
+        "pressure_rate_generated": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Raw share of opposing dropbacks producing a pressure. Attributed to the RUSHING UNIT, not the play outcome: was_pressure is charted independently of sack, so hurries and knockdowns count even when the ball is out."
+        },
+        "pressure_rate_generated_adj": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Same units, restated against a league-average slate of offensive lines faced. Fit on the opposing OFFENSE's own leave-one-out pressure-allowed production, never on a prior defensive rating. The timing term the spec asks about is carried by that yardstick rather than bolted on as a second regressor -- see timing_confound_flagged."
+        },
+        "sack_rate_generated": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Raw share of opposing dropbacks producing a sack."
+        },
+        "sack_rate_generated_adj": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Opponent-adjusted counterpart, same units and same leave-one-out basis."
+        },
+        "pressure_to_sack_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Sacks over PRESSURES -- the finishing component, far noisier than pressure rate. Numerator and denominator come from the same joined play set, which is why the join is an intersection. Null when the front generated no pressure at all."
+        },
+        "blitz_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Share of dropbacks with five or more rushers, from pbp_participation's number_of_pass_rushers."
+        },
+        "pressure_rate_when_blitzing": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Pressure rate conditional on a blitz. Null when the front never blitzed -- 'never blitzed' and 'blitzed and generated nothing' are different facts, and zeroing the first would rate a front that never blitzes as the league's worst blitzing front."
+        },
+        "mean_time_to_throw_faced": {
+          "type": ["number", "null"],
+          "exclusiveMinimum": 0,
+          "description": "Seconds. The context variable that makes raw pressure rate comparable across opponents, and the independent variable of the timing-confound guard. Charted on 42.8% of pass-rush snaps -- a sack, scramble or throwaway has no release, so this is correct rather than a gap."
+        },
+        "run_stuff_rate_generated": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Share of carries stopped at or behind the line."
+        },
+        "yards_before_contact_allowed_per_carry": {
+          "type": "null",
+          "description": "Null BY NECESSITY, with the reason in null_field_reason. PFR publishes yards before contact season-level and on the offense's side of the ball, so it cannot be attributed to the opposing defense, and no free source publishes it per play. Deliberately not derived from anything: it measures tackling depth, and adjusted_line_yards_allowed is a different quantity."
+        },
+        "yards_before_contact_allowed_per_carry_adj": {
+          "type": "null",
+          "description": "Null for the same reason as its raw counterpart. An adjustment of an unavailable quantity is not available either."
+        },
+        "adjusted_line_yards_allowed": {
+          "type": ["number", "null"],
+          "description": "Line-attributed rushing yards conceded per carry, on the Football Outsiders line-yards weighting (120% credit behind the line, full through 4, half from 5 to 10, none past 10), then opponent-adjusted on the same leave-one-out basis. offensive-line MUST import the identical weighting when it is built: the spec is explicit that a divergence here corrupts the head-to-head differential silently rather than failing."
+        },
+        "front_continuity_index": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Share of the window's front-player snaps taken by the CURRENT front rotation -- the seven front defenders with the most snaps over the last three sampled weeks. 1.0 means nobody outside that seven took a front snap all window. Three weeks rather than one because a single week is destroyed by week-18 rest: on real 2025 data a one-week window read Green Bay at 0.118 against 0.590 at three. Null when the roster feed was unavailable (see degraded_upstreams)."
+        },
+        "key_absences": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Canonical fdy- player ids of front starters listed Out or Doubtful for the UPCOMING week (week + 1), from the nflverse injury report, resolved through player-identity. Questionable is deliberately excluded -- the spec says out or doubtful. Empty when player-identity is unreachable, which is filed as a coverage error rather than left to look like a healthy week."
+        },
+        "opponent_pressure_strength_index": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "The yardstick pressure_rate_generated_adj was divided by: the mean leave-one-out pressure-allowed strength of the offenses this defense faced, relative to the league mean, so 1.0 is an average slate. Published so a consumer can audit the adjustment rather than trust it."
+        },
+        "adjustment_method": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Names what actually ran, so a consumer reading an old lake object can tell which vintage it holds. Bumped whenever the arithmetic changes."
+        },
+        "adjustment_window_weeks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many distinct regular-season weeks the sample spans."
+        },
+        "timing_guard_ran": {
+          "type": "boolean",
+          "description": "Whether the timing-confound guard could run at all this pass. False when fewer than four defenses were comparable or every defense faced identical release timing, in which case timing_confound_flagged is false because nothing was tested -- NOT because nothing was found. Read this before reading the flag."
+        },
+        "timing_confound_flagged": {
+          "type": "boolean",
+          "description": "True when this pass's regression of pressure_rate_generated_adj on mean_time_to_throw_faced across the league produced a residual slope statistically distinguishable from zero -- the spec's named failure mode, detected. Identical on every row of a pass, because it is a league-level verdict that qualifies every row's adjusted value. Flagged, never dropped: the spec asks for manual review, which needs a published row. **A false is weak evidence late in a season.** The test's power depends on the spread in mean_time_to_throw_faced across the league, and a schedule averages that spread out as the season runs: by week 18 of 2025 it was only 0.26 s across 32 teams, against a minimum detectable R-squared of 0.122, and even the UNADJUSTED pressure rate showed no relationship with it. The guard is most informative in weeks 4-6, when schedule imbalance is largest. Check timing_guard_ran first."
+        },
+        "degraded_upstreams": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["players_unavailable", "injuries_unavailable"]
+          },
+          "description": "Which optional feeds were missing on the pass that produced this row, so a null is attributable rather than merely absent. Neither costs coverage, which is why defensive_front_degraded_upstreams exists as a gauge."
+        },
+        "null_field_reason": {
+          "type": "object",
+          "required": [
+            "yards_before_contact_allowed_per_carry",
+            "yards_before_contact_allowed_per_carry_adj"
+          ],
+          "additionalProperties": { "type": "string", "minLength": 1 },
+          "properties": {
+            "yards_before_contact_allowed_per_carry": { "type": "string", "minLength": 1 },
+            "yards_before_contact_allowed_per_carry_adj": { "type": "string", "minLength": 1 }
+          },
+          "description": "Machine-readable reasons for the nulls that are nulls BY NECESSITY rather than by this pass's luck. A field nulled because its feed was down is explained by degraded_upstreams instead."
+        }
+      }
+    }
+  }
+}

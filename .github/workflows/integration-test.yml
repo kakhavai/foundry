@@ -318,6 +318,38 @@ jobs:
               python3 scripts/deploy-local.py "$svc"
           done
 
+      # `kubectl rollout status` fails with a bare "timed out waiting for the
+      # condition" and nothing else, so a deploy failure tells you which
+      # service gave up and not one thing about why. Unschedulable, image
+      # pull, OOMKilled and a failing readiness probe all look identical in
+      # the log, and the cluster is deleted at the end of the job -- so
+      # whatever is not printed here is not recoverable afterwards.
+      #
+      # Node allocatable vs. the fleet's summed requests is first because it
+      # is the one that gets worse on its own: every collector added to the
+      # registry adds another pod to a single-node cluster, so the failure
+      # arrives on whichever PR happens to cross the line rather than on the
+      # one that caused it.
+      - name: Diagnose a failed deploy
+        if: failure()
+        run: |
+          echo "::group::Nodes"
+          kubectl describe nodes | grep -A 12 "Allocated resources" || true
+          echo "::endgroup::"
+          echo "::group::Pods not running"
+          kubectl get pods -A -o wide | grep -v "Running\|Completed" || true
+          echo "::endgroup::"
+          echo "::group::Recent warning events"
+          kubectl get events -A --field-selector type=Warning \
+            --sort-by=.lastTimestamp | tail -40 || true
+          echo "::endgroup::"
+          for p in $(kubectl get pods -n default \
+              -o jsonpath='{range .items[?(@.status.phase!="Running")]}{.metadata.name}{"\n"}{end}'); do
+            echo "::group::describe $p"
+            kubectl describe pod "$p" -n default | tail -35 || true
+            echo "::endgroup::"
+          done
+
       - name: Wait for pods ready
         run: |
           kubectl wait --for=condition=ready pod \

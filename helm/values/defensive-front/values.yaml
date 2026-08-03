@@ -1,25 +1,25 @@
 service:
-  name: team-scheme
-  port: 8023
+  name: defensive-front
+  port: 8026
 
 image:
-  repository: ghcr.io/kakhavai/foundry/team-scheme
+  repository: ghcr.io/kakhavai/foundry/defensive-front
 
-containerPort: 8023
+containerPort: 8026
 
 # The chart defaults. Measure before raising either: roster-scope's first deploy
 # was OOMKilled at 256Mi because its adapter buffered a 37 MB document three
 # times, and raising the limit would have hidden the bug rather than fixed it.
 
 otel:
-  resourceAttributes: "service.name=team-scheme,service.namespace=foundry"
+  resourceAttributes: "service.name=defensive-front,service.namespace=foundry"
 
 grafanaAnnotations:
   enabled: true
 
 gateway:
   enabled: true
-  pathPrefix: /collectors/team-scheme
+  pathPrefix: /collectors/defensive-front
   # Only the paths this collector publishes as its contract. /health and
   # /metrics are deliberately absent: they are exempt from bearer auth
   # in-process (a kubelet probe and a Prometheus scrape cannot carry a token),
@@ -31,14 +31,14 @@ gateway:
     - /refresh
 
 extraEnv:
-  # optional: true lets the pod start before the Secret exists. team-scheme then
+  # optional: true lets the pod start before the Secret exists. defensive-front then
   # answers 503 on every data route until it arrives — the ArgoCD Application
   # reports Healthy the whole time, so recognise that combination for what it
   # is before assuming the deploy is broken.
   - name: COLLECTOR_TOKEN
     valueFrom:
       secretKeyRef:
-        name: team-scheme-collector-token
+        name: defensive-front-collector-token
         key: token
         optional: true
   - name: LAKE_BUCKET
@@ -47,11 +47,27 @@ extraEnv:
     value: "http://minio.monitoring.svc.cluster.local:9000"
   - name: REFRESH_MIN_INTERVAL_SECONDS
     value: "300"
-  # Scaffolded false. Flip to "true" once the real upstream is wired AND you
-  # have decided the third-party load is acceptable: the cluster is recreated
-  # on every CI run and every pod restart re-captures, so a large or
-  # rate-limited upstream should stay false here. A dispatched POST /refresh
-  # reaches the upstream regardless of this flag.
+  # `key_absences` is the one field that reaches another service. Unset, the
+  # field is empty and the pass files an `identity_unavailable` coverage error
+  # rather than reporting a week in which nobody was hurt -- fifteen other
+  # fields are unaffected, so this is field-level rather than fatal.
+  - name: PLAYER_IDENTITY_URL
+    value: "http://player-identity:8002"
+  # **false, and the argument is a number rather than the fleet default.**
+  #
+  # A changed pass costs ~67.6 MiB across four nflverse feeds, of which
+  # pbp_participation alone is 46.82 MiB (69%). That would be arguable on its
+  # own. What settles it: verified live for this build, BOTH
+  # play_by_play_2026.csv.gz and pbp_participation_2026.csv **404 today**. A
+  # running loop would fetch nothing, fail every pass, and pin
+  # collector_coverage_ratio at 0.0 for the whole offseason -- 67.6 MiB of
+  # 404s per interval buying zero data, in a cluster recreated on every CI run
+  # where every pod restart re-captures.
+  #
+  # Flip to "true" once the 2026 artifacts exist and the weekly cadence is
+  # worth 67.6 MiB. Until then a dispatched POST /refresh reaches the upstream
+  # regardless of this flag, which is the supported way to backfill -- and is
+  # why this collector ships no smoke.sh that posts one.
   - name: CAPTURE_ENABLED
     value: "false"
   - name: CAPTURE_SEASON
@@ -67,13 +83,13 @@ extraEnv:
   - name: AWS_ACCESS_KEY_ID
     valueFrom:
       secretKeyRef:
-        name: team-scheme-lake-credentials
+        name: defensive-front-lake-credentials
         key: access-key-id
         optional: true
   - name: AWS_SECRET_ACCESS_KEY
     valueFrom:
       secretKeyRef:
-        name: team-scheme-lake-credentials
+        name: defensive-front-lake-credentials
         key: secret-access-key
         optional: true
   - name: AWS_DEFAULT_REGION

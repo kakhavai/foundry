@@ -15,12 +15,30 @@ image:
 
 containerPort: 8080  # port the container listens on (used in Deployment, Service, and probes)
 
+# **The CPU request is a scheduling reservation, not a performance setting**,
+# and on a single-node cluster it is the whole fleet's admission budget. The
+# integration test runs every service on one 4-vCPU Kind node alongside the
+# LGTM stack, so at the old 100m the 19th service failed to schedule with
+# `Insufficient cpu` at 99% of allocatable — a ceiling that arrives on
+# whichever PR happens to cross it rather than on the one that caused it, and
+# the plan is 26 collectors.
+#
+# 25m is a floor for an idle FastAPI process, not a cap on one: the 250m limit
+# is unchanged, so a capture pass still bursts to a quarter core. Only the
+# reservation shrank. The fleet's summed request drops ~1.4 CPU, which is the
+# difference between 99% and ~63% of the node.
+#
+# Memory requests are deliberately untouched. They are not the binding
+# constraint — the fleet is ~2.4Gi of the node's 14.8Gi of requests, the rest
+# being the observability stack — and memory limits are a real correctness
+# guard here rather than a scheduling hint (roster-scope has been OOMKilled by
+# holding one document three times).
 resources:
   limits:
     cpu: 250m
     memory: 256Mi
   requests:
-    cpu: 100m
+    cpu: 25m
     memory: 128Mi
 
 otel:

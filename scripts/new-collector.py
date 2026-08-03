@@ -1208,16 +1208,17 @@ image:
 
 containerPort: %%port%%
 
-# The chart defaults. Measure before raising either: roster-scope's first deploy
-# was OOMKilled at 256Mi because its adapter buffered a 37 MB document three
-# times, and raising the limit would have hidden the bug rather than fixed it.
-resources:
-  limits:
-    cpu: 250m
-    memory: 256Mi
-  requests:
-    cpu: 100m
-    memory: 128Mi
+# No `resources:` block: the chart's defaults apply, and eighteen collectors
+# used to carry a byte-identical copy of them. That copy was not free -- it
+# meant a fleet-wide change was nineteen edits, which is how the CPU request
+# stayed at a per-service 100m until the 19th service failed to schedule with
+# `Insufficient cpu` on the single-node integration cluster.
+#
+# Add one back only to say something the default does not, and measure first:
+# roster-scope's first deploy was OOMKilled at 256Mi because its adapter
+# buffered a 37 MB document three times, and raising the limit would have
+# hidden the bug rather than fixed it. player-identity is the one service with
+# a real override, and only its memory numbers differ.
 
 otel:
   resourceAttributes: "service.name=%%name%%,service.namespace=foundry"
