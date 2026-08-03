@@ -1,6 +1,2 @@
-# The image tag ArgoCD deploys. Overwritten on every push to main by
-# .github/actions/update-gitops-tag with the Git SHA that built the image —
-# 0.1.0 is only the placeholder that makes the generated Application render
-# before the first build lands.
 image:
-  tag: "0.1.0"
+  tag: "14bd77b4f50997e482be0b80878b6cba7e8e61ab"
