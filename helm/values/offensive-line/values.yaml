@@ -37,6 +37,11 @@ gateway:
     - /catalog
     - /signals
     - /refresh
+    # The spec's one extra route: the projected starting five and its
+    # continuity for an upcoming week, which is forward-looking and therefore
+    # not derivable from the realized /signals history. Omit it here and it
+    # 404s at the gateway while working perfectly in-cluster.
+    - /lineups
 
 extraEnv:
   # optional: true lets the pod start before the Secret exists. offensive-line then
@@ -55,11 +60,36 @@ extraEnv:
     value: "http://minio.monitoring.svc.cluster.local:9000"
   - name: REFRESH_MIN_INTERVAL_SECONDS
     value: "300"
-  # Scaffolded false. Flip to "true" once the real upstream is wired AND you
-  # have decided the third-party load is acceptable: the cluster is recreated
-  # on every CI run and every pod restart re-captures, so a large or
-  # rate-limited upstream should stay false here. A dispatched POST /refresh
-  # reaches the upstream regardless of this flag.
+  # The `depends_on: [player-identity]` edge, in the one place it is real.
+  # `starter_id` is the only field that needs it; every unit column is keyed
+  # by team. Left unset, the collector files `identity_unavailable` as a
+  # coverage error and publishes the unit rows without the five starter rows
+  # — which is loud (coverage falls to 32/192) rather than a week in which no
+  # team could field a line.
+  - name: PLAYER_IDENTITY_URL
+    value: "http://player-identity:8002"
+  # **False, and measured rather than scaffolded.** Two independent reasons,
+  # either of which is sufficient:
+  #
+  # 1. THREE OF THE SIX FEEDS 404 FOR THIS SEASON. Verified live against the
+  #    nflverse releases API on 2026-08-03: `play_by_play_2026.csv.gz`,
+  #    `pbp_participation_2026.csv` and `snap_counts_2026.csv.gz` do not
+  #    exist, because the 2026 season has not been played. Only
+  #    `depth_charts_2026` is published. A running loop would fail on its
+  #    first fatal feed every pass, pin `collector_coverage_ratio` at 0.0
+  #    forever and write a `present: 0` envelope on every tick, for zero data.
+  # 2. COST. A changed pass is ~78.2 MiB across six feeds, of which
+  #    `pbp_participation` alone is 46.82 MiB. The Kind cluster is recreated
+  #    on every CI run and every pod restart re-captures, so a `weekly` loop
+  #    here is a recurring ~78 MiB pull against a third party for a document
+  #    that changes when a game finishes.
+  #
+  # Flip to "true" only once the season is under way AND the third-party load
+  # has been decided acceptable. Conditional GET is already wired on every
+  # feed, so a poll that finds nothing new costs one round trip per feed
+  # rather than 78 MiB. A dispatched POST /refresh reaches the upstream
+  # regardless of this flag — which is why services/offensive-line/smoke.sh
+  # does not post one.
   - name: CAPTURE_ENABLED
     value: "false"
   - name: CAPTURE_SEASON
