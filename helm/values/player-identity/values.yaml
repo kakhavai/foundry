@@ -7,6 +7,10 @@ image:
 
 containerPort: 8002
 
+# The one service that overrides the chart's resources, because its ceilings
+# genuinely differ. Only the memory numbers are the reason; the CPU request
+# tracks the chart default at 25m for the fleet-admission reason documented
+# there, and the 500m limit is what actually gives this service more headroom.
 resources:
   limits:
     cpu: 500m
@@ -14,7 +18,7 @@ resources:
     # index built over it — several times weather's ~16 rows.
     memory: 512Mi
   requests:
-    cpu: 100m
+    cpu: 25m
     memory: 256Mi
 
 otel:

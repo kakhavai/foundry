@@ -7,13 +7,6 @@ image:
 
 containerPort: 8001
 
-resources:
-  limits:
-    cpu: 250m
-    memory: 256Mi
-  requests:
-    cpu: 100m
-    memory: 128Mi
 
 otel:
   resourceAttributes: "service.name=player-projections,service.namespace=foundry"

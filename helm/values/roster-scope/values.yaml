@@ -17,13 +17,6 @@ containerPort: 8003
 # newest row per in-scope slot. A full fetch-and-parse of the real feed now
 # peaks at **38.5 MiB RSS** and retains 983 rows, so 256Mi has ample headroom
 # and raising it would have hidden the bug rather than fixed it.
-resources:
-  limits:
-    cpu: 250m
-    memory: 256Mi
-  requests:
-    cpu: 100m
-    memory: 128Mi
 
 otel:
   resourceAttributes: "service.name=roster-scope,service.namespace=foundry"
