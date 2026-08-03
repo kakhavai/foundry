@@ -29,6 +29,7 @@
         "opponent_pressure_strength_index",
         "adjustment_method",
         "adjustment_window_weeks",
+        "timing_guard_ran",
         "timing_confound_flagged",
         "degraded_upstreams",
         "null_field_reason"
@@ -142,9 +143,13 @@
           "minimum": 0,
           "description": "How many distinct regular-season weeks the sample spans."
         },
+        "timing_guard_ran": {
+          "type": "boolean",
+          "description": "Whether the timing-confound guard could run at all this pass. False when fewer than four defenses were comparable or every defense faced identical release timing, in which case timing_confound_flagged is false because nothing was tested -- NOT because nothing was found. Read this before reading the flag."
+        },
         "timing_confound_flagged": {
           "type": "boolean",
-          "description": "True when this pass's regression of pressure_rate_generated_adj on mean_time_to_throw_faced across the league produced a residual slope statistically distinguishable from zero -- the spec's named failure mode, detected. Identical on every row of a pass, because it is a league-level verdict that qualifies every row's adjusted value. Flagged, never dropped: the spec asks for manual review, which needs a published row."
+          "description": "True when this pass's regression of pressure_rate_generated_adj on mean_time_to_throw_faced across the league produced a residual slope statistically distinguishable from zero -- the spec's named failure mode, detected. Identical on every row of a pass, because it is a league-level verdict that qualifies every row's adjusted value. Flagged, never dropped: the spec asks for manual review, which needs a published row. **A false is weak evidence late in a season.** The test's power depends on the spread in mean_time_to_throw_faced across the league, and a schedule averages that spread out as the season runs: by week 18 of 2025 it was only 0.26 s across 32 teams, against a minimum detectable R-squared of 0.122, and even the UNADJUSTED pressure rate showed no relationship with it. The guard is most informative in weeks 4-6, when schedule imbalance is largest. Check timing_guard_ran first."
         },
         "degraded_upstreams": {
           "type": "array",

@@ -411,3 +411,49 @@ async def test_the_guard_regresses_the_ADJUSTED_column_not_the_raw_one():
     assert REASON_TIMING_CONFOUND not in {
         error["reason"] for error in envelopes[STRENGTH].errors
     }
+
+
+def test_the_incomplete_beta_reflects_rather_than_extending_the_fraction():
+    """The reflection branch, pinned by a value only it gets right.
+
+    Lentz's continued fraction converges for `x < (a+1)/(a+b+2)` and the
+    caller reflects the other side. Dropping the reflection is **not**
+    equivalent: it is verdict-preserving at and around every critical value,
+    but it errs by up to 0.096 in the p-value where `x -> 1`, worst at df=30
+    and a t near zero, because the fraction has not converged in 400
+    iterations there. `p_value` reaches the coverage-error detail an operator
+    reads, so a silently wrong 0.90 for a 0.99 is worth one assertion.
+    """
+    assert two_sided_p_value(0.01, 30) == pytest.approx(0.99209, abs=1e-4)
+    assert two_sided_p_value(0.10, 30) == pytest.approx(0.92101, abs=1e-4)
+    # ...and the complement half of the same branch, whose own neighbour dies.
+    assert regularized_incomplete_beta(0.5, 15.0, 0.9) == pytest.approx(1.0, abs=1e-9)
+
+
+async def test_a_row_separates_a_clean_guard_from_one_that_could_not_run():
+    """`timing_confound_flagged: false` means two very different things and a
+    generator joins on the row, not on the coverage errors."""
+    clean = by_team(await run_capture(Feeds(), lake=SpyLake()))
+    for row in clean.values():
+        assert row["timing_guard_ran"] is True
+        assert row["timing_confound_flagged"] is False
+
+    reset_published_digests()
+    built = season_module.build_season()
+    stripped = [
+        season_module.Play(**{**vars(play), "time_to_throw": None})
+        for play in built.plays
+    ]
+    feeds = Feeds(
+        bodies={
+            "participation": season_module.participation_document(
+                season_module.Season(plays=stripped, season=built.season)
+            )
+        }
+    )
+    unrun = by_team(await run_capture(feeds, lake=SpyLake()))
+    for row in unrun.values():
+        assert row["timing_guard_ran"] is False, (
+            "a guard that could not run is reporting itself as one that passed"
+        )
+        assert row["timing_confound_flagged"] is False

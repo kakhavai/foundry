@@ -22,21 +22,31 @@ Measured before it was trusted, on the real 2025 regular season
 A guard nobody has run against a null is a decoration. Three numbers, all
 produced through this exact code path (see README.md for the full table):
 
-* **Observed:** slope `-0.0495` pressure-rate per second, SE `0.1005`,
-  t `-0.49` on 30 degrees of freedom, 95% CI `[-0.2548, +0.1557]`, R² `0.015`.
-  The interval contains zero comfortably, so the pass **passes**.
+* **Observed:** slope `-0.04940` pressure-rate per second, SE `0.10050`,
+  t `-0.4915` on 30 degrees of freedom, 95% CI `[-0.25464, +0.15585]`,
+  R² `0.0080`. The interval contains zero comfortably, so the pass **passes**.
 * **Shuffled null:** permuting `mean_time_to_throw_faced` across the 32 teams
-  20,000 times fires the guard **4.81%** of the time, against the 5.00% an
-  α=0.05 test fires by construction. The guard is calibrated, not dead and not
-  trigger-happy — contrast `defense-vs-position`'s rank guard, whose null
-  fired 54%.
+  20,000 times fires the guard **4.66%** of the time; an independent re-run on
+  a different seed gave **5.10%**. Both sit inside Monte-Carlo error of the
+  5.00% an α=0.05 test fires by construction (SE 0.154 pp at n=20,000). The
+  guard is calibrated, not dead and not trigger-happy — contrast
+  `defense-vs-position`'s rank guard, whose null fired 54%.
 * **Positive control:** injecting a genuine timing confound
   (`adj += k·(ttt − mean_ttt)`) leaves the guard passing at k=0.20 and fires
   it at k=0.30 and k=0.50. At df=30 the minimum detectable R² is **0.122**, so
   the guard catches a confound explaining ~12% or more of the cross-team
   variance in the adjusted rate — about 5.0 percentage points of pressure rate
-  across the observed 0.236s spread in release timing, against a 15.0-point
-  total spread. **It can fire.**
+  across the observed **0.2601 s** spread in release timing, against a
+  **13.40-point** total spread. **It can fire.**
+
+**And its power depends on that spread, which a season erodes.** 0.2601 s is
+what 17 games of schedule averaging leaves; in weeks 4-6, when schedule
+imbalance is largest, the regressor has far more range and the same test is far
+more informative. By week 18 even the *unadjusted* pressure rate shows no
+relationship with release timing (t `-0.24`), so a late-season `false` is weak
+evidence rather than a clean bill of health. Consumers are told this on
+`timing_confound_flagged`'s schema description; do not let this module's pass
+be read as stronger than it is.
 
 --------------------------------------------------------------------------
 Why the adjustment does NOT residualise on this variable
@@ -54,11 +64,19 @@ So the timing term enters where it is real, and by a different route. The
 opponent yardstick in `ratings.opponent_strengths` is the opposing offence's
 own **pressure rate allowed**, computed leave-one-out over that offence's
 *other* games — and an offence's own release timing is a significant driver of
-what it allows. Measured at the offence level on the same 2025 season:
-`pressure_allowed ~ own mean_time_to_throw` has slope `+0.106`/s, t `+2.10`,
-r `+0.358`, over a `2.490–3.059`s spread. Offences that hold the ball longer
-allow more pressure, so an offence with a quick release is rated as a strong
-line, and a defence that faced it has its rate adjusted **up**.
+what it allows. Measured **at the offence-game level, which is the level
+`opponent_strengths` actually estimates at**, over the joined play set it is
+actually fit on: `pressure_allowed ~ own mean_time_to_throw` has slope
+`+0.0733`/s, t **`+5.05` on 541 df**, r `+0.212`, n `543`. Offences that hold
+the ball longer allow more pressure, so an offence with a quick release is
+rated as a strong line, and a defence that faced it has its rate adjusted
+**up**.
+
+(An earlier revision cited `+0.1061`/s, t `+2.10`, r `+0.358` at the
+offence-*season* level. That figure is real but comes from *all* charted snaps
+rather than the joined set; recomputed on the joined set it is `+0.0904`/s,
+t `+1.79` — same direction, but **not** significant at 5%. The offence-game
+figure above is both stronger and the correct level, so it replaces it.)
 
 That is the timing correction the spec asks for, carried by the opponent's own
 *production* rather than bolted on as a second regressor — and because it is

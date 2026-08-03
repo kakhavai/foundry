@@ -755,9 +755,14 @@ collectors:
     # comment: every pass regresses `pressure_rate_generated_adj` on
     # `mean_time_to_throw_faced` across the league and flags a residual slope
     # distinguishable from zero. Measured on the live 2025 season through the
-    # shipped path: slope -0.0494/s, 95% CI [-0.2546, +0.1559], t -0.49 on
-    # 30 df -- PASSES. Shuffled null 4.66% against a nominal 5%, and a positive
-    # control fires it, so it is calibrated and it can fire.
+    # shipped path: slope -0.04940/s, 95% CI [-0.25464, +0.15585], t -0.4915
+    # on 30 df -- PASSES. Shuffled null 4.66% against a nominal 5%, and a
+    # positive control fires it at k >= 0.30, so it is calibrated and it can
+    # fire. **Its power decays across a season**: the regressor is the league
+    # spread in faced release time, which is only 0.2601 s by week 18, so a
+    # late-season `false` is weak evidence. Rows carry `timing_guard_ran`
+    # beside `timing_confound_flagged` so "clean" and "could not run" are
+    # distinguishable, and the caveat is on the schema field's description.
     #
     # depends_on player-identity for `key_absences` only; every other column is
     # keyed by team. Not scope_aware: rows are keyed by defensive team, and the

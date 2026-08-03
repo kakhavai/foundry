@@ -18,6 +18,7 @@ from defensive_front.ratings import (
     DefenseTotals,
     FrontTotals,
     OffenseGameTotals,
+    _faced_strength,
     build_rows,
     continuity_index,
     line_yards,
@@ -435,3 +436,62 @@ async def test_the_pass_metrics_are_recomputed_from_the_fixture_plays():
         assert row["pressure_to_sack_rate"] == pytest.approx(
             len(sacks) / len(pressures), abs=1e-4
         ), team
+
+
+# --------------------------------------------------------------------------
+# ...and HOW the slate is aggregated into one number
+# --------------------------------------------------------------------------
+
+
+def test_the_faced_strength_is_the_arithmetic_mean_of_the_slate():
+    """**The aggregator itself, pinned.**
+
+    `_faced_strength` turns a defence's slate of opponent strengths into the
+    single number every `_adj` column is divided by. Nothing used to constrain
+    which aggregation that is: `max`, `min`, `median` and `samples[0]` all
+    survived the whole suite, because each of them still produces a
+    non-degenerate, plausible, correctly-signed column. Only removing the
+    adjustment entirely died — so the suite proved *an* adjustment happened
+    and never *which*.
+
+    On real 2025 data swapping `fmean` for `max` moves the strength index from
+    a mean of 1.0000 to 1.2173 and deflates every published `_adj` by ~18%,
+    while the variance gauge, `collector_coverage_ratio` and the timing guard
+    all stay green. The spec is explicit that a scale divergence from
+    `offensive-line` "silently corrupts the differential rather than failing";
+    this is exactly that.
+
+    The slate below is asymmetric on purpose, so the mean is distinct from the
+    median, the extremes and the first element — a symmetric one would leave
+    the median alive.
+    """
+    strengths = {("O1", "g1"): 0.5, ("O2", "g2"): 0.7, ("O3", "g3"): 1.8}
+    opponents = {("D", "g1"): "O1", ("D", "g2"): "O2", ("D", "g3"): "O3"}
+    faced = _faced_strength("D", strengths, opponents)
+    assert faced == pytest.approx(1.0)
+    assert faced != pytest.approx(max(strengths.values()))
+    assert faced != pytest.approx(min(strengths.values()))
+    assert faced != pytest.approx(statistics.median(strengths.values()))
+
+
+def test_an_unplayed_slate_is_average_rather_than_an_error():
+    """No comparable opponent means no correction, not a crash and not a
+    zero — dividing by zero strength would make an unseen defence infinite."""
+    assert _faced_strength("D", {}, {}) == 1.0
+    assert _faced_strength("D", {("O1", "g1"): 2.0}, {("OTHER", "g1"): "O1"}) == 1.0
+
+
+async def test_the_strength_index_averages_one_across_the_league():
+    """**The invariant that catches a swapped aggregator at the published
+    level**, and the one the README states in prose but nothing encoded.
+
+    Leave-one-out strengths are ratios against the league mean, so the mean of
+    a balanced league's faced-strength indices is 1.0 by construction. `max`
+    reads 1.159, `min` 0.766, `median` 1.034 and first-game 0.999 on this
+    fixture — every one of them a silently rescaled `_adj` column.
+    """
+    rows = by_team(await run_capture(Feeds(), lake=SpyLake()))
+    index = [row["opponent_pressure_strength_index"] for row in rows.values()]
+    assert statistics.fmean(index) == pytest.approx(1.0, abs=1e-4), index
+    # ...and it is a real slate rather than every team facing an average one.
+    assert min(index) < 0.99 < 1.01 < max(index)

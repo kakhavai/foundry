@@ -134,6 +134,23 @@ REASON_IDENTITY_UPSTREAM_ERROR = identity_adapter.IDENTITY_UPSTREAM_ERROR
 REASON_IDENTITY_UNRESOLVED = identity_adapter.IDENTITY_UNRESOLVED
 REASON_TIMING_CONFOUND = "timing_confound_detected"
 REASON_TIMING_GUARD_NOT_RUN = "timing_guard_could_not_run"
+REASON_REFETCH_UNCHANGED = "unconditional_refetch_answered_304"
+
+# **The failure lattice, as data rather than as two hand-written loops.** A
+# feed is fatal unless it is named here with the reason its loss carries. The
+# classifier in `capture_defensive_front._attempt` is the only thing that reads
+# it, so the conditional first attempt and the unconditional re-fetch cannot
+# classify the same feed differently — which they used to.
+FATAL_FEEDS: tuple[str, ...] = ("pbp", "participation")
+OPTIONAL_FEEDS: dict[str, str] = {
+    "players": REASON_PLAYERS_UNAVAILABLE,
+    "injuries": REASON_INJURIES_UNAVAILABLE,
+}
+
+
+class UpstreamContractViolation(RuntimeError):
+    """A `304` answered to a request that carried no validator."""
+
 
 # The two spec fields with no free upstream, emitted present-and-null with a
 # machine-readable reason. An unsourceable value is a null with a reason —
@@ -214,22 +231,32 @@ async def _fetch(fn: Callable[..., Awaitable], **kwargs) -> tuple[object | None,
 
 
 async def _refetch_unconditionally(
-    unchanged: dict[str, bool],
-    fetchers: dict[str, Callable[..., Awaitable]],
-    results: dict[str, object],
+    unchanged: Mapping[str, bool],
+    attempt: Callable[..., Awaitable[None]],
 ) -> None:
     """Re-fetch the feeds that 304'd, when some other feed did change.
 
     Against a **throwaway** `ETagStore`, so no `If-None-Match` is sent and the
-    shared store keeps its (still-correct) entry for the next pass. A failure
-    here is left to the caller's handler exactly as a first-attempt failure
-    would be — a feed's place in the failure lattice does not change because
-    this is its second request.
+    shared store keeps its (still-correct) entry for the next pass.
+
+    **Through `attempt`, which is the same failure lattice the first request
+    went through — and it takes a callable rather than the fetchers precisely
+    so it cannot drift back.** An earlier revision called the fetchers here
+    directly while this docstring claimed the lattice still applied. It did
+    not: an optional feed that answered `304` and then failed its
+    unconditional re-fetch propagated an uncaught `HTTPStatusError` out of the
+    whole capture. No `fail_capture`, so no `present: 0` envelope; no
+    `collector_capture_failures_total`; the only signal was
+    `collector_staleness_seconds` climbing.
+
+    That is the **ordinary weekly path**, not an exotic one — play-by-play
+    changes whenever a game finishes and the roster and injury feeds routinely
+    do not, so this re-fetch runs on essentially every real capture and a
+    transient 5xx cost the entire pass instead of two fields.
     """
     for name, was_unchanged in unchanged.items():
-        if not was_unchanged:
-            continue
-        results[name] = await fetchers[name](etag_store=ETagStore())
+        if was_unchanged:
+            await attempt(name, conditional=False)
 
 
 def _recent_weeks(weeks: set[int]) -> frozenset[int]:
@@ -498,15 +525,73 @@ async def capture_defensive_front(
     }
     results: dict[str, object] = {}
     unchanged: dict[str, bool] = {}
+    degraded: list[str] = []
+    optional_failures: dict[str, Exception] = {}
 
-    # --- The two fatal feeds ----------------------------------------------
-    for name in ("pbp", "participation"):
+    async def _attempt(name: str, *, conditional: bool = True) -> None:
+        """One feed's fetch, with the failure lattice applied.
+
+        **The single place a feed's failure is classified**, used by the
+        conditional first attempt AND by the unconditional re-fetch. Having
+        two call sites and one classifier is the whole point: the re-fetch
+        used to call the fetchers directly, and an optional feed that 304'd
+        and then failed ended the entire pass. See
+        `_refetch_unconditionally`.
+
+        A fatal feed's failure goes to `fail_capture`, which never returns; an
+        optional one is degraded. A feed cannot be degraded twice: failing the
+        conditional attempt sets `unchanged[name] = False`, so it is never
+        re-fetched. That is an invariant of the control flow rather than a
+        defended one — a dedup guard here would be unreachable code no test
+        could exercise.
+        """
+        kwargs = {} if conditional else {"etag_store": ETagStore()}
         try:
-            results[name], unchanged[name] = await _fetch(fetchers[name])
-        except Exception as exc:  # noqa: BLE001 — classified, written, re-raised
-            # Do NOT call `metrics.capture_failure(exc)` first: the library
-            # owns that counter for a failure that ends a pass, and calling it
-            # here double-counts.
+            value, was_unchanged = await _fetch(fetchers[name], **kwargs)
+        except Exception as exc:  # noqa: BLE001 — classified per feed
+            reason = OPTIONAL_FEEDS.get(name)
+            if reason is None:
+                # Do NOT call `metrics.capture_failure(exc)` first: the library
+                # owns that counter for a failure that ends a pass, and calling
+                # it here double-counts.
+                await fail_capture(
+                    exc,
+                    collector=COLLECTOR_NAME,
+                    signal_types=SIGNAL_TYPES,
+                    adapter=UPSTREAM_ADAPTER,
+                    now=now,
+                    scope=scope,
+                    lake=lake,
+                    metrics=metrics,
+                    expected=EXPECTED_FLOOR,
+                    source_ref=pbp_adapter.source_ref(season),
+                )
+            results[name], unchanged[name] = None, False
+            optional_failures[reason] = exc
+            degraded.append(reason)
+            return
+
+        if not conditional and was_unchanged:
+            # A `304` to a request that carried no `If-None-Match` is an
+            # upstream contract violation, and we still have no body. Treat it
+            # as the feed being unavailable rather than letting a `None` reach
+            # the fold, where a fatal feed would raise `AttributeError` outside
+            # every handler.
+            await _attempt_unavailable(name)
+            return
+
+        results[name] = value
+        if conditional:
+            # Only the conditional attempt informs `every_feed_unchanged`; a
+            # re-fetch sends no validator and so cannot speak to it.
+            unchanged[name] = was_unchanged
+
+    async def _attempt_unavailable(name: str) -> None:
+        reason = OPTIONAL_FEEDS.get(name)
+        exc = UpstreamContractViolation(
+            f"{name} answered 304 to an unconditional request"
+        )
+        if reason is None:
             await fail_capture(
                 exc,
                 collector=COLLECTOR_NAME,
@@ -516,23 +601,17 @@ async def capture_defensive_front(
                 scope=scope,
                 lake=lake,
                 metrics=metrics,
+                reason=REASON_REFETCH_UNCHANGED,
                 expected=EXPECTED_FLOOR,
                 source_ref=pbp_adapter.source_ref(season),
             )
+        results[name] = None
+        optional_failures[reason] = exc
+        degraded.append(reason)
 
-    # --- The two optional ones --------------------------------------------
-    degraded: list[str] = []
-    optional_failures: dict[str, Exception] = {}
-    for name, reason in (
-        ("players", REASON_PLAYERS_UNAVAILABLE),
-        ("injuries", REASON_INJURIES_UNAVAILABLE),
-    ):
-        try:
-            results[name], unchanged[name] = await _fetch(fetchers[name])
-        except Exception as exc:  # noqa: BLE001 — field-level, not fatal
-            results[name], unchanged[name] = None, False
-            optional_failures[reason] = exc
-            degraded.append(reason)
+    # --- The fatal feeds first, then the optional ones ---------------------
+    for name in (*FATAL_FEEDS, *OPTIONAL_FEEDS):
+        await _attempt(name)
 
     # --- Every feed unchanged? Then so is the pass. ------------------------
     #
@@ -541,8 +620,9 @@ async def capture_defensive_front(
     if every_feed_unchanged(unchanged):
         raise UpstreamUnchanged(pbp_adapter.source_ref(season))
 
-    # Some feed changed, so the 304'd ones must be read after all.
-    await _refetch_unconditionally(unchanged, fetchers, results)
+    # Some feed changed, so the 304'd ones must be read after all — through
+    # the same classifier, not around it.
+    await _refetch_unconditionally(unchanged, _attempt)
 
     for reason, exc in optional_failures.items():
         # Recorded HERE because the library cannot see it: neither

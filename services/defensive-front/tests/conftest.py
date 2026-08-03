@@ -185,6 +185,7 @@ class Feeds:
         etags: Mapping[str, str] | None = None,
         injury_week: int = WEEK + 1,
         bodies: Mapping[str, bytes] | None = None,
+        always_304: frozenset[str] = frozenset(),
     ) -> None:
         self.season = season
         self.built = season_module.build_season(
@@ -199,6 +200,10 @@ class Feeds:
             "injuries": injuries_status,
         }
         self.etags = dict(etags or {})
+        # Feeds that answer `304` even to a request carrying no validator --
+        # an upstream contract violation, and the only way to reach the
+        # collector's guard against one. A well-behaved mock cannot produce it.
+        self.always_304 = frozenset(always_304)
         override = dict(bodies or {})
         self.bodies = {
             "pbp": override.get("pbp", season_module.pbp_document(self.built)),
@@ -230,6 +235,8 @@ class Feeds:
         def respond(request: httpx.Request) -> httpx.Response:
             sent = request.headers.get("If-None-Match")
             self.requests.append((name, sent))
+            if name in self.always_304:
+                return httpx.Response(304, headers={"ETag": etag or '"x"'})
             if etag is not None and sent == etag:
                 return httpx.Response(304, headers={"ETag": etag})
             headers = {"ETag": etag} if etag is not None else {}

@@ -156,9 +156,37 @@ teams against a 55% null and shipped disabled.
 (`adj += k·(ttt − mean)`) leaves it passing at k=0.20 and fires it at k=0.30
 and k=0.50. At df=30 the minimum detectable R² is **0.122**, so it catches a
 confound explaining ~12% or more of the cross-team variance in the adjusted
-rate — about 5.0 percentage points of pressure rate across the observed 0.260s
-spread in release timing, against a 13.4-point total spread. Both arms are
-driven end to end in `tests/test_timing_guard.py`.
+rate — about 5.0 percentage points of pressure rate across the observed
+0.2601 s spread in release timing, against a 13.40-point total spread. Both
+arms are driven end to end in `tests/test_timing_guard.py`.
+
+### Read a `false` with its power in mind — especially late in a season
+
+**This is the guard's most important limitation and it belongs here, not in a
+report.** The test's power is a function of the spread in
+`mean_time_to_throw_faced` across the league, and a schedule averages that
+spread away as a season runs. By week 18 of 2025 it was **0.2601 s across all
+32 teams** — against a minimum detectable R² of 0.122. At that point even the
+**unadjusted** pressure rate shows no relationship with release timing
+(t −0.24), so the pass above is close to the strongest result the data can
+produce whatever the adjustment does.
+
+Consequences a consumer should act on:
+
+* A `timing_confound_flagged: false` on a **late-season** row is weak evidence.
+  It is not a certification that the opponent adjustment is clean against the
+  spec's named failure mode.
+* The guard is **most informative in weeks 4–6**, when schedule imbalance is
+  largest and the regressor genuinely varies. That is when a flag means
+  something and when a pass means something.
+* Always read **`timing_guard_ran`** first. `false` there means the guard did
+  not run at all — fewer than four comparable defences, or no spread in faced
+  release time — and `timing_confound_flagged` is then `false` because nothing
+  was tested, not because nothing was found.
+
+The same caveat is carried on `timing_confound_flagged`'s description in
+`contracts/signal-envelope/collectors/defensive-front.json`, so it reaches a
+generator that never opens this file.
 
 ### Why the adjustment does not residualise on this variable
 
@@ -172,11 +200,20 @@ is worse than no guard.
 The timing term is not missing; it arrives through the opponent yardstick.
 `ratings.opponent_strengths` is fit on the opposing offence's own **pressure
 rate allowed**, leave-one-out over that offence's *other* games — and an
-offence's release timing drives what it allows. Measured at the offence level
-on the same 2025 season: `pressure_allowed ~ own mean_time_to_throw` has slope
-**+0.106**/s, t **+2.10**, r **+0.358**, over a 2.490–3.059s spread. Offences
-that hold the ball longer allow more pressure, so a quick-release offence is
-rated as a strong line and a defence that faced it is adjusted **up**.
+offence's release timing drives what it allows. Measured **at the offence-game
+level, which is where `opponent_strengths` actually estimates**, over the
+joined play set it is actually fit on: `pressure_allowed ~ own
+mean_time_to_throw` has slope **+0.0733**/s, **t +5.05 on 541 df**, r **+0.212**,
+n **543**. Offences that hold the ball longer allow more pressure, so a
+quick-release offence is rated as a strong line and a defence that faced it is
+adjusted **up**.
+
+An earlier revision of this section cited +0.106/s, t +2.10 at the
+offence-*season* level. That number is real but is computed over *all* charted
+snaps rather than the joined set the adjustment uses; on the joined set it is
++0.0904/s, **t +1.79 — not significant at 5%**. Same direction and magnitude,
+but the significance claim did not survive, so the offence-game figure above
+replaces it.
 
 Because that estimate is per opposing offence-game rather than from the 32 team
 means, the residual slope is a genuine test rather than an identity — and the
@@ -256,6 +293,14 @@ real 2025 feed's rows are questionable against 1,396 out.
 Measured against the live 2025 injury report: **28–30 front players across
 17–22 teams** in a typical week.
 
+**It has never run against a real `player-identity`.** Every test here drives
+a mocked service, and `helm/values` points `PLAYER_IDENTITY_URL` at
+`player-identity:8002`, so the first real resolution will happen in-cluster.
+An outage or a refusal is field-level — `key_absences` is empty and the pass
+files an `identity_unavailable` or `identity_unresolved` coverage error — so
+the failure mode is a quiet field with a loud reason rather than a broken
+capture. Check those reasons on the first in-cluster pass.
+
 **The 500-query hazard.** `player-identity`'s `build_query` raises a 422 for a
 position outside `KNOWN_POSITIONS` and `resolve_queries` calls it *inside* the
 loop over the batch, so **one unmapped code fails all 500 queries**, not one
@@ -296,7 +341,7 @@ cd services/defensive-front
 uv run pytest -v
 ```
 
-193 tests, 99% line and branch coverage. The four documents are built in the
+214 tests, 99% line and branch coverage. The four documents are built in the
 real wire format by [`tests/season.py`](tests/season.py) — **read its docstring
 before touching a fixture.** Its shape is what makes the suite capable of
 failing: every pressure is `f(offence) + g(defence)`, because a fixture varying

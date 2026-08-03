@@ -447,7 +447,15 @@ def build_rows(
     ]
     regression = residual_slope([x for x, _ in pairs], [y for _, y in pairs])
 
-    flagged = regression is not None and regression.flagged
+    # **Two booleans, not one.** `timing_confound_flagged: false` alone
+    # conflates "the guard ran and found nothing" with "the guard could not
+    # run", and the row is what a generator joins on. Everywhere else this
+    # collector keeps that distinction — the `defensive_front_timing_guard_ran`
+    # gauge, the `NOT_RUN` sentinels, the `timing_guard_could_not_run` coverage
+    # error — and the row was the one place it was dropped.
+    ran = regression is not None
+    flagged = ran and regression.flagged
     for row in staged:
+        row["timing_guard_ran"] = ran
         row["timing_confound_flagged"] = flagged
     return staged, regression

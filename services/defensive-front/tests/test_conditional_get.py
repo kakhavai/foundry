@@ -10,7 +10,9 @@ import pytest
 from collector_core.conditional import UpstreamUnchanged
 
 from defensive_front.capture import (
+    REASON_REFETCH_UNCHANGED,
     STRENGTH,
+    UpstreamContractViolation,
     every_feed_unchanged,
     reset_published_digests,
 )
@@ -171,14 +173,141 @@ async def test_a_304_is_never_routed_into_fail_capture():
     assert all(envelope.coverage.present > 0 for envelope in lake.writes)
 
 
-async def test_a_failure_during_the_unconditional_refetch_still_degrades():
-    """A feed's place in the failure lattice does not change because this is
-    its second request: the roster feed is optional either way."""
+async def test_an_optional_feed_that_304s_then_FAILS_degrades_the_pass():
+    """**The failure lattice has to hold on the SECOND request too.**
+
+    This is the ordinary weekly path, not an exotic one: play-by-play changes
+    whenever a game finishes and the roster feed routinely does not, so the
+    unconditional re-fetch of an optional feed runs on essentially every real
+    capture. An earlier revision applied the lattice to the first attempt
+    only, so a transient 5xx here propagated an uncaught `HTTPStatusError`
+    out of the whole capture -- no `fail_capture`, therefore no `present: 0`
+    envelope, and no `collector_capture_failures_total`. The only signal was
+    `collector_staleness_seconds` slowly climbing.
+
+    Three artefacts asserted the opposite at the time, including this test's
+    own former name.
+    """
     feeds = Feeds(etags={"players": '"players-1"'})
     await run_capture(feeds, lake=SpyLake())
-    feeds.status["players"] = 500
+    reset_published_digests()
+    feeds.status["players"] = 503
+
+    lake = SpyLake()
+    envelopes = await run_capture(feeds, lake=lake)
+
+    envelope = envelopes[STRENGTH]
+    assert envelope.signals, "an optional feed's re-fetch failure ended the pass"
+    assert envelope.coverage.present > 0
+    for row in envelope.signals:
+        assert row["degraded_upstreams"] == ["players_unavailable"]
+        assert row["front_continuity_index"] is None
+        assert row["key_absences"] == []
+        # ...and the fourteen fields that do not depend on it are untouched.
+        assert row["pressure_rate_generated"] is not None
+    assert lake.writes, "a degraded pass still publishes"
+
+
+async def test_a_fatal_feed_that_304s_then_FAILS_writes_a_present_zero_envelope():
+    """The other arm of the same hole. A fatal feed's re-fetch failure must
+    still reach `fail_capture`, or the gap in the append-only lake is
+    invisible -- which `capture.py`'s module docstring calls load-bearing."""
+    feeds = Feeds(etags={"pbp": '"pbp-1"'})
+    await run_capture(feeds, lake=SpyLake())
+    reset_published_digests()
+    feeds.status["pbp"] = 503
+
+    lake = SpyLake()
     with pytest.raises(httpx.HTTPStatusError):
-        # A `304` on the first attempt and a 500 on the re-fetch: the second
-        # request is NOT wrapped in the optional feed's handler, so this is
-        # the honest current behaviour and it is pinned rather than assumed.
-        await run_capture(feeds, lake=SpyLake())
+        await run_capture(feeds, lake=lake)
+
+    assert lake.writes, "no present: 0 envelope was written for a fatal failure"
+    for envelope in lake.writes:
+        assert envelope.coverage.present == 0
+        assert envelope.coverage.expected == 32
+        assert envelope.errors
+
+
+async def test_a_degraded_refetch_is_counted_on_the_failure_metric():
+    """The counter the library cannot move for a field-level loss. Without it
+    a repeated 5xx on the roster feed is indistinguishable from a quiet
+    cadence."""
+    feeds = Feeds(etags={"players": '"players-1"'})
+    await run_capture(feeds, lake=SpyLake())
+    reset_published_digests()
+    feeds.status["players"] = 503
+
+    before = _failures_for("players_unavailable")
+    await run_capture(feeds, lake=SpyLake())
+    assert _failures_for("players_unavailable") > before
+
+
+def _failures_for(reason: str) -> float:
+    from prometheus_client import REGISTRY, generate_latest
+
+    total = 0.0
+    for line in generate_latest(REGISTRY).decode().splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        name, _, value = line.rpartition(" ")
+        name = name.strip()
+        if (
+            name.startswith("collector_capture_failures")
+            and 'collector="defensive-front"' in name
+            and f'reason="{reason}"' in name
+        ):
+            total += float(value)
+    return total
+
+
+async def test_a_304_to_an_UNCONDITIONAL_request_is_treated_as_unavailable():
+    """An upstream that answers `304` to a request carrying no validator has
+    violated the protocol, and we still have no body.
+
+    Left alone, the `None` reaches the fold — where an optional feed silently
+    contributes nothing and a fatal one raises `AttributeError` outside every
+    handler, which is the F1 shape again by a different route. A well-behaved
+    upstream cannot produce this, so the mock has to be made to misbehave on
+    purpose; without that the guard is unreachable code no test can exercise.
+    """
+    feeds = Feeds(etags={"players": '"players-1"'}, always_304=frozenset({"players"}))
+    await run_capture(feeds, lake=SpyLake())
+    reset_published_digests()
+
+    envelope = (await run_capture(feeds, lake=SpyLake()))[STRENGTH]
+    assert envelope.signals, "the pass survived, degraded"
+    for row in envelope.signals:
+        assert row["degraded_upstreams"] == ["players_unavailable"]
+        assert row["front_continuity_index"] is None
+
+
+async def test_a_FATAL_feed_answering_304_unconditionally_reaches_fail_capture():
+    """The fatal arm of the same guard, which the optional arm above cannot
+    reach — and the only branch of the F1 fix nothing else exercises.
+
+    It matters more than the optional one: a `None` play-by-play raises
+    `AttributeError` deep in the fold, outside every handler, so the symptom
+    would again be an uncaught exception with no `present: 0` envelope rather
+    than a recorded gap. The reason is distinct from an ordinary fetch failure
+    (`unconditional_refetch_answered_304`) because the upstream is reachable
+    and answering — an operator reading `collector_capture_failures_total`
+    should not go looking for an outage that is not there.
+
+    A feed that 304s unconditionally 304s on the first request too, so unlike
+    the optional arm above this needs no priming pass — the very first capture
+    reaches the guard, because the other three feeds still change and force the
+    re-fetch.
+    """
+    feeds = Feeds(etags={"pbp": '"pbp-1"'}, always_304=frozenset({"pbp"}))
+
+    lake = SpyLake()
+    with pytest.raises(UpstreamContractViolation):
+        await run_capture(feeds, lake=lake)
+
+    assert lake.writes, "no present: 0 envelope was written"
+    for envelope in lake.writes:
+        assert envelope.coverage.present == 0
+        assert envelope.coverage.expected == 32
+        assert {error["reason"] for error in envelope.errors} == {
+            REASON_REFETCH_UNCHANGED
+        }

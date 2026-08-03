@@ -154,11 +154,6 @@ class Season:
     season: int = SEASON
 
 
-def _pressure_count(offense: str, defense: str, snaps: int) -> int:
-    rate = BASE_PRESSURE + OFFENSE_WEAKNESS[offense] + DEFENSE_STRENGTH[defense]
-    return max(0, min(snaps, round(snaps * rate)))
-
-
 def _defenders(defense: str, snap_index: int, week: int) -> tuple[str, ...]:
     """Eleven ids: seven front rotation plus four defensive backs.
 

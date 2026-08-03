@@ -1037,24 +1037,41 @@ populated and plausible.
 was trusted.** Every pass regresses `pressure_rate_generated_adj` on
 `mean_time_to_throw_faced` across the league; a residual slope distinguishable
 from zero flags every row and files a priority coverage error. Run on the live
-2025 regular season through the shipped path: slope **-0.0494**/s, SE 0.1005,
-**t -0.49 on 30 df**, p 0.63, 95% CI **[-0.2546, +0.1559]** — **passes**. A
-shuffled null over 20,000 permutations fires it **4.66%** of the time against a
-nominal 5%, and an injected confound fires it at k >= 0.30 (minimum detectable
-R² 0.122), so it is calibrated *and* it can fire — unlike `coaching-scheme`'s
-changepoint detector, which fired on 65% of teams against a 55% null and
-shipped disabled.
+2025 regular season through the shipped path: slope **-0.04940**/s, SE 0.10050,
+**t -0.4915 on 30 df**, p 0.6266, 95% CI **[-0.25464, +0.15585]**, R² 0.0080
+— **passes**. A shuffled null over 20,000 permutations fires it **4.66%** of
+the time (an independent re-run on another seed: 5.10%; both inside
+Monte-Carlo error of the nominal 5.00%, SE 0.154 pp), and an injected confound
+fires it at k >= 0.30 (minimum detectable R² 0.122), so it is calibrated *and*
+it can fire — unlike `coaching-scheme`'s changepoint detector, which fired on
+65% of teams against a 55% null and shipped disabled.
+
+**The guard's power decays across a season, and that is disclosed to
+consumers rather than only here.** Its regressor is the league's spread in
+faced release time, which 17 games of schedule averaging narrows to
+**0.2601 s** by week 18 — against a minimum detectable R² of 0.122. At that
+point even the *unadjusted* pressure rate shows no relationship with timing
+(t -0.24), so a late-season `false` is weak evidence rather than a
+certification. The test is most informative in **weeks 4-6**, when schedule
+imbalance is largest. The row therefore carries `timing_guard_ran` alongside
+`timing_confound_flagged` — a `false` flag with `ran: false` means nothing was
+tested, not that nothing was found — and the caveat is on the schema field's
+own description.
 
 The adjustment deliberately does **not** residualise on team-mean release time.
 An OLS residual is orthogonal to its own regressor by construction, so doing
 that would make this assertion structurally incapable of failing — a green
 number forever, on every dataset, including one where the confound is total.
 The timing term instead arrives through the opponent yardstick, which is fit on
-the opposing offense's own leave-one-out pressure *allowed*; measured at the
-offense level on the same season, `pressure_allowed ~ own mean_time_to_throw`
-has slope +0.106/s, t +2.10, r +0.358 over a 2.490-3.059s spread. Offenses that
-hold the ball longer allow more pressure, so a quick-release offense is rated as
-a strong line and the defense that faced it is adjusted up.
+the opposing offense's own leave-one-out pressure *allowed*. Measured at the
+**offense-game** level, which is where that yardstick actually estimates, over
+the joined play set it is fit on: `pressure_allowed ~ own mean_time_to_throw`
+has slope **+0.0733/s, t +5.05 on 541 df**, r +0.212, n 543. Offenses that hold
+the ball longer allow more pressure, so a quick-release offense is rated as a
+strong line and the defense that faced it is adjusted up. (An earlier revision
+cited +0.106/s, t +2.10 at the offense-*season* level over *all* charted snaps;
+on the joined set that is +0.0904/s, t +1.79 — not significant. The
+offense-game figure is both stronger and the correct level.)
 
 **Candidate upstreams (non-normative):** ~~commercial pass-rush charting
 providers, player-tracking feeds~~, **participation-annotated play-by-play** —
