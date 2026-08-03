@@ -769,3 +769,55 @@ collectors:
     # front is projected as a unit rather than as watchlisted individuals.
     scope_aware: false
     depends_on: [player-identity]
+
+  - name: offensive-line
+    path: /collectors/offensive-line
+    stage: 8D
+    cadence_class: weekly
+    envelope_version: "1"
+    signal_types: [offensive_line_strength]
+    # The deliberate mirror of defensive-front. Every shared-stem metric uses
+    # the identical unit and adjustment basis, suffixed `_allowed` here and
+    # `_generated` there, so the generator's matchup feature is a plain
+    # subtraction on (season, week, team_id) with no conversion. That is not
+    # a convention: tests/test_scale_agreement.py reads defensive-front's
+    # ratings module BY AST and compares every weighting constant, then
+    # compares the two line-yards curves numerically across the whole
+    # yardage range, then compares the leave-one-out adjustment statement for
+    # statement. The spec's own warning is why -- a divergence "silently
+    # corrupts the differential rather than failing".
+    #
+    # Six feeds, ~78.2 MiB a changed pass. play_by_play (18.22 MiB) and
+    # pbp_participation (46.82 MiB) are fatal; depth_charts (10.15 MiB),
+    # players (2.39 MiB), snap_counts (0.48 MiB) and injuries (0.12 MiB)
+    # each degrade the starter half rather than the pass. THREE of the six
+    # 404 for the 2026 season today -- verified live -- because the season
+    # has not been played, which is why CAPTURE_ENABLED is false.
+    #
+    # Two narrowings, both forced by what free data supports:
+    #  1. yards_before_contact_per_carry and its _adj are null with a
+    #     machine-readable reason, SYMMETRIC with defensive-front's field of
+    #     the same stem. A differential where one term is real and the other
+    #     is null looks computable and is not.
+    #  2. starter_availability's `ir` cannot come from the weekly injury
+    #     report -- its report_status column carries only Out / Questionable
+    #     / Doubtful / blank -- so it comes from players.csv's RES/PUP roster
+    #     status and the two feeds are merged, roster status winning.
+    #
+    # The spec's named failure mode -- a line whose five changed carrying its
+    # old grades into the week it will be worst -- is a publish-time
+    # cross-field assertion that FAILS the pass rather than flagging it. It
+    # asserts an arithmetic invariant over rows this process just built, so a
+    # violation can only be a defect in the collector. Two neighbouring cases
+    # are data rather than defects and are handled without a raise: a changed
+    # lineup with no replacement delta to correct it drops the team into
+    # coverage.missing, and a pass that cannot tell whether the five changed
+    # (either game's five unidentifiable) publishes the row with
+    # lineup_change_known false and pressure_rate_allowed_adj null.
+    #
+    # depends_on player-identity for `starter_id` only; every unit column is
+    # keyed by team. Not scope_aware: the spec says so outright -- the unit
+    # row drives the projection and offensive linemen are not fantasy-scored,
+    # so roster-scope's watchlist selects nothing here.
+    scope_aware: false
+    depends_on: [player-identity]

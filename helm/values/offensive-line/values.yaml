@@ -1,0 +1,118 @@
+service:
+  name: offensive-line
+  port: 8027
+
+image:
+  repository: ghcr.io/kakhavai/foundry/offensive-line
+
+containerPort: 8027
+
+# No `resources:` block: the chart's defaults apply, and eighteen collectors
+# used to carry a byte-identical copy of them. That copy was not free -- it
+# meant a fleet-wide change was nineteen edits, which is how the CPU request
+# stayed at a per-service 100m until the 19th service failed to schedule with
+# `Insufficient cpu` on the single-node integration cluster.
+#
+# Add one back only to say something the default does not, and measure first:
+# roster-scope's first deploy was OOMKilled at 256Mi because its adapter
+# buffered a 37 MB document three times, and raising the limit would have
+# hidden the bug rather than fixed it. player-identity is the one service with
+# a real override, and only its memory numbers differ.
+
+otel:
+  resourceAttributes: "service.name=offensive-line,service.namespace=foundry"
+
+grafanaAnnotations:
+  enabled: true
+
+gateway:
+  enabled: true
+  pathPrefix: /collectors/offensive-line
+  # Only the paths this collector publishes as its contract. /health and
+  # /metrics are deliberately absent: they are exempt from bearer auth
+  # in-process (a kubelet probe and a Prometheus scrape cannot carry a token),
+  # and that is a reason to reach them in-cluster, not at the edge.
+  # Add a path here when you add a route beyond the standard five.
+  publicPaths:
+    - /catalog
+    - /signals
+    - /refresh
+    # The spec's one extra route: the projected starting five and its
+    # continuity for an upcoming week, which is forward-looking and therefore
+    # not derivable from the realized /signals history. Omit it here and it
+    # 404s at the gateway while working perfectly in-cluster.
+    - /lineups
+
+extraEnv:
+  # optional: true lets the pod start before the Secret exists. offensive-line then
+  # answers 503 on every data route until it arrives — the ArgoCD Application
+  # reports Healthy the whole time, so recognise that combination for what it
+  # is before assuming the deploy is broken.
+  - name: COLLECTOR_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: offensive-line-collector-token
+        key: token
+        optional: true
+  - name: LAKE_BUCKET
+    value: "foundry-signals"
+  - name: LAKE_ENDPOINT_URL
+    value: "http://minio.monitoring.svc.cluster.local:9000"
+  - name: REFRESH_MIN_INTERVAL_SECONDS
+    value: "300"
+  # The `depends_on: [player-identity]` edge, in the one place it is real.
+  # `starter_id` is the only field that needs it; every unit column is keyed
+  # by team. Left unset, the collector files `identity_unavailable` as a
+  # coverage error and publishes the unit rows without the five starter rows
+  # — which is loud (coverage falls to 32/192) rather than a week in which no
+  # team could field a line.
+  - name: PLAYER_IDENTITY_URL
+    value: "http://player-identity:8002"
+  # **False, and measured rather than scaffolded.** Two independent reasons,
+  # either of which is sufficient:
+  #
+  # 1. THREE OF THE SIX FEEDS 404 FOR THIS SEASON. Verified live against the
+  #    nflverse releases API on 2026-08-03: `play_by_play_2026.csv.gz`,
+  #    `pbp_participation_2026.csv` and `snap_counts_2026.csv.gz` do not
+  #    exist, because the 2026 season has not been played. Only
+  #    `depth_charts_2026` is published. A running loop would fail on its
+  #    first fatal feed every pass, pin `collector_coverage_ratio` at 0.0
+  #    forever and write a `present: 0` envelope on every tick, for zero data.
+  # 2. COST. A changed pass is ~78.2 MiB across six feeds, of which
+  #    `pbp_participation` alone is 46.82 MiB. The Kind cluster is recreated
+  #    on every CI run and every pod restart re-captures, so a `weekly` loop
+  #    here is a recurring ~78 MiB pull against a third party for a document
+  #    that changes when a game finishes.
+  #
+  # Flip to "true" only once the season is under way AND the third-party load
+  # has been decided acceptable. Conditional GET is already wired on every
+  # feed, so a poll that finds nothing new costs one round trip per feed
+  # rather than 78 MiB. A dispatched POST /refresh reaches the upstream
+  # regardless of this flag — which is why services/offensive-line/smoke.sh
+  # does not post one.
+  - name: CAPTURE_ENABLED
+    value: "false"
+  - name: CAPTURE_SEASON
+    value: "2026"
+  - name: CAPTURE_WEEK
+    value: "1"
+  # Wall-clock ceiling for one capture pass, so total upstream failure costs at
+  # most this much rather than items x per-call timeout.
+  - name: CAPTURE_DEADLINE_SECONDS
+    value: "300"
+  # Same optional:true pattern — the pod starts before the Secret exists and
+  # the lake simply has no credentials until it arrives.
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: offensive-line-lake-credentials
+        key: access-key-id
+        optional: true
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: offensive-line-lake-credentials
+        key: secret-access-key
+        optional: true
+  - name: AWS_DEFAULT_REGION
+    value: "us-east-1"

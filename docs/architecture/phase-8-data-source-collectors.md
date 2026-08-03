@@ -1124,7 +1124,166 @@ Answers how much protection and running room an offense's front five actually pr
 
 **Failure mode to watch:** When a starter goes to IR mid-week, the unit's aggregate grades do not move, because they are computed over snaps the departed player took — the line keeps its elite `pressure_rate_allowed_adj` into the exact week it will be worst, and the sack-risk projection for that quarterback is confidently wrong in the wrong direction. Nothing about the row looks malformed. The guard is a cross-field assertion at publish time: whenever `lineup_hash` differs from the prior week's, require `continuity_games == 0` *and* require the unit row's adjusted metrics to have been recomputed with the replacement's `replacement_delta_pressure_rate` applied; a changed hash with unchanged adjusted metrics is a stale unit and must fail rather than publish.
 
-**Candidate upstreams (non-normative):** commercial blocking-grade providers, snap-count and participation feeds, official injury reports and transaction wires
+**Implementation notes (8D, as built).** Six nflverse feeds, ~78.2 MiB a
+changed pass, freshness re-checked across formats against the releases API
+before size (per `player-contract`'s finding): every format of every feed
+shares a timestamp, so the abandoned-artifact exception does not apply and the
+fleet rule takes the `.csv.gz` where one exists.
+`play_by_play_<season>.csv.gz` (18.22 MiB) and `pbp_participation_<season>.csv`
+(46.82 MiB) are **fatal**; `depth_charts_<season>.csv.gz` (10.15 MiB),
+`players.csv.gz` (2.39 MiB), `snap_counts_<season>.csv.gz` (0.48 MiB) and
+`injuries_<season>.csv.gz` (0.12 MiB) each degrade the **starter half** — five
+of six rows per team, which coverage states as 32/192 rather than hides —
+while every unit rate is unaffected.
+
+*The field this spec expected to block the collector does not.* `depth_charts`
+really does carry sidedness: on the 2025 release, `pos_abb` is `LT` on 21,068
+rows, `RT` 19,097, `RG` 18,896, `LG` 18,815, `C` 17,974, with `pos_name`
+spelling them out. So `starter_position` ships as the full five-valued enum
+rather than narrowing to `T`/`G`/`C`.
+
+*What did nearly block it is the join.* `snap_counts` is keyed by
+`pfr_player_id` and `depth_charts` by `gsis_id`, and nothing joins them
+directly — `players.csv` is the only free document carrying both, and it
+cross-walks **4,195 of 4,212** offensive-line snap rows on the real 2025
+regular season (99.6%). A name-based join was rejected: two linemen sharing a
+surname on one roster silently attributes one man's snaps to another and
+changes the lineup hash.
+
+*The two questions the spec insists on separating are separated
+structurally.* `snap_counts` decides **who played** and therefore
+`lineup_hash`; `depth_charts` supplies only the **slot label** the hash is
+ordered by. That feed has no season or week column at all — it is 219 daily
+snapshots across the 2025 release — so the label is read from the snapshot
+current at that week's last game, with the calendar coming from play-by-play's
+`game_date`. Labelling a week-5 lineup from the March chart would reorder the
+hash and report churn on lines that never changed.
+
+*Pressure is attributed to the **unit**, and `upstream.adapter` says so*
+(`nflverse-offensive-line-unit-attributed`), which is the branch of the adapter
+note this upstream forces: `was_pressure` is charted at the play with no
+blocker column, and `offense_players` is an unordered list of eleven men that
+would let a collector *distribute* a pressure across the line and call it
+attribution — five populated, plausible, invented numbers.
+
+*Three narrowings, all forced by what free data supports.*
+
+1. **`yards_before_contact_per_carry` and its `_adj` are null**,
+   present-and-null with a machine-readable reason and `"type": "null"` in the
+   contract so a later "fill-in" fails conformance. PFR publishes YBC at
+   season level, so it cannot be attributed to a week or to the front faced,
+   and nothing free publishes it per play. Deliberately **symmetric** with
+   `defensive-front`, which nulls its field of the same stem: a differential
+   where one term is real and the other is null looks computable and is not,
+   which is strictly worse than one where both are null. A test compares the
+   two collectors' null sets so they cannot drift apart.
+2. **`starter_availability`'s `ir` does not come from the injury report.**
+   Verified on the real 2025 season, 6,068 rows: `report_status` carries only
+   `Out` (1,396), `Questionable` (1,281), `Doubtful` (106) and blank (3,285),
+   and nothing else. `ir` is a *roster* designation, so it comes from
+   `players.csv`'s `RES`/`PUP` and the two feeds are merged with roster status
+   winning — a man on injured reserve is not merely doubtful. The enum ships
+   complete; it just needs two feeds.
+3. **`replacement_delta_pressure_rate` carries a provenance field the spec's
+   table does not list**, because the spec's own adapter note requires the
+   distinction ("mark the field's provenance rather than emitting a modelled
+   number that looks measured") and a consumer must be able to make it without
+   joining anything. `measured` is a with/without split of that team's own
+   window games, at least two on each side; `league_positional_prior` is the
+   mean of every measured delta at that slot across the league in the same
+   pass, over current starters only; `unavailable` means neither existed and
+   the value is `null`. The prior is **empirical rather than a constant** —
+   a hard-coded 0.02 for a tackle is exactly the modelled-looking-measured
+   number the note forbids.
+
+   The split is taken on the **opponent-adjusted** per-game rate rather than
+   the raw one. A raw split compares two different opponent slates, and the
+   front term is larger than the personnel term it is trying to isolate:
+   measured on this collector's own fixture before the adjustment was added, a
+   line that was demonstrably worse without its starter reported a delta of the
+   **wrong sign**, because those weeks fell against the two weakest fronts.
+
+**The failure mode's assertion is implemented, and it fails rather than
+flags.** Whenever `lineup_hash` differs from the prior game's, a publish-time
+cross-field assertion requires `continuity_games == 0`, a non-zero replacement
+correction, and `pressure_rate_allowed_adj` to equal
+`pressure_rate_allowed_adj_observed + lineup_adjustment_pressure_rate`.
+
+*The assertion needs a third state, and finding it took an independent
+review.* "The five did not change" and "this pass could not tell whether they
+changed" are different facts, and only the first is safe to publish an
+uncorrected rate against. The second arises whenever either game's five could
+not be identified — which the label-and-crosswalk chain makes reachable from
+the live documents: on 2025 exactly one lineman cannot be crosswalked from
+`snap_counts` (Alec Anderson, BUF, blank `pfr_id`) and he started two full
+games. Blinding one slot of the *prior* game published `pressure_rate_allowed_adj`
+**51% high**, with coverage, the row's own `lineup_hash`, its five starter
+rows and its schema validity all identical to a healthy pass — the row's own
+hash is fine, it is the prior one that is missing, and the prior hash is not
+on the row. So the unit row carries `lineup_change_known`, and when it is
+false `pressure_rate_allowed_adj` and `lineup_adjustment_pressure_rate` are
+both **null** with the reason on the row. A fourth guard arm enforces it.
+Failing rather than flagging is the deliberate difference from
+`defensive-front`'s timing guard: that one renders a statistical verdict about
+a league-week and has a false-positive rate, while this one asserts an
+arithmetic invariant over rows the process just built, so a violation can only
+be a defect in the collector.
+
+The neighbouring case is **coverage, not a crash**: "the lineup changed and
+this pass has no replacement delta to correct it with" is missing input data,
+so that team — unit row included — is dropped into `coverage.missing` as
+`lineup_changed_without_replacement_delta` and the rest of the league
+publishes. Both honour "a stale unit must not publish"; only one is a defect,
+and failing the whole league's capture over one team's absent backup sample
+would make a data gap look like a code fault.
+
+*The correction is applied to the pressure rate only*, and
+`pressure_rate_allowed_adj_observed` is published beside it so the strictly
+symmetric counterpart to `defensive-front`'s `pressure_rate_generated_adj` is
+still available to a differencing consumer. `sack_rate_allowed_adj` is
+deliberately **not** corrected: the spec supplies a delta in pressure-rate
+units only, and converting one would mean holding a team's pressure-to-sack
+conversion fixed across a personnel change, which nothing free supports.
+
+*Scale agreement with `defensive-front` is enforced rather than intended.*
+`tests/test_scale_agreement.py` reads that collector's `ratings.py` **by AST**
+— the two are separate uv workspace members and neither may import the other —
+and compares every line-yards constant, the two `line_yards` curves numerically
+at every tenth of a yard from −20 to +99, and `opponent_strengths`,
+`_faced_strength` and `_adjust` statement for statement. It also asserts that
+`pass_block_snaps` here is literally the same number `pass_rush_snaps` is
+there, counted from opposite sides of one intersected play set.
+
+*Four fields are additions to the spec's table*, and each is required by a
+claim the spec makes elsewhere: `pressure_rate_allowed_adj_observed` (the
+strictly symmetric pairing term, since `pressure_rate_allowed_adj` carries the
+replacement correction), `lineup_change_known` (above), and
+`replacement_delta_provenance` / `replacement_delta_sample_games` (the adapter
+note's "mark the field's provenance"). The generator's owner has to be told
+about all four; nothing in this repo tells them automatically.
+
+*One operational consequence worth stating rather than discovering.*
+`MIN_DELTA_GAMES` is 2 on both sides of the with/without split and the
+positional prior is built from the same pass, so no replacement delta exists
+before a team's fourth game — every team that changes its five in weeks 1-3 is
+dropped wholesale, and league coverage sits well below 192 for the first month
+of a season. A cross-season prior read back from the lake is the fix and is
+not built.
+
+**`CAPTURE_ENABLED=false`, and the reason is a 404 rather than a preference.**
+Verified live on 2026-08-03: `play_by_play_2026.csv.gz`,
+`pbp_participation_2026.csv` and `snap_counts_2026.csv.gz` **do not exist** —
+three of the six feeds, including both fatal ones — because the season has not
+been played. A running loop would fail on its first fatal feed every pass and
+pin `collector_coverage_ratio` at 0.0 forever for zero data.
+
+**Candidate upstreams (non-normative):** ~~commercial blocking-grade
+providers~~, **participation-annotated play-by-play plus snap counts, depth
+charts, the roster feed and official injury reports** — nflverse `pbp` +
+`pbp_participation` + `snap_counts` + `depth_charts` + `players` + `injuries`.
+No paid vendor is required and none is used; transaction wires are not read,
+because `players.csv`'s `RES`/`PUP` already carries the only transaction fact
+this collector needs.
 
 ### Team context (4)
 

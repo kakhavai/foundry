@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/signal-envelope/collectors/offensive-line.json",
+  "title": "offensive-line collector signal fields",
+  "signal_types": {
+    "offensive_line_strength": {
+      "description": "Two row shapes under one signal type, discriminated by record_type: one 'unit' row per offense carrying every rate, plus five 'starter' rows carrying the projected front five. The spec's coverage clause counts both -- 32 offenses x (1 unit + 5 starters) = 192 rows -- and a team with fewer than five identified starters is reported in coverage.missing rather than emitted partially. Three disclosed deviations from the phase spec, all narrowings forced by what free data supports and none synthesised around. (1) yards_before_contact_per_carry and its _adj are null by necessity, with the reason on the row in null_field_reason -- symmetric with defensive-front's field of the same stem, deliberately, because a differential where one term is real and the other is null looks computable and is not. (2) starter_availability cannot be sourced from one feed: the weekly injury report carries only Out/Questionable/Doubtful/blank, so 'ir' comes from players.csv's RES/PUP roster status and the two are merged with roster status winning. (3) pressure_rate_allowed_adj carries the spec's publish-time replacement correction, so pressure_rate_allowed_adj_observed is published beside it as the strictly symmetric counterpart to defensive-front's pressure_rate_generated_adj -- a consumer differencing the pair uses whichever of the two it means, and the field descriptions say which is which.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "title": "unit row",
+          "required": [
+            "team_id",
+            "record_type",
+            "pass_block_snaps",
+            "run_block_snaps",
+            "pressure_rate_allowed",
+            "pressure_rate_allowed_adj",
+            "pressure_rate_allowed_adj_observed",
+            "sack_rate_allowed",
+            "sack_rate_allowed_adj",
+            "mean_time_to_throw",
+            "adjusted_line_yards",
+            "yards_before_contact_per_carry",
+            "yards_before_contact_per_carry_adj",
+            "lineup_hash",
+            "continuity_games",
+            "lineup_changed",
+            "lineup_change_known",
+            "lineup_adjustment_pressure_rate",
+            "opponent_pressure_strength_index",
+            "adjustment_method",
+            "adjustment_window_weeks",
+            "degraded_upstreams",
+            "null_field_reason"
+          ],
+          "properties": {
+            "team_id": {
+              "type": "string",
+              "minLength": 2,
+              "description": "The OFFENSIVE team's nflverse abbreviation. The intended join against defensive-front is (season, week, team_id) on both sides."
+            },
+            "record_type": {
+              "const": "unit",
+              "description": "Discriminates this row shape from the starter rows."
+            },
+            "pass_block_snaps": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Sample size for every protection metric. Charted pass-rush snaps that are ALSO regular-season dropbacks in play-by-play -- an intersection, because 5.24% of charted rush snaps are penalty-nullified no_play rows that can carry a pressure but never a sack. Numerically the same play set defensive-front counts as pass_rush_snaps, from the other side of the ball."
+            },
+            "run_block_snaps": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Sample size for the run metrics: scrimmage carries, excluding two-point attempts. The same exclusion defensive-front applies to run_defense_snaps."
+            },
+            "pressure_rate_allowed": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Raw share of dropbacks on which the line conceded a pressure. Attributed to the UNIT, not to an individual blocker: nflverse charts was_pressure at the play with no blocker column, so distributing it across five men would publish five invented numbers. upstream.adapter says 'unit-attributed' for exactly this reason, which is what the spec asks the adapter to declare. Null, never zero, when the line took no charted dropback -- 'conceded nothing' and 'never dropped back' are different facts."
+            },
+            "pressure_rate_allowed_adj": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "description": "Same units, restated against a league-average slate of fronts faced AND corrected for a personnel change. Equals pressure_rate_allowed_adj_observed + lineup_adjustment_pressure_rate; when the five are known not to have changed the correction is 0.0 and the two are identical. **Null when lineup_change_known is false** -- see that field. This is the field a projection should use, because the window's snaps were taken by the old five. For the term strictly symmetric with defensive-front's pressure_rate_generated_adj, difference against pressure_rate_allowed_adj_observed instead."
+            },
+            "pressure_rate_allowed_adj_observed": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "description": "The opponent-adjusted rate the window's snaps actually show, before the replacement correction. Fit on the opposing DEFENSIVE FRONT's own leave-one-out pressure-generated production -- never on a prior offensive-line rating, which would feed the quantity back into its own estimate. Same arithmetic, same league-mean-1.0 index and same rounding as defensive-front's pressure_rate_generated_adj, so front.pressure_rate_generated_adj minus this is a subtraction with no conversion."
+            },
+            "sack_rate_allowed": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Raw share of dropbacks ending in a sack, over the same denominator as pressure_rate_allowed."
+            },
+            "sack_rate_allowed_adj": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "description": "Opponent-adjusted counterpart, same units and same leave-one-out basis. Deliberately NOT lineup-corrected: the spec supplies a replacement delta in pressure-rate units only, and converting one would mean holding a team's pressure-to-sack conversion fixed across a personnel change, which nothing free supports."
+            },
+            "mean_time_to_throw": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "description": "Seconds. The quarterback's own contribution to the line's pressure numbers: a line whose passer holds the ball concedes more pressure without blocking worse. Charted on 42.8% of dropbacks -- a sack, scramble or throwaway has no release, which is correct rather than a gap. Same units as defensive-front's mean_time_to_throw_faced, which is this quantity seen from the other side."
+            },
+            "adjusted_line_yards": {
+              "type": ["number", "null"],
+              "description": "Line-attributed rushing yardage per carry, opponent-adjusted. The Football Outsiders weighting -- 120% credit behind the line, full through 4 yards, half from 5 to 10, none past 10 -- in named constants that tests/test_scale_agreement.py compares against defensive-front's by AST and then numerically across the whole yardage range, because the spec warns that a divergence here corrupts the differential silently rather than failing."
+            },
+            "yards_before_contact_per_carry": {
+              "type": "null",
+              "description": "NULL BY NECESSITY, with the reason on the row in null_field_reason. PFR publishes yards before contact at season level, so it cannot be attributed to a week or to the front faced, and nothing free publishes it per play. Typed null rather than merely nullable so a later 'fill-in' from a derived quantity fails conformance: adjusted_line_yards is a weighting of total rushing yards, not a contact point, and substituting it would publish a plausible wrong number under a name a generator trusts. defensive-front nulls its field of the same stem for the same reason, deliberately in step."
+            },
+            "yards_before_contact_per_carry_adj": {
+              "type": "null",
+              "description": "Null for the same reason as its raw counterpart, and typed null for the same reason."
+            },
+            "lineup_hash": {
+              "type": ["string", "null"],
+              "minLength": 16,
+              "maxLength": 16,
+              "description": "Stable 64-bit hash of the five starting canonical ids in LT,LG,C,RG,RT order, from the most recent sampled game. Computed from the SNAP-WEIGHTED actual starters -- the depth chart supplies only the slot label, never membership, or continuity would be a description of the team's press releases. Null when fewer than five starters could be identified, which is also what separates 'the five are stable' from 'this pass could not see the five': lineup_changed reads false in both cases and only the hash tells them apart."
+            },
+            "continuity_games": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Consecutive games BEFORE the most recent one that carried the same lineup_hash. Zero whenever the five changed, which is the invariant the publish-time guard asserts against lineup_changed. A game whose five could not be identified stops the walk rather than being skipped, so an unreadable week cannot join two unrelated lineups into one streak."
+            },
+            "lineup_changed": {
+              "type": "boolean",
+              "description": "True when this game's lineup_hash differs from the prior sampled game's, and false when they match. **Read lineup_change_known first**: when that is false this field is false because the comparison could not be made, not because the five held. The row's own lineup_hash does not settle it -- in the case that matters it is the PRIOR game's hash that is missing, and that hash is not on the row."
+            },
+            "lineup_change_known": {
+              "type": "boolean",
+              "description": "Whether this pass could actually compare the five against the prior game's. False when either game's five could not be fully identified, in which case pressure_rate_allowed_adj and lineup_adjustment_pressure_rate are BOTH null with the reason in null_field_reason -- the correction could not be computed, and publishing the uncorrected rate is the spec's named failure mode (measured 51% high on a synthetic reproduction). True when there is no prior game at all, because then nothing could have changed. Everything the uncertainty does not touch still publishes, including pressure_rate_allowed_adj_observed."
+            },
+            "lineup_adjustment_pressure_rate": {
+              "type": ["number", "null"],
+              "description": "The correction added to pressure_rate_allowed_adj, in the same units: the sum of the departing starters' replacement_delta_pressure_rate. 0.0 when the five are known not to have changed, and null when lineup_change_known is false. Never null and never 0.0 on a row where lineup_changed is true -- a team whose change cannot be corrected is dropped into coverage.missing rather than published stale, because that row is the spec's named failure mode and nothing about it looks malformed."
+            },
+            "opponent_pressure_strength_index": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "description": "Mean leave-one-out pressure-generating strength of the fronts this line faced, relative to the league mean. 1.0 is average. The divisor behind pressure_rate_allowed_adj_observed."
+            },
+            "adjustment_method": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Names the arithmetic a lake object was built with, so a reader a season later knows which vintage it holds. Bump it if the adjustment changes. The mirror of defensive-front's identifier: same method, opposite side of the ball."
+            },
+            "adjustment_window_weeks": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "How many regular-season weeks the rates were computed over. A rate over two weeks and a rate over sixteen are not the same evidence."
+            },
+            "degraded_upstreams": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Optional feeds that were unavailable on this pass, by reason. Each costs rows rather than the pass: without snap counts, the depth chart or the roster crosswalk there are no starter rows and no lineup hash, while every rate above is unaffected."
+            },
+            "null_field_reason": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "Machine-readable reason per deliberately-null field. An unsourceable value is a null with a reason -- never a zero, never a plausible default."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "title": "starter row",
+          "required": [
+            "team_id",
+            "record_type",
+            "lineup_hash",
+            "starter_id",
+            "starter_position",
+            "starter_snap_share",
+            "starter_availability",
+            "replacement_delta_pressure_rate",
+            "replacement_delta_provenance",
+            "replacement_delta_sample_games"
+          ],
+          "properties": {
+            "team_id": {
+              "type": "string",
+              "minLength": 2,
+              "description": "The OFFENSIVE team's nflverse abbreviation."
+            },
+            "record_type": {
+              "const": "starter",
+              "description": "Discriminates this row shape from the unit row."
+            },
+            "lineup_hash": {
+              "type": ["string", "null"],
+              "minLength": 16,
+              "maxLength": 16,
+              "description": "The same hash the team's unit row carries, so a starter row joins back to its unit without a second lookup."
+            },
+            "starter_id": {
+              "type": "string",
+              "pattern": "^fdy-",
+              "description": "Canonical player id from player-identity. Never a raw GSIS id: an id the authoritative service refused to name is a missing row with a reason, and adopting the upstream key would publish something a generator joins on and matches nothing. Five slots are emitted or none are, so a partial five cannot silently change what lineup_hash means."
+            },
+            "starter_position": {
+              "enum": ["LT", "LG", "C", "RG", "RT"],
+              "description": "The depth chart's slot label, from the snapshot current at that week's last game rather than the newest in the file -- depth_charts is a daily-snapshot feed with no week column, so labelling a week-5 lineup from the March chart would reorder the hash and report churn on lines that never changed. The label decides ordering only; snap counts decide membership."
+            },
+            "starter_snap_share": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1,
+              "description": "This player's offensive snaps over the sampled window, over the team's own offensive snaps in the same games. Null when the team's snap total could not be derived."
+            },
+            "starter_availability": {
+              "enum": ["active", "questionable", "doubtful", "out", "ir"],
+              "description": "Game status for the UPCOMING week (week + 1), merged from two feeds because no single free feed carries the whole enum: the weekly injury report publishes only Out/Questionable/Doubtful/blank, and 'ir' is a roster designation that comes from players.csv's RES/PUP. Roster status wins -- a man on injured reserve is not merely doubtful. A blank report line is a practice-report entry and reads 'active', the same reading defensive-front gives it."
+            },
+            "replacement_delta_pressure_rate": {
+              "type": ["number", "null"],
+              "description": "Change in the unit's pressure_rate_allowed when this starter is replaced by the current backup, in the same units as pressure_rate_allowed. Positive means the line gets worse without him. READ replacement_delta_provenance BEFORE USING THIS: for most backups there is no observed sample, and a modelled number that looks measured is precisely what the spec forbids."
+            },
+            "replacement_delta_provenance": {
+              "enum": ["measured", "league_positional_prior", "unavailable"],
+              "description": "How the delta above was arrived at. 'measured' is a with/without split of this team's own window games, at least two on each side, taken on the opponent-adjusted per-game rate. 'league_positional_prior' is the mean of the measured deltas at this slot across the league in the same pass, **restricted to men who are currently starting** -- pooling deputies as well cancels the two sides of every substitution to approximately zero, which is a claim that losing a starter is free. That restriction is a disclosed modelling assumption and it is survivorship-biased: a starter who was replaced and did not get the job back is excluded by construction, so the pool leans toward changes that reverted. 'unavailable' means neither existed and the field is null."
+            },
+            "replacement_delta_sample_games": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "How many window games the measured side of the split was built from. Zero on a prior or an unavailable delta, which makes the provenance readable as a number too."
+            }
+          }
+        }
+      ]
+    }
+  }
+}
