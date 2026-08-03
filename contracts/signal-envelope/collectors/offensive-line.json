@@ -27,6 +27,7 @@
             "lineup_hash",
             "continuity_games",
             "lineup_changed",
+            "lineup_change_known",
             "lineup_adjustment_pressure_rate",
             "opponent_pressure_strength_index",
             "adjustment_method",
@@ -63,7 +64,7 @@
             "pressure_rate_allowed_adj": {
               "type": ["number", "null"],
               "minimum": 0,
-              "description": "Same units, restated against a league-average slate of fronts faced AND corrected for a personnel change. Equals pressure_rate_allowed_adj_observed + lineup_adjustment_pressure_rate; when the five did not change the correction is 0.0 and the two are identical. This is the field a projection should use, because the window's snaps were taken by the old five. For the term strictly symmetric with defensive-front's pressure_rate_generated_adj, difference against pressure_rate_allowed_adj_observed instead."
+              "description": "Same units, restated against a league-average slate of fronts faced AND corrected for a personnel change. Equals pressure_rate_allowed_adj_observed + lineup_adjustment_pressure_rate; when the five are known not to have changed the correction is 0.0 and the two are identical. **Null when lineup_change_known is false** -- see that field. This is the field a projection should use, because the window's snaps were taken by the old five. For the term strictly symmetric with defensive-front's pressure_rate_generated_adj, difference against pressure_rate_allowed_adj_observed instead."
             },
             "pressure_rate_allowed_adj_observed": {
               "type": ["number", "null"],
@@ -111,11 +112,15 @@
             },
             "lineup_changed": {
               "type": "boolean",
-              "description": "True when this game's lineup_hash differs from the prior sampled game's. False when they match, when there is no prior game, and when either hash is null -- read it together with lineup_hash, never alone."
+              "description": "True when this game's lineup_hash differs from the prior sampled game's, and false when they match. **Read lineup_change_known first**: when that is false this field is false because the comparison could not be made, not because the five held. The row's own lineup_hash does not settle it -- in the case that matters it is the PRIOR game's hash that is missing, and that hash is not on the row."
+            },
+            "lineup_change_known": {
+              "type": "boolean",
+              "description": "Whether this pass could actually compare the five against the prior game's. False when either game's five could not be fully identified, in which case pressure_rate_allowed_adj and lineup_adjustment_pressure_rate are BOTH null with the reason in null_field_reason -- the correction could not be computed, and publishing the uncorrected rate is the spec's named failure mode (measured 51% high on a synthetic reproduction). True when there is no prior game at all, because then nothing could have changed. Everything the uncertainty does not touch still publishes, including pressure_rate_allowed_adj_observed."
             },
             "lineup_adjustment_pressure_rate": {
               "type": ["number", "null"],
-              "description": "The correction added to pressure_rate_allowed_adj, in the same units: the sum of the departing starters' replacement_delta_pressure_rate. 0.0 when the five did not change. Never null and never 0.0 on a row where lineup_changed is true -- a team whose change cannot be corrected is dropped into coverage.missing rather than published stale, because that row is the spec's named failure mode and nothing about it looks malformed."
+              "description": "The correction added to pressure_rate_allowed_adj, in the same units: the sum of the departing starters' replacement_delta_pressure_rate. 0.0 when the five are known not to have changed, and null when lineup_change_known is false. Never null and never 0.0 on a row where lineup_changed is true -- a team whose change cannot be corrected is dropped into coverage.missing rather than published stale, because that row is the spec's named failure mode and nothing about it looks malformed."
             },
             "opponent_pressure_strength_index": {
               "type": ["number", "null"],
@@ -201,7 +206,7 @@
             },
             "replacement_delta_provenance": {
               "enum": ["measured", "league_positional_prior", "unavailable"],
-              "description": "How the delta above was arrived at. 'measured' is a with/without split of this team's own window games, at least two on each side. 'league_positional_prior' is the mean of every measured delta at this slot across the league in the same pass -- an empirical prior, not an invented constant. 'unavailable' means neither existed and the field is null."
+              "description": "How the delta above was arrived at. 'measured' is a with/without split of this team's own window games, at least two on each side, taken on the opponent-adjusted per-game rate. 'league_positional_prior' is the mean of the measured deltas at this slot across the league in the same pass, **restricted to men who are currently starting** -- pooling deputies as well cancels the two sides of every substitution to approximately zero, which is a claim that losing a starter is free. That restriction is a disclosed modelling assumption and it is survivorship-biased: a starter who was replaced and did not get the job back is excluded by construction, so the pool leans toward changes that reverted. 'unavailable' means neither existed and the field is null."
             },
             "replacement_delta_sample_games": {
               "type": "integer",

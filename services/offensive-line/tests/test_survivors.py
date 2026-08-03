@@ -12,6 +12,18 @@ perturb it slightly and watch the perturbation die. The ones whose equivalence
 is a property worth stating carry a note at the site instead: see
 `capture._strength_envelope`'s `acc.expect` block and `lineups.derive_lineups`'
 crosswalk miss.
+
+**That discipline earned its keep on the tie-break.** An independent review
+raised `>` → `>=` there as a live gap whose consequence would be ties
+resolving by CSV row order. The mutation is in fact equivalent — the
+comparison is on a `(snaps, id)` **tuple**, so `>=` can differ only on an
+exact tuple equality, which two distinct players cannot produce — but
+building the neighbours that *do* carry that consequence found a degenerate
+axis in the fixture the review had not: with only two tied men, "highest id"
+coincides with "first row seen" for free, and a first-row-wins mutant
+survived. The tie is three men now, with the winner in the middle of the row
+order. The review's concern was right; the mutation it named was not the one
+that carried it.
 """
 
 import gzip
@@ -24,6 +36,7 @@ from offensive_line import ratings
 from offensive_line.adapters import depth as depth_adapter
 from offensive_line.adapters import identity as identity_adapter
 from offensive_line.adapters import pbp as pbp_adapter
+from offensive_line.adapters import snaps as snaps_adapter
 from offensive_line.capture import STRENGTH, _fold
 from offensive_line.lineups import unavailable_starters
 from offensive_line.ratings import (
@@ -367,6 +380,24 @@ async def test_a_modelled_delta_is_labelled_as_modelled():
     # A measured delta names the games it was measured over; a prior cannot.
     assert all(row["replacement_delta_sample_games"] > 0 for row in measured)
     assert all(row["replacement_delta_sample_games"] == 0 for row in prior)
+
+    # **And the number is the with-side count, not the window length.** Kills
+    # M17. `sample_games` exists so a consumer can judge how much evidence is
+    # behind a `measured` delta; a value that silently reported the whole
+    # window would overstate every one of them and would be indistinguishable
+    # from a genuinely well-sampled measurement.
+    window = season_module.WEEKS
+    for row in measured:
+        started = sum(
+            1
+            for week in range(1, window + 1)
+            if season_module.starting_slot(row["team_id"], week, 0) == 0
+        )
+        if row["team_id"] in season_module.TEAMS[season_module.CHURN_FROM :]:
+            assert row["replacement_delta_sample_games"] == started, row
+            assert row["replacement_delta_sample_games"] < window, (
+                "the whole window is not a with/without split"
+            )
     # And only the teams whose five actually moved have a measurement: the
     # four that benched a tackle, plus the one that swapped its guards -- the
     # same men, but each spent part of the window at a different slot, which
@@ -633,3 +664,141 @@ async def test_the_pbp_fold_holds_no_reference_to_its_loop_key():
     for team, game in totals.offense_game:
         assert isinstance(team, str) and isinstance(game, str)
         assert not game.isdigit(), "a play id has leaked into the fold's keys"
+
+
+# --------------------------------------------------------------------------
+# The fixture's date and tie structure — three defences that were unprovable
+# --------------------------------------------------------------------------
+
+
+async def test_a_snap_tie_breaks_on_the_id_not_on_the_upstreams_row_order():
+    """Kills M16 (the tie-break `>` relaxed to `>=`).
+
+    `TIE_TEAM` runs a genuine left-tackle rotation: two men on identical snap
+    counts every week. Nothing in the snap feed separates them, so the tie has
+    to break on something stable. Break it on the order the upstream happened
+    to write its rows in and the published `lineup_hash` moves between two
+    passes over **byte-identical documents** — a phantom personnel change,
+    which is the one thing this collector's whole continuity story rests on
+    not happening.
+
+    Three men, not two, and the highest id sits in the MIDDLE of the emission
+    order — because with two there is only one ordering axis and "highest id"
+    coincides with either "first row seen" or "last row seen" for free. That
+    is measured, not assumed: a two-man version of this fixture let a
+    first-row-wins mutant through.
+    """
+    rows = starters(await run_capture(Feeds(), lake=SpyLake()))
+    tackle = next(
+        row for row in rows[season_module.TIE_TEAM] if row["starter_position"] == "LT"
+    )
+    higher = max(
+        season_module.line_id(season_module.TIE_TEAM, slot)
+        for slot in season_module.TIE_SLOTS
+    )
+    assert tackle["starter_id"] == canonical_for(higher)
+
+
+async def test_the_tie_is_a_real_tie():
+    """The fixture guard. If the two men ever stopped being level on snaps the
+    test above would pass for the wrong reason and prove nothing."""
+    feeds = Feeds()
+    with respx.mock(assert_all_called=False) as router:
+        feeds.install(router)
+        async with httpx.AsyncClient() as client:
+            fold = await snaps_adapter.fetch_snaps(SEASON, WEEK, client=client)
+    wanted = {
+        season_module.pfr_id(season_module.TIE_TEAM, slot): slot
+        for slot in season_module.TIE_SLOTS
+    }
+    tied = {
+        entry.pfr_id: entry.offense_snaps
+        for entry in fold.line
+        if entry.team == season_module.TIE_TEAM
+        and entry.week == 1
+        and entry.pfr_id in wanted
+    }
+    assert len(tied) == len(season_module.TIE_SLOTS), tied
+    assert len(set(tied.values())) == 1, tied
+
+    # And the winning id must sit in the middle of the emission order, or one
+    # of the two row-order rules reaches the right answer by luck.
+    order = [
+        wanted[entry.pfr_id]
+        for entry in fold.line
+        if entry.team == season_module.TIE_TEAM
+        and entry.week == 1
+        and entry.pfr_id in wanted
+    ]
+    winner = max(season_module.TIE_SLOTS)
+    assert order[0] != winner and order[-1] != winner, order
+
+
+async def test_a_man_who_played_no_snaps_cannot_fill_a_slot():
+    """Kills M18 (`snaps <= 0` relaxed to `< 0`).
+
+    The unlabelled team carries an eighth lineman listed at centre who never
+    plays. He is the *only* candidate for that slot, so a collector that kept
+    zero-snap rows would hand the team a complete five — a `lineup_hash` built
+    on a man who was not on the field, and a continuity streak describing him.
+    """
+    envelopes = await run_capture(Feeds(), lake=SpyLake())
+    assert units(envelopes)[season_module.UNLABELLED_TEAM]["lineup_hash"] is None
+    assert season_module.UNLABELLED_TEAM not in starters(envelopes)
+
+
+async def test_the_week_has_two_kickoff_dates_and_three_chart_snapshots():
+    """The fixture guard for M19 and M20 — the two defences that were
+    unprovable because every week had one game date and every chart landed
+    exactly three days before it.
+
+    The real feed is 219 **daily** snapshots against games spread Thursday to
+    Monday, so M19's trigger — a chart republished on game day — fires weekly
+    in production and fired never in the first version of this fixture.
+    """
+    feeds = Feeds()
+    with respx.mock(assert_all_called=False) as router:
+        feeds.install(router)
+        async with httpx.AsyncClient() as client:
+            fold = await pbp_adapter.fetch_pbp(SEASON, WEEK, client=client)
+            charts = await depth_adapter.fetch_depth_charts(SEASON, client=client)
+
+    dates = {
+        week: {
+            season_module.game_date(week, early=True),
+            season_module.game_date(week),
+        }
+        for week in range(1, season_module.WEEKS + 1)
+    }
+    assert all(len(day) == 2 for day in dates.values()), "one kickoff date a week"
+    # `week_dates` must resolve to the LATEST game, not the first.
+    for week in range(1, season_module.WEEKS + 1):
+        assert fold.week_dates[week] == season_module.game_date(week)
+        assert fold.week_dates[week] > season_module.game_date(week, early=True)
+    # And a snapshot published ON a game date exists, so a lookup that stops
+    # short of it reads a different chart.
+    for week in range(1, season_module.WEEKS + 1):
+        assert season_module.game_date(week) in charts.dates
+        assert len(set(season_module.chart_dates(week))) == 3
+
+
+def test_the_tie_break_compares_a_tuple_not_a_snap_count():
+    """Why the review's `>` -> `>=` on the tie-break is **equivalent**.
+
+    `candidate` is `(offense_snaps, gsis_id)`. Tuple comparison already
+    resolves a snap tie on the id, so relaxing `>` to `>=` can only change the
+    outcome when the two tuples are *exactly* equal — same snaps and same id,
+    i.e. the same player twice in one game at one slot, which the upstream's
+    one-row-per-player-per-game shape cannot produce.
+
+    The consequence the review described — ties resolving by row order — needs
+    the comparison to be on the snap count alone. Those are the neighbours
+    `test_a_snap_tie_breaks_on_the_id_not_on_the_upstreams_row_order` kills,
+    in both directions (first-row-wins and last-row-wins).
+    """
+    first = (68, "00-102000")
+    second = (68, "00-102060")
+    assert (second > first) == (second >= first)
+    assert (first > second) == (first >= second)
+    # ...and the only input that separates them is one no feed can emit.
+    assert (first >= first) and not (first > first)

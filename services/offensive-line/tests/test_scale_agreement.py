@@ -132,34 +132,61 @@ def test_the_two_adjustment_methods_are_the_same_arithmetic_named_per_side(
 # --------------------------------------------------------------------------
 
 
-def _sibling_line_yards(constants: dict[str, object], rushing_yards: float) -> float:
-    """`defensive_front.ratings.line_yards`, reconstructed from its constants.
+def _sibling_callable(path: Path, name: str, constants: dict[str, object]):
+    """The sibling's OWN function, compiled and made callable.
 
-    Reconstructed rather than copied: the parameters come from the sibling's
-    own source, so this function is only the *shape* of the curve. A test that
-    hard-coded both would agree with itself forever.
+    **Not a reconstruction.** An earlier revision of this file rebuilt the
+    shape of `defensive_front.line_yards` from this collector's source while
+    reading only the sibling's *constants*, which made a "numerically, every
+    tenth of a yard" test into a constants test wearing a behaviour test's
+    clothes. Three mutations of the sibling's body — the band boundary moved,
+    the cap replaced by `0.0` (every carry past ten yards worth nothing), and
+    the loss credit's sign flipped — all survived this collector's entire
+    suite. That is the precise failure the pairing constraint exists to
+    prevent, since the generator subtracts the two collectors' `_adj` columns.
+
+    So the sibling's `FunctionDef` is lifted out of its module's AST and
+    executed in a namespace built from that same module's constants. Nothing
+    about the curve's shape comes from this side any more.
+
+    `exec` on a repo-local source file this test already parses, in a
+    namespace with no builtins beyond what the function needs. It is not
+    importable: `defensive-front` is a separate uv workspace member and is not
+    installed in this service's environment, which is why the whole file works
+    by AST in the first place.
     """
-    if rushing_yards < 0.0:
-        return constants["LINE_YARDS_LOSS_CREDIT"] * rushing_yards
-    if rushing_yards <= constants["LINE_YARDS_FULL_MAX"]:
-        return rushing_yards
-    if rushing_yards <= constants["LINE_YARDS_HALF_MAX"]:
-        return constants["LINE_YARDS_FULL_MAX"] + constants[
-            "LINE_YARDS_HALF_CREDIT"
-        ] * (rushing_yards - constants["LINE_YARDS_FULL_MAX"])
-    return constants["LINE_YARDS_CAP"]
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            # `float` is bound because the signature's annotations are
+            # evaluated at definition time; nothing else from builtins is.
+            namespace: dict[str, object] = {
+                "__builtins__": {},
+                "float": float,
+                **constants,
+            }
+            exec(  # noqa: S102 — repo-local source, restricted namespace
+                compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"),
+                namespace,
+            )
+            return namespace[name]
+    raise AssertionError(f"{name} is not defined in {path}")
 
 
 def test_the_two_line_yards_curves_agree_across_the_whole_range(sibling):
-    """Numerically, at every tenth of a yard from a 20-yard loss to a 99-yard
-    gain. Comparing the constants alone would miss a reordered band or a `<`
-    that became a `<=` — both of which change the credit at a boundary and
-    neither of which touches a constant."""
+    """The sibling's own curve against ours, at every tenth of a yard from a
+    20-yard loss to a 99-yard gain.
+
+    Kept **alongside** the AST comparison below rather than replaced by it,
+    and it earns its place: the AST test fails on a semantically identical
+    refactor (the sibling rewriting the bands as a loop, say), where this one
+    passes. Between them, a behavioural divergence is caught twice and a
+    cosmetic one is caught once and can be argued about.
+    """
+    theirs = _sibling_callable(SIBLING, "line_yards", sibling)
     for tenths in range(-200, 991):
         yards = tenths / 10.0
-        assert ratings.line_yards(yards) == pytest.approx(
-            _sibling_line_yards(sibling, yards)
-        ), yards
+        assert ratings.line_yards(yards) == pytest.approx(theirs(yards)), yards
 
 
 # --------------------------------------------------------------------------
@@ -205,7 +232,9 @@ def _side_neutral(dump: str) -> str:
 OURS = Path(ratings.__file__)
 
 
-@pytest.mark.parametrize("name", ["opponent_strengths", "_faced_strength", "_adjust"])
+@pytest.mark.parametrize(
+    "name", ["line_yards", "opponent_strengths", "_faced_strength", "_adjust"]
+)
 def test_the_adjustment_arithmetic_is_identical_to_defensive_fronts(name):
     """**The leave-one-out adjustment, statement for statement.**
 

@@ -73,7 +73,12 @@ def assert_lineup_guard(rows: Sequence[dict]) -> None:
     for its own guard, and for the same reason: a guard that inspects an
     intermediate structure proves nothing about the rows that reach the lake.
 
-    Three arms, and each one is separately reachable by a mutation:
+    Four arms, and each one is separately reachable by a mutation:
+
+    0. A row whose change status is **unknown** must not publish a corrected
+       rate at all. This is the arm that used to be missing entirely: the
+       guard only ever inspected rows claiming a change, so a row that could
+       not tell published as one that verified stability.
 
     1. `continuity_games == 0`. The spec states it outright. Structurally
        guaranteed by `continuity_games`' walk-back today, which makes this a
@@ -89,9 +94,28 @@ def assert_lineup_guard(rows: Sequence[dict]) -> None:
        a generator reads.
     """
     for row in rows:
-        if row.get("record_type") != RECORD_UNIT or not row.get("lineup_changed"):
+        if row.get("record_type") != RECORD_UNIT:
             continue
         team = row.get("team_id")
+
+        # **Arm 0, and the one the guard did not used to have.** Every arm
+        # below inspects a row that says its lineup changed; a row that says
+        # it did *not* was previously never looked at, and "could not tell"
+        # published as "did not change" — with an uncorrected adjusted rate
+        # measured 51% high on this collector's own fixture, and reachable
+        # from the live documents through one blank `pfr_id`. See
+        # `ratings.UNDETERMINABLE_CHANGE_REASON`.
+        if row.get("lineup_change_known") is False:
+            if row.get("pressure_rate_allowed_adj") is not None:
+                raise StaleUnitRow(
+                    f"{team}: this pass cannot tell whether the five changed, "
+                    f"so pressure_rate_allowed_adj must be null; it is "
+                    f"{row.get('pressure_rate_allowed_adj')!r}"
+                )
+            continue
+
+        if not row.get("lineup_changed"):
+            continue
 
         if row.get("continuity_games") != 0:
             raise StaleUnitRow(

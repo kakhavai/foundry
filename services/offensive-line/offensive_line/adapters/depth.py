@@ -6,6 +6,14 @@ says which of the five slots the label puts them in, which is what
 warning — "or continuity becomes a description of the team's press releases" —
 is about the first question, and this adapter is deliberately never asked it.
 
+**One nuance, and it is the mechanism behind a real failure.** The chart is
+not purely a label source: a man who took snaps but is absent from the chart
+has no slot to occupy, so the chart is also a *candidacy filter*. That is
+unavoidable — sidedness exists in no other free feed — but it means a
+charting gap and a crosswalk gap both remove a genuine starter from the five,
+which leaves the team's `lineup_hash` null and its change status unknowable.
+`ratings.UNDETERMINABLE_CHANGE_REASON` is what the collector does about it.
+
 --------------------------------------------------------------------------
 Format, and the thing that nearly blocked the collector
 --------------------------------------------------------------------------

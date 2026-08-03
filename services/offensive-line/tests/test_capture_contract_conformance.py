@@ -171,7 +171,15 @@ async def test_the_unsourceable_fields_are_null_with_a_reason():
         for field in NULL_FIELD_REASON:
             assert row[field] is None
             assert row["null_field_reason"][field]
-        assert row["null_field_reason"] == NULL_FIELD_REASON
+        if row["lineup_change_known"]:
+            assert row["null_field_reason"] == NULL_FIELD_REASON
+        else:
+            # A row that cannot tell whether its five changed nulls two more
+            # fields, each with its own reason. Superset, never a replacement:
+            # the unsourceable ones stay unsourceable.
+            assert NULL_FIELD_REASON.items() <= row["null_field_reason"].items()
+            assert row["pressure_rate_allowed_adj"] is None
+            assert row["null_field_reason"]["pressure_rate_allowed_adj"]
 
 
 def test_the_schema_forbids_a_value_for_the_unsourceable_fields():

@@ -81,6 +81,38 @@ SWAP_TEAM = "BBB"
 SWAP_FROM_WEEK = 4
 SWAP_SLOTS = (1, 3)  # LG and RG
 
+# **The swap is published on the game-day snapshot of `SWAP_FROM_WEEK`**, not
+# before it. That single choice is what makes two documented defences
+# testable at once: a lookup that stops short of game day (`bisect_left`) and
+# a `week_dates` that takes the week's *earliest* game both read the
+# pre-swap chart for that week, and both then report `SWAP_TEAM` as having
+# changed its five in week 5 when it did not.
+SWAP_FROM_SNAPSHOT = 2  # index into `chart_dates`: 0 Tue, 1 Sat, 2 game day
+
+# A team whose left tackle is a genuine rotation: **three** men on identical
+# snap counts, every week. Nothing in the snap feed separates them, so the tie
+# has to break on something stable — the id — and never on the order the
+# upstream happened to write its rows in.
+#
+# **Three, not two, and the emission order is chosen rather than convenient.**
+# With two tied men there is only one ordering axis, so "highest id" coincides
+# with either "first row seen" or "last row seen" whichever way they are
+# emitted — and a mutation resolving the tie by row order then survives half
+# the time for free. Measured: a two-man tie emitted in descending slot order
+# let a first-row-wins mutant through, because first-seen happened to be the
+# highest id. With three men and the highest id placed in the MIDDLE of the
+# emission order, neither row-order rule can reach the right answer.
+TIE_TEAM = "CCC"
+TIE_SLOTS = (0, 5, 6)
+# Emission order for those three. The highest id is `TIE_SLOTS`' last element
+# by construction (ids ascend with the slot), so it is placed second here.
+TIE_EMISSION_ORDER = (0, 6, 5)
+
+# An eighth roster slot, on the unlabelled team only: listed at centre and
+# credited with **zero** offensive snaps. A man who did not play cannot fill
+# a slot, and without such a row in the fixture that rule is unfalsifiable.
+ZERO_SNAP_SLOT = 7
+
 SNAPS_PER_GAME = 24
 CARRIES_PER_GAME = 18
 
@@ -176,18 +208,28 @@ def skill_id(team: str) -> str:
     return f"Qb{TEAMS.index(team):02d}0001"
 
 
-def slot_label(team: str, week: int, slot: int) -> str:
-    """Which of the five slots the depth chart puts roster `slot` in, in `week`.
+def _label(team: str, slot: int, swapped: bool) -> str:
+    """Which of the five slots one snapshot puts roster `slot` in.
 
-    The **label**, never the membership — `snap_counts` decides who plays. The
-    swap team's two guards trade labels from `SWAP_FROM_WEEK`, which is what
-    makes the per-week chart lookup testable.
+    The **label**, never the membership — `snap_counts` decides who plays.
+    `swapped` is a property of the snapshot rather than of the week, so a
+    chart published mid-week can differ from the one published before it.
     """
     position = SLOT_POSITIONS[slot % STARTER_SLOTS]
-    if team == SWAP_TEAM and week >= SWAP_FROM_WEEK and slot in SWAP_SLOTS:
+    if swapped and team == SWAP_TEAM and slot in SWAP_SLOTS:
         other = SWAP_SLOTS[1] if slot == SWAP_SLOTS[0] else SWAP_SLOTS[0]
         return SLOT_POSITIONS[other]
     return position
+
+
+def slot_label(team: str, week: int, slot: int) -> str:
+    """The label a correct per-week lookup resolves for `week`.
+
+    The swap lands on the game-day snapshot of `SWAP_FROM_WEEK`, and the
+    correct lookup reads the chart current for the week's LATEST game — so it
+    sees the swap from that week onward.
+    """
+    return _label(team, slot, week >= SWAP_FROM_WEEK)
 
 
 def starting_slot(team: str, week: int, slot_index: int) -> int:
@@ -235,15 +277,82 @@ SEASON_OPENER = date(SEASON, 9, 13)
 # A preseason snapshot, well before week 1.
 PRESEASON_CHART_DATE = date(SEASON, 8, 15).isoformat()
 
+# --------------------------------------------------------------------------
+# **The calendar's shape is load-bearing, and its first version was
+# degenerate.**
+#
+# It used to be one game date per week with every chart snapshot exactly three
+# days earlier, never colliding. Three of this collector's documented defences
+# were consequently indistinguishable from their opposites, and one of them —
+# reading the chart with `bisect_right` so a snapshot published ON game day
+# counts — has a trigger that fires *weekly* against the real feed, which is
+# 219 **daily** snapshots against games spread Thursday to Monday.
+#
+# So: two game days a week, and three chart snapshots a week, one of them on
+# game day.
+#
+#   Tue   chart (pre-week)
+#   Thu   the early game            <- one pairing a week kicks off here
+#   Sat   chart (mid-week)
+#   Sun   chart (game day)  +  the rest of the slate
+#
+# `week_dates` must resolve to the **Sunday** — the latest game in the week —
+# or a Monday-nighter gets labelled from a chart published before the slate.
+# The label lookup must include the Sunday chart, not stop before it.
+# --------------------------------------------------------------------------
 
-def game_date(week: int) -> str:
-    """A plausible Sunday, one week apart. The depth-chart calendar's input."""
-    return (SEASON_OPENER + timedelta(days=7 * (week - 1))).isoformat()
+# How many of each week's pairings kick off on the Thursday.
+EARLY_GAMES_PER_WEEK = 1
+
+
+def _sunday(week: int) -> date:
+    return SEASON_OPENER + timedelta(days=7 * (week - 1))
+
+
+def game_date(week: int, *, early: bool = False) -> str:
+    """The Sunday of `week`, or its Thursday for the early pairing.
+
+    `early=False` is what `week_dates` must end up holding: the latest game in
+    the week, not the first.
+    """
+    return (_sunday(week) - timedelta(days=3 if early else 0)).isoformat()
+
+
+def chart_dates(week: int) -> tuple[str, str, str]:
+    """`(Tuesday, Saturday, Sunday)` snapshots — the last one on game day.
+
+    Three a week rather than one, and the game-day snapshot is the whole
+    point: the real feed republishes daily, so the chart current for a Sunday
+    game is routinely one dated that Sunday. A lookup that stopped short of it
+    would silently read Saturday's chart every single week.
+    """
+    sunday = _sunday(week)
+    return (
+        (sunday - timedelta(days=5)).isoformat(),
+        (sunday - timedelta(days=1)).isoformat(),
+        sunday.isoformat(),
+    )
 
 
 def chart_date(week: int) -> str:
-    """The depth-chart snapshot published for `week`, three days before it."""
-    return (SEASON_OPENER + timedelta(days=7 * (week - 1) - 3)).isoformat()
+    """The snapshot that must be current for `week`'s latest game."""
+    return chart_dates(week)[-1]
+
+
+def early_game_ids(*, season: int = SEASON) -> frozenset[str]:
+    """The `EARLY_GAMES_PER_WEEK` pairings a week that kick off on Thursday.
+
+    A week with two kickoff dates is what makes "the latest game in the week"
+    a different answer from "the first", and therefore what makes the
+    `week_dates` defence testable at all.
+    """
+    seen: dict[int, int] = {}
+    early: set[str] = set()
+    for game_id, week, _home, _away in games(season=season):
+        seen[week] = seen.get(week, 0) + 1
+        if seen[week] <= EARLY_GAMES_PER_WEEK:
+            early.add(game_id)
+    return frozenset(early)
 
 
 @dataclass
@@ -263,6 +372,7 @@ class Play:
     rushers: int = 0
     was_pressure: bool = False
     time_to_throw: float | None = None
+    early: bool = False
 
 
 @dataclass
@@ -285,9 +395,11 @@ def build_season(
     adjustment from one that collapses to the league mean.
     """
     built = Season(season=season)
+    early = early_game_ids(season=season)
     for game_id, week, home, away in games(season=season):
         if weeks is not None and week not in weeks:
             continue
+        is_early = game_id in early
         play_id = 0
         for offense, defense in ((home, away), (away, home)):
             benched = starting_slot(offense, week, 0) == SWING_SLOT
@@ -318,6 +430,7 @@ def build_season(
                             if index % RELEASE_EVERY == 0
                             else None
                         ),
+                        early=is_early,
                     )
                 )
             for index in range(CARRIES_PER_GAME):
@@ -342,6 +455,7 @@ def build_season(
                         play_type="run",
                         rush=True,
                         rushing_yards=round(yards),
+                        early=is_early,
                     )
                 )
     return built
@@ -397,7 +511,7 @@ def _pbp_row(play: Play, season_type: str) -> dict[str, str]:
     return {
         "game_id": play.game_id,
         "play_id": str(play.play_id),
-        "game_date": game_date(play.week),
+        "game_date": game_date(play.week, early=play.early),
         "season_type": season_type,
         "week": str(play.week),
         "posteam": play.offense,
@@ -708,10 +822,28 @@ def snap_counts_document(
             starting = {
                 starting_slot(team, week, index) for index in range(STARTER_SLOTS)
             }
-            for slot in range(LINE_PER_TEAM):
+            extra = [ZERO_SNAP_SLOT] if team == UNLABELLED_TEAM else []
+            # **Row order is deliberately not slot order.** The upstream's is
+            # its own business, and a tie must not be decided by it — see
+            # `TIE_EMISSION_ORDER` for why the tied team's three men are
+            # emitted with the highest id in the middle.
+            order = sorted([*range(LINE_PER_TEAM), *extra], reverse=True)
+            if team == TIE_TEAM:
+                rest = [slot for slot in order if slot not in TIE_SLOTS]
+                order = [*TIE_EMISSION_ORDER, *rest]
+            for slot in order:
                 if (team, slot) in drop_players:
                     continue
-                snaps = STARTER_SNAPS if slot in starting else BENCH_SNAPS
+                if slot == ZERO_SNAP_SLOT:
+                    snaps = 0
+                elif team == TIE_TEAM and slot in TIE_SLOTS:  # noqa: SIM114
+                    # A genuine rotation: nothing in the snap feed separates
+                    # these two, so the tie has to break on the id.
+                    snaps = STARTER_SNAPS
+                elif slot in starting:
+                    snaps = STARTER_SNAPS
+                else:
+                    snaps = BENCH_SNAPS
                 rows.append(
                     _snap_row(
                         game_id=game_id,
@@ -801,20 +933,36 @@ def depth_charts_document(
             add(PRESEASON_CHART_DATE, team, slot, position, 1)
 
     for week in range(1, WEEKS + 1):
-        date = chart_date(week)
-        for team in TEAMS:
-            for index in range(STARTER_SLOTS):
-                add(date, team, index, slot_label(team, week, index), 1)
-            # The two reserves are listed behind the slots they cover, so a
-            # week in which one of them plays still has five labelled slots.
-            add(date, team, SWING_SLOT, "LT", 2)
-            add(date, team, SWING_SLOT + 1, "LG", 2)
-            # **The swing man twice in one snapshot**, at a slot he is ranked
-            # lower in. A real chart lists a swing tackle behind both edges;
-            # the adapter has to pick his better rank, and doing it by row
-            # order instead would make the label depend on how the CSV was
-            # written.
-            add(date, team, SWING_SLOT, "RT", 3)
+        for index, snapshot in enumerate(chart_dates(week)):
+            # The swap is published mid-week, on the game-day snapshot. Every
+            # snapshot from that instant onward carries it; the two earlier
+            # ones that same week do not. That is what separates "the chart
+            # current for the Sunday game" from "the chart published before
+            # the slate" and from "Saturday's chart".
+            swapped = (week, index) >= (SWAP_FROM_WEEK, SWAP_FROM_SNAPSHOT)
+            for team in TEAMS:
+                for slot in range(STARTER_SLOTS):
+                    add(snapshot, team, slot, _label(team, slot, swapped), 1)
+                # The two reserves are listed behind the slots they cover, so
+                # a week in which one of them plays still has five labelled
+                # slots.
+                add(snapshot, team, SWING_SLOT, "LT", 2)
+                add(snapshot, team, SWING_SLOT + 1, "LG", 2)
+                # **The swing man twice in one snapshot**, at a slot he is
+                # ranked lower in. A real chart lists a swing tackle behind
+                # both edges; the adapter has to pick his better rank, and
+                # doing it by row order instead would make the label depend
+                # on how the CSV was written.
+                add(snapshot, team, SWING_SLOT, "RT", 3)
+                if team == UNLABELLED_TEAM:
+                    # The eighth man: listed at centre, and he never plays a
+                    # snap. See `ZERO_SNAP_SLOT`.
+                    add(snapshot, team, ZERO_SNAP_SLOT, "C", 1)
+                if team == TIE_TEAM:
+                    # The third man in the left-tackle rotation. Listed at LT
+                    # ahead of his generic LG-reserve line, so the lowest-rank
+                    # rule puts him at tackle. See `TIE_SLOTS`.
+                    add(snapshot, team, TIE_SLOTS[-1], "LT", 1)
     return gzip.compress(_csv(DEPTH_COLUMNS, rows).encode("utf-8"))
 
 
@@ -847,7 +995,8 @@ def players_document(
     """
     rows: list[dict[str, str]] = []
     for team_index, team in enumerate(TEAMS):
-        for slot in range(LINE_PER_TEAM):
+        extra = [ZERO_SNAP_SLOT] if team == UNLABELLED_TEAM else []
+        for slot in [*range(LINE_PER_TEAM), *extra]:
             position = SLOT_ROSTER_POSITION[slot % STARTER_SLOTS]
             rows.append(
                 {

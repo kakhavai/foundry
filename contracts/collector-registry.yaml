@@ -808,9 +808,12 @@ collectors:
     # old grades into the week it will be worst -- is a publish-time
     # cross-field assertion that FAILS the pass rather than flagging it. It
     # asserts an arithmetic invariant over rows this process just built, so a
-    # violation can only be a defect in the collector. The neighbouring case,
-    # a changed lineup with no replacement delta to correct it, is missing
-    # data rather than a defect and goes to coverage.missing instead.
+    # violation can only be a defect in the collector. Two neighbouring cases
+    # are data rather than defects and are handled without a raise: a changed
+    # lineup with no replacement delta to correct it drops the team into
+    # coverage.missing, and a pass that cannot tell whether the five changed
+    # (either game's five unidentifiable) publishes the row with
+    # lineup_change_known false and pressure_rate_allowed_adj null.
     #
     # depends_on player-identity for `starter_id` only; every unit column is
     # keyed by team. Not scope_aware: the spec says so outright -- the unit

@@ -205,9 +205,36 @@ def _present_keys(envelope) -> list[str]:
 
 async def test_an_exceeded_deadline_records_the_rest_as_missing():
     """A truncated pass that reports itself truncated is useful; one that
-    reports itself complete is not."""
+    reports itself complete is not.
+
+    **`signals == []` is asserted alongside `present == 0`, and that pairing
+    is the whole test.** Without it a regression that put the built rows into
+    the envelope instead of the published ones would ship every row while
+    simultaneously declaring all 192 keys missing — output that contradicts
+    itself, and that `coverage.present == 0` alone reads as correct.
+    """
     past = datetime.now(tz=UTC) - timedelta(seconds=1)
     envelope = (await run_capture(Feeds(), lake=SpyLake(), deadline=past))[STRENGTH]
     assert envelope.coverage.present == 0
+    assert envelope.signals == [], (
+        "a pass that declares every key missing must publish no row"
+    )
+    assert len(envelope.coverage.missing) == TEAM_COUNT * ROWS_PER_TEAM
     assert envelope.coverage.expected == EXPECTED_FLOOR[STRENGTH]
     assert "deadline_exceeded" in {error["reason"] for error in envelope.errors}
+
+
+async def test_every_published_row_belongs_to_a_team_reported_present():
+    """The general form of the claim above, on the ordinary path: a row in
+    `signals` and a key in `coverage.missing` are mutually exclusive for the
+    same team, so no consumer can read a row the envelope disowns."""
+    envelope = (await run_capture(Feeds(), lake=SpyLake()))[STRENGTH]
+    missing = set(envelope.coverage.missing)
+    for row in envelope.signals:
+        team = row["team_id"]
+        key = (
+            f"{team}:{RECORD_UNIT}"
+            if row["record_type"] == RECORD_UNIT
+            else f"{team}:{row['starter_position']}"
+        )
+        assert key not in missing, f"{key} is published and declared missing"

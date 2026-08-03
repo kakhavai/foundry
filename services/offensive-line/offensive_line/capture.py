@@ -152,6 +152,15 @@ TEAMS_IN_LEAGUE = 32
 ROWS_PER_TEAM = 1 + len(STARTER_POSITIONS)
 EXPECTED_FLOOR: dict[str, int] = {STRENGTH: TEAMS_IN_LEAGUE * ROWS_PER_TEAM}
 
+# **A September consequence worth knowing before it looks like an outage.**
+# `ratings.MIN_DELTA_GAMES` is 2 on *both* sides of a with/without split, and
+# the positional prior is derived from that same pass's measurements — so no
+# replacement delta of any kind exists before a team's fourth game. Every team
+# that changes its five in weeks 1-3 is therefore dropped wholesale with
+# `lineup_changed_without_replacement_delta`, and league coverage sits well
+# below 192 for the first month of a season. That is the honest reading of a
+# window too short to measure anything, not a broken collector; a cross-season
+# prior read back from the lake is the fix and is not built.
 REASON_NO_PASS_BLOCK_SNAPS = "no_charted_pass_block_snaps_for_this_team"
 REASON_STARTERS_UNIDENTIFIED = "fewer_than_five_identified_starters"
 REASON_STALE_UNIT = STALE_UNIT_REASON

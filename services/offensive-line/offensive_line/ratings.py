@@ -62,6 +62,7 @@ __all__ = [
     "RECORD_UNIT",
     "STARTER_POSITIONS",
     "UNCORRECTABLE_LINEUP_CHANGE",
+    "UNDETERMINABLE_CHANGE_REASON",
     "DefenseGameTotals",
     "LineTotals",
     "OffenseGameTotals",
@@ -148,6 +149,40 @@ PROVENANCE_UNAVAILABLE = "unavailable"
 # much the change moves the rate, so the only publishable row would be a stale
 # one. See `guard.py`'s docstring for why this is coverage rather than a raise.
 UNCORRECTABLE_LINEUP_CHANGE = "lineup_changed_without_replacement_delta"
+
+# **Why `pressure_rate_allowed_adj` is null on an otherwise healthy row.**
+#
+# `lineup_changed: false` has two meanings and only one of them is safe. It is
+# safe when both this game's five and the prior game's five were identified
+# and match. It is a **lie** when either could not be identified: the five may
+# have moved, the correction was never computed, and the published adjusted
+# rate is the one the departed players earned.
+#
+# Reproduced against this collector's own fixture: blinding one slot of the
+# PRIOR game publishes 0.3537 where the corrected value is 0.2342 — **51%
+# high** — with coverage, the row's own `lineup_hash`, its five starter rows
+# and its schema validity all identical to a healthy pass. The row's own hash
+# is fine; only the prior one was missing, and the prior hash is not on the
+# row, so no consumer following the schema's "read it together with
+# lineup_hash" advice could tell.
+#
+# It is reachable from the live documents. On the real 2025 season exactly one
+# offensive lineman cannot be crosswalked from `snap_counts` to `gsis_id` —
+# Alec Anderson (BUF), blank `pfr_id` in `players.csv` — and he played 74 of
+# 74 offensive snaps in week 13 and 75 of 75 in week 18. Two full starts that
+# cannot be named, either of which produces exactly this state for Buffalo in
+# the following week.
+#
+# So the field is nulled with this reason rather than published uncorrected.
+# Everything the uncertainty does not touch — the raw rates, the observed
+# opponent-adjusted rate, `adjusted_line_yards`, `mean_time_to_throw` — still
+# publishes, which is why this is a null rather than a dropped team.
+UNDETERMINABLE_CHANGE_REASON = (
+    "lineup_change_undeterminable; the prior or current game's five could not "
+    "be identified, so this pass cannot tell a stable line from a changed one "
+    "and will not publish a correction it could not compute. "
+    "pressure_rate_allowed_adj_observed is unaffected"
+)
 
 # `lineup_hash` length. 16 hex characters is 64 bits — collision-free at 32
 # teams x 18 weeks by an enormous margin, and short enough to read in a log
@@ -716,23 +751,38 @@ def build_rows(
         hashes = [lineup_hash(totals.lineups.get((team, game), [])) for game in games]
         current_hash = hashes[-1] if hashes else None
         prior_hash = hashes[-2] if len(hashes) >= 2 else None
-        changed = (
-            current_hash is not None
-            and prior_hash is not None
-            and current_hash != prior_hash
+        has_prior = len(hashes) >= 2
+        # **Three states, not two.** With no prior game nothing could have
+        # changed, so the status is known. With a prior game it is known only
+        # when both fives were identified. See `UNDETERMINABLE_CHANGE_REASON`.
+        change_known = not has_prior or (
+            current_hash is not None and prior_hash is not None
         )
+        changed = change_known and has_prior and current_hash != prior_hash
         streak = continuity_games(hashes)
 
-        adjustment, adjustment_ok = _lineup_correction(
-            team,
-            games,
-            totals,
-            changed=changed,
-            measured=measured,
-            priors=priors,
-            sample_games=sample_games,
-        )
-        corrected_adj = _round(apply_lineup_adjustment(observed_adj, adjustment))
+        if change_known:
+            adjustment, adjustment_ok = _lineup_correction(
+                team,
+                games,
+                totals,
+                changed=changed,
+                measured=measured,
+                priors=priors,
+                sample_games=sample_games,
+            )
+            corrected_adj = _round(apply_lineup_adjustment(observed_adj, adjustment))
+            reasons = dict(null_field_reason)
+        else:
+            # Not a correction of zero — no correction. A zero would claim the
+            # five are unchanged, which is exactly what this pass cannot say.
+            adjustment, adjustment_ok = None, True
+            corrected_adj = None
+            reasons = {
+                **null_field_reason,
+                "pressure_rate_allowed_adj": UNDETERMINABLE_CHANGE_REASON,
+                "lineup_adjustment_pressure_rate": UNDETERMINABLE_CHANGE_REASON,
+            }
 
         unit_row = {
             "team_id": team,
@@ -759,12 +809,17 @@ def build_rows(
             "lineup_hash": current_hash,
             "continuity_games": streak,
             "lineup_changed": changed,
+            # The third state, on the row. `lineup_changed: false` alone
+            # cannot distinguish "verified stable" from "could not tell", and
+            # the row's own `lineup_hash` does not help — in the deceptive
+            # case it is the PRIOR game's hash that is missing.
+            "lineup_change_known": change_known,
             "lineup_adjustment_pressure_rate": adjustment,
             "opponent_pressure_strength_index": _round(faced_pressure),
             "adjustment_method": ADJUSTMENT_METHOD,
             "adjustment_window_weeks": window_weeks,
             "degraded_upstreams": list(degraded),
-            "null_field_reason": dict(null_field_reason),
+            "null_field_reason": reasons,
         }
 
         if changed and not adjustment_ok:

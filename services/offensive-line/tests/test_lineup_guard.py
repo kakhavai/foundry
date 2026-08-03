@@ -246,3 +246,118 @@ async def test_a_dropped_team_leaves_the_rest_of_the_envelope_valid():
 
     envelopes = await _capture_with(lambda totals, strengths: {})
     jsonschema.validate(envelopes[STRENGTH].to_dict(), envelope_schema)
+
+
+# --------------------------------------------------------------------------
+# The arm that used to be missing: "could not tell" is not "did not change"
+# --------------------------------------------------------------------------
+
+
+def _blind_one_slot(team: str, week: int):
+    """Remove one man from `team`'s lineup in `week`, as a live feed can.
+
+    Not a synthetic condition. On the real 2025 season exactly one offensive
+    lineman cannot be crosswalked from `snap_counts` to a `gsis_id` — Alec
+    Anderson (BUF), blank `pfr_id` in `players.csv` — and he played 74 of 74
+    offensive snaps in week 13 and 75 of 75 in week 18. Either start leaves
+    Buffalo's five for that game unidentifiable, which is exactly this.
+    """
+    from offensive_line import ratings as ratings_module
+
+    original = ratings_module.build_rows
+
+    def blinded(totals, **kwargs):
+        for (found, game), slots in list(totals.lineups.items()):
+            if found == team and totals.game_week.get(game) == week:
+                totals.lineups[(found, game)] = slots[:-1]
+        return original(totals, **kwargs)
+
+    return blinded
+
+
+async def _capture_blinding(team: str, week: int):
+    from offensive_line import capture as capture_module
+
+    original = capture_module.build_rows
+    capture_module.build_rows = _blind_one_slot(team, week)
+    try:
+        return await run_capture(Feeds(), lake=SpyLake())
+    finally:
+        capture_module.build_rows = original
+
+
+async def test_an_unknown_prior_lineup_does_not_publish_as_verified_stable():
+    """**The blind spot, closed.**
+
+    Blinding one slot of the PRIOR game makes the naive `changed` false while
+    the five genuinely moved. Before this arm existed the row published
+    `pressure_rate_allowed_adj = 0.3537` where the corrected value is 0.2342 —
+    **51% high** — with coverage, the row's own `lineup_hash`, its five
+    starter rows and its schema validity all identical to a healthy pass. The
+    row's own hash is populated; only the prior one is missing, and the prior
+    hash is not on the row, so the schema's "read it together with
+    lineup_hash" advice could not have saved a consumer.
+    """
+    envelopes = await _capture_blinding(CHURNED, season_module.WEEKS - 1)
+    row = units(envelopes)[CHURNED]
+
+    assert row["lineup_change_known"] is False
+    assert row["pressure_rate_allowed_adj"] is None
+    assert row["lineup_adjustment_pressure_rate"] is None
+    assert row["null_field_reason"]["pressure_rate_allowed_adj"]
+    # Everything the uncertainty does not touch still publishes — which is why
+    # this is a null rather than a dropped team.
+    assert row["pressure_rate_allowed_adj_observed"] is not None
+    assert row["pressure_rate_allowed"] is not None
+    assert row["adjusted_line_yards"] is not None
+
+
+async def test_an_unknown_current_lineup_does_not_publish_a_corrected_rate():
+    """The other half. A null `lineup_hash` is at least visible, but a
+    consumer differencing `pressure_rate_allowed_adj` against
+    `defensive-front` never looks at the hash."""
+    envelopes = await _capture_blinding(CHURNED, season_module.WEEKS)
+    row = units(envelopes)[CHURNED]
+    assert row["lineup_hash"] is None
+    assert row["lineup_change_known"] is False
+    assert row["pressure_rate_allowed_adj"] is None
+
+
+async def test_a_verified_stable_line_still_publishes_its_corrected_rate():
+    """The negative arm, and it is what stops the fix from being "null it
+    always". A team whose five were identified in both games has a known
+    status, a zero correction, and a published rate."""
+    row = units(await run_capture(Feeds(), lake=SpyLake()))[STABLE]
+    assert row["lineup_change_known"] is True
+    assert row["lineup_adjustment_pressure_rate"] == 0.0
+    assert row["pressure_rate_allowed_adj"] is not None
+
+
+async def test_a_team_with_one_game_has_a_known_status():
+    """With no prior game nothing could have changed, so week 1 is not
+    "unknown" — and treating it as unknown would null the adjusted rate for
+    the entire league in week 1, every season."""
+    envelopes = await run_capture(Feeds(), lake=SpyLake(), week=1)
+    for team, row in units(envelopes).items():
+        assert row["lineup_change_known"] is True, team
+        assert row["lineup_changed"] is False, team
+
+
+def test_the_guard_rejects_a_corrected_rate_it_could_not_have_computed():
+    """Arm 0 in isolation, so the mutation that deletes it is killable
+    independently of the fixture reaching the state."""
+    row = {
+        "record_type": RECORD_UNIT,
+        "team_id": "AAA",
+        "lineup_change_known": False,
+        "lineup_changed": False,
+        "continuity_games": 0,
+        "lineup_adjustment_pressure_rate": None,
+        "pressure_rate_allowed_adj_observed": 0.30,
+        "pressure_rate_allowed_adj": 0.30,
+    }
+    with pytest.raises(StaleUnitRow, match="cannot tell"):
+        assert_lineup_guard([row])
+
+    row["pressure_rate_allowed_adj"] = None
+    assert_lineup_guard([row])

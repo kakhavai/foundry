@@ -1208,6 +1208,21 @@ flags.** Whenever `lineup_hash` differs from the prior game's, a publish-time
 cross-field assertion requires `continuity_games == 0`, a non-zero replacement
 correction, and `pressure_rate_allowed_adj` to equal
 `pressure_rate_allowed_adj_observed + lineup_adjustment_pressure_rate`.
+
+*The assertion needs a third state, and finding it took an independent
+review.* "The five did not change" and "this pass could not tell whether they
+changed" are different facts, and only the first is safe to publish an
+uncorrected rate against. The second arises whenever either game's five could
+not be identified — which the label-and-crosswalk chain makes reachable from
+the live documents: on 2025 exactly one lineman cannot be crosswalked from
+`snap_counts` (Alec Anderson, BUF, blank `pfr_id`) and he started two full
+games. Blinding one slot of the *prior* game published `pressure_rate_allowed_adj`
+**51% high**, with coverage, the row's own `lineup_hash`, its five starter
+rows and its schema validity all identical to a healthy pass — the row's own
+hash is fine, it is the prior one that is missing, and the prior hash is not
+on the row. So the unit row carries `lineup_change_known`, and when it is
+false `pressure_rate_allowed_adj` and `lineup_adjustment_pressure_rate` are
+both **null** with the reason on the row. A fourth guard arm enforces it.
 Failing rather than flagging is the deliberate difference from
 `defensive-front`'s timing guard: that one renders a statistical verdict about
 a league-week and has a false-positive rate, while this one asserts an
@@ -1238,6 +1253,22 @@ at every tenth of a yard from −20 to +99, and `opponent_strengths`,
 `_faced_strength` and `_adjust` statement for statement. It also asserts that
 `pass_block_snaps` here is literally the same number `pass_rush_snaps` is
 there, counted from opposite sides of one intersected play set.
+
+*Four fields are additions to the spec's table*, and each is required by a
+claim the spec makes elsewhere: `pressure_rate_allowed_adj_observed` (the
+strictly symmetric pairing term, since `pressure_rate_allowed_adj` carries the
+replacement correction), `lineup_change_known` (above), and
+`replacement_delta_provenance` / `replacement_delta_sample_games` (the adapter
+note's "mark the field's provenance"). The generator's owner has to be told
+about all four; nothing in this repo tells them automatically.
+
+*One operational consequence worth stating rather than discovering.*
+`MIN_DELTA_GAMES` is 2 on both sides of the with/without split and the
+positional prior is built from the same pass, so no replacement delta exists
+before a team's fourth game — every team that changes its five in weeks 1-3 is
+dropped wholesale, and league coverage sits well below 192 for the first month
+of a season. A cross-season prior read back from the lake is the fix and is
+not built.
 
 **`CAPTURE_ENABLED=false`, and the reason is a 404 rather than a preference.**
 Verified live on 2026-08-03: `play_by_play_2026.csv.gz`,

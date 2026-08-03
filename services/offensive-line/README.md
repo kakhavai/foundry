@@ -36,6 +36,14 @@ Two row shapes under one signal type, discriminated by `record_type`:
   `starter_snap_share`, `starter_availability` for the upcoming week, and
   `replacement_delta_pressure_rate` **with its provenance**.
 
+Two fields on the unit row are additions to the spec's table, and both are
+required by claims the spec makes elsewhere: `pressure_rate_allowed_adj_observed`
+(the strictly symmetric pairing term, since `pressure_rate_allowed_adj` carries
+the replacement correction) and `lineup_change_known` (see the guard). The
+starter row adds `replacement_delta_provenance` and
+`replacement_delta_sample_games`, required by the adapter note. **Whoever owns
+the generator needs to be told about all four.**
+
 `coverage.expected` is the spec's own clause taken literally: 32 offences x
 (one unit row + five starter rows) = **192**. A team with fewer than five
 identified starters is reported in `coverage.missing` rather than emitted
@@ -103,6 +111,26 @@ join was rejected: two linemen sharing a surname on one roster is not
 hypothetical, and a wrong join silently attributes one man's snaps to another
 and changes the lineup hash.
 
+**Know what the 0.4% is, because it is one man and he starts.** On 2025 the
+un-crosswalkable rows are all **Alec Anderson (BUF)** — he has a `gsis_id`
+(`00-0037428`) but a blank `pfr_id` in `players.csv`, so `snap_counts` cannot
+name him. He played **74 of 74 offensive snaps in week 13 and 75 of 75 in week
+18**: two full starts that leave Buffalo's five unidentifiable for those
+games, and therefore leave the *following* week unable to tell a stable line
+from a changed one. That state is handled — see the guard below — but it is
+the kind of thing worth finding in a README rather than in a wrong number.
+
+### A September consequence of `MIN_DELTA_GAMES`
+
+`MIN_DELTA_GAMES` is 2 on **both** sides of a with/without split, and the
+positional prior is built from the same pass's measurements — so no
+replacement delta of any kind exists before a team's fourth game. Every team
+that changes its five in weeks 1-3 is dropped wholesale with
+`lineup_changed_without_replacement_delta`, and **league coverage sits well
+below 192 for the first month of a season**. That is the honest reading of a
+window too short to measure anything in, not a broken collector. A
+cross-season prior read back from the lake would fix it and is not built.
+
 ### `CAPTURE_ENABLED=false`, measured rather than scaffolded
 
 Verified live against the nflverse releases API on 2026-08-03:
@@ -135,6 +163,23 @@ has a false-positive rate; this one asserts an arithmetic invariant over rows
 this process just built, so a violation can only be a defect in the collector.
 `fail_capture` writes one `present: 0` envelope with the reason and re-raises,
 leaving the last good capture serving on `/signals`.
+
+**Three states, not two — and the third is the one that bites.**
+`lineup_changed: false` is only safe when both this game's five and the prior
+game's were identified. When either could not be, the five may have moved, no
+correction was computed, and the adjusted rate is the one the *departed*
+players earned. Reproduced against this fixture: blinding one slot of the
+prior game published `pressure_rate_allowed_adj` **51% high**, with coverage,
+the row's own `lineup_hash`, its five starter rows and its schema validity all
+identical to a healthy pass — the row's hash is fine, it is the *prior* hash
+that is missing, and that one is not on the row. So the unit row carries
+`lineup_change_known`, and when it is false **`pressure_rate_allowed_adj` and
+`lineup_adjustment_pressure_rate` are both null** with the reason in
+`null_field_reason`. Everything the uncertainty does not touch — the raw
+rates, `pressure_rate_allowed_adj_observed`, `adjusted_line_yards`,
+`mean_time_to_throw` — still publishes, which is why this is a null rather
+than a dropped team. The guard enforces it: a row that could not tell and
+publishes a corrected rate anyway raises.
 
 The neighbouring case is **not** a crash. "The lineup changed and this pass has
 no replacement delta to correct it with" is missing input data, so that team —
@@ -175,9 +220,15 @@ default or a synthesised split.
    split is confounded by which fronts happened to fall in each half, and on
    this collector's own fixture that produced a delta of the wrong sign
    before the adjustment was added. `league_positional_prior` is the mean of
-   every measured delta at that slot across the league in the same pass, over
-   current starters only. `unavailable` means neither existed and the value is
-   `null`.
+   the measured deltas at that slot across the league in the same pass,
+   restricted to men who are **currently starting**. That restriction is a
+   disclosed modelling assumption and it is survivorship-biased — a starter
+   who was replaced and did not get the job back is excluded by construction,
+   so the pool leans toward changes that reverted. The alternative is provably
+   worse: pooling deputies too cancels the two sides of every substitution to
+   approximately zero, which is a claim that losing a starter is free. The
+   assumption is on the schema field. `unavailable` means neither existed and
+   the value is `null`.
 3. **`starter_availability`'s `ir` is not in the injury report.** Verified on
    the real 2025 season: `report_status` carries only `Out`, `Questionable`,
    `Doubtful` and blank across 6,068 rows. `ir` is a roster designation and
@@ -211,32 +262,57 @@ cd services/offensive-line
 uv run pytest -v
 ```
 
-**191 tests**, ~97% statement coverage. The count is honest: it includes eleven
-malformed-row tests, and several entries are parametrised cases of one claim
-rather than independent assertions.
+**203 tests**, ~97% statement coverage. The count is honest: it includes
+eleven malformed-row tests, and several entries are parametrised cases of one
+claim rather than independent assertions.
 
-The suite was **mutation-tested**: 72 hand-designed mutants across the guard,
-the continuity walk, both halves of the coverage predicate, the opponent
-adjustment, the scale constants, the join, the lineup derivation, identity,
-the replacement delta, the deliberate nulls, conditional GET and the digest
-gate. **66 were killed.** The six survivors are recorded as equivalent, each
-verified by applying a non-equivalent neighbour and watching the suite kill
-that instead; two whose equivalence is a property worth knowing carry a note
-at the site (`capture._strength_envelope`'s `acc.expect` block and
+The suite is **mutation-tested**, across two rounds and an independent review.
+**101 hand-designed mutants, 95 killed** — 93 against this collector (the
+guard, the continuity walk, both halves of the coverage predicate, the
+opponent adjustment, the scale constants, the join, the lineup derivation,
+identity, the replacement delta, the deliberate nulls, conditional GET, the
+digest gate and the routes) and eight against **`defensive-front`**, because
+the pairing guarantee is only real if a change on the *other* side of the
+subtraction fails here. The six survivors are equivalent, each verified by
+applying a non-equivalent neighbour and watching the suite kill that instead;
+two whose equivalence is a property worth knowing carry a note at the site
+(`capture._strength_envelope`'s `acc.expect` block and
 `lineups.derive_lineups`' crosswalk miss).
-[`tests/test_survivors.py`](tests/test_survivors.py) is the record of what the
-first run left undefended — every test in it names the mutation it kills.
+[`tests/test_survivors.py`](tests/test_survivors.py) is the record of what
+earlier rounds left undefended — every test in it names the mutation it kills.
+
+Two rounds of this found real defects rather than only test gaps: the
+replacement delta measured on the raw rate (wrong sign), the prior pooled to
+exactly zero, and — from the review — a `test_scale_agreement.py` that
+reconstructed `defensive-front`'s curve instead of executing it, so three
+mutations of the sibling's `line_yards` (including one zeroing every carry
+past ten yards) passed silently.
 
 The fixture is the part worth reading before touching anything —
 [`tests/season.py`](tests/season.py). Every pressure is generated as
 `f(offence) + g(defence)`, because a fixture varying production by one term
 alone makes a *correct* opponent adjustment remove 100% of the variance and
 collapse to the league mean, which is bit-for-bit identical to the
-constant-valued bug that shipped on `defense-vs-position`. The schedule is
-deliberately unbalanced, half the league changes its left tackle mid-window,
-and one team is missing a depth-chart label — so the guard's two arms, the
-continuity streak and the "fewer than five identified starters" clause are all
-exercised rather than asserted.
+constant-valued bug that shipped on `defense-vs-position`. Beyond that, four
+of its structural choices exist because a mutant survived without them:
+
+* **two kickoff dates a week and three chart snapshots, one on game day** —
+  with one game date a week and every chart exactly three days earlier, the
+  per-week chart lookup and the latest-game-in-the-week rule were both
+  indistinguishable from their opposites, and the real feed is 219 *daily*
+  snapshots against a Thursday-to-Monday slate;
+* **a three-man snap tie with the winning id in the middle of the row order** —
+  with two tied men, "highest id" coincides with "first row seen" or "last row
+  seen" for free, and a row-order tie-break survives half the time;
+* **a lineman who plays zero snaps and is the only candidate for his slot** —
+  without one, "a man who did not play cannot fill a slot" is unfalsifiable;
+* **penalty-nullified `no_play` rows** charted as pass rushes, so the
+  intersection the whole join exists for is exercised.
+
+Add to that: the schedule is deliberately unbalanced, half the league changes
+its left tackle mid-window, one team swaps its guards mid-season, one is
+missing a depth-chart label, and one carries a man on injured reserve who is
+*also* on the weekly injury report.
 
 Everything but the socket is real: the streaming parser, the gzip inflater and
 its truncation check, the conditional-GET protocol, the six-feed join, the
